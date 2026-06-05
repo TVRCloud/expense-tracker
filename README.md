@@ -1,36 +1,97 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Finance OS
 
-## Getting Started
+A production-quality full-stack expense tracker built with Next.js 15 App Router, TypeScript, shadcn/ui, and MongoDB.
 
-First, run the development server:
+## Features
+
+- **Expense tracking** — income, expenses, transfers with category tags
+- **Budgets** — monthly category budgets with configurable alert thresholds
+- **Loans** — track money given/received with repayment history
+- **Goals** — savings goals with progress tracking
+- **Analytics** — 6-month bar chart overview, category breakdown, monthly history
+- **Real-time** — live balance and notification updates via Socket.io
+- **Push notifications** — VAPID web push for budget alerts, loan due dates, goal milestones
+- **PWA** — installable, offline-capable
+- **Role-based access** — user and admin roles with guarded routes
+- **Dark/light mode** — system-aware theme with smooth toggle
+
+## Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Framework | Next.js 15 App Router + TypeScript strict |
+| UI | shadcn/ui + Tailwind CSS v4 |
+| Auth | NextAuth v4 (JWT + JTI session tracking) |
+| Database | MongoDB + Mongoose |
+| Caching | Redis (ioredis) |
+| State | TanStack React Query v5 |
+| Forms | react-hook-form + Zod |
+| Realtime | Socket.io (custom server) |
+| Push | web-push (VAPID) |
+| PWA | next-pwa |
+| Logging | pino |
+| Charts | recharts |
+
+## Getting started
 
 ```bash
-npm run dev
-# or
+# 1. Clone
+git clone <repo-url> && cd expense-tracker
+
+# 2. Install dependencies (Yarn only)
+yarn install
+
+# 3. Configure environment
+cp .env.example .env.local
+# Fill in MONGODB_URI, NEXTAUTH_SECRET, etc.
+
+# 4. Generate VAPID keys for push notifications
+npx web-push generate-vapid-keys
+
+# 5. Dev server
 yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Scripts
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Command | Description |
+|---------|-------------|
+| `yarn dev` | Start development server (custom Socket.io server) |
+| `yarn build` | Production build |
+| `yarn start` | Start production server |
+| `yarn lint` | ESLint check |
+| `yarn lint:fix` | ESLint fix |
+| `yarn format` | Prettier format |
+| `yarn typecheck` | TypeScript type check |
 
-## Learn More
+## Project structure
 
-To learn more about Next.js, take a look at the following resources:
+```
+src/
+├── app/           — Next.js pages and API routes
+│   ├── (auth)/    — Login, register, forgot/reset password
+│   ├── (app)/     — Protected app screens
+│   └── api/       — All API routes
+├── features/      — Feature-scoped components, hooks, schemas
+├── models/        — Mongoose models
+├── lib/           — Core utilities (auth, db, redis, push, etc.)
+├── components/    — Shared UI components and providers
+├── hooks/         — Global hooks
+└── types/         — TypeScript type definitions
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+See [docs/architecture.md](docs/architecture.md) for full details.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Documentation
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- [Architecture](docs/architecture.md)
+- [Database Schema](docs/database-schema.md)
+- [API Contracts](docs/api-contracts.md)
+- [Authentication](docs/authentication.md)
+- [Realtime](docs/realtime.md)
+- [Notifications](docs/notifications.md)
+- [PWA](docs/pwa.md)
+- [Deployment](docs/deployment.md)
+- [Contributing](docs/contributing.md)

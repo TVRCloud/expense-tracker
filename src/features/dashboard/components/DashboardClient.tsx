@@ -1,0 +1,134 @@
+"use client";
+
+import Link from "next/link";
+import { useDashboardStats, useRecentTransactions, useAccounts } from "@/features/dashboard/hooks/useDashboard";
+import { BalanceCard } from "./SpendCard";
+import { WalletCard } from "./WalletCard";
+import { TransactionRow } from "@/features/transactions/components/TransactionRow";
+import { useCurrency } from "@/hooks/useCurrency";
+
+function SkeletonCard({ h = 110 }: { h?: number }) {
+  return (
+    <div
+      className="rounded-[var(--r-lg)] animate-pulse"
+      style={{ height: h, background: "var(--card-2)" }}
+    />
+  );
+}
+
+export function DashboardClient() {
+  const { formatCurrency } = useCurrency();
+  const { data: stats, isLoading: statsLoading } = useDashboardStats();
+  const { data: transactions, isLoading: txnLoading } = useRecentTransactions();
+  const { data: accounts, isLoading: acctLoading } = useAccounts();
+
+  const primaryAccount = accounts?.[0];
+  const totalBalance = accounts?.reduce((s, a) => s + a.balance, 0) ?? 0;
+
+  return (
+    <div>
+      {/* Balance card — shown immediately, numbers fill in as queries resolve */}
+      <div className="mb-5">
+        <BalanceCard
+          totalBalance={totalBalance}
+          income={stats?.income ?? 0}
+          expense={stats?.expense ?? 0}
+          isLoading={statsLoading || acctLoading}
+        />
+      </div>
+
+      {/* Desktop two-column layout */}
+      <div className="md:grid md:gap-5" style={{ gridTemplateColumns: "1fr 320px" }}>
+        {/* Transactions column */}
+        <div>
+          <div className="flex items-center justify-between mb-3 mx-0.5">
+            <h2 className="font-extrabold text-[18px] tracking-tight" style={{ color: "var(--ink)" }}>
+              Recent Transactions
+            </h2>
+            <Link href="/transactions" className="font-bold text-sm" style={{ color: "var(--violet)" }}>
+              See All
+            </Link>
+          </div>
+
+          {txnLoading ? (
+            <div className="flex flex-col gap-3">
+              {[0, 1, 2, 3, 4].map((i) => <SkeletonCard key={i} h={70} />)}
+            </div>
+          ) : transactions?.length ? (
+            <div className="flex flex-col gap-3">
+              {transactions.map((t) => (
+                <TransactionRow key={t._id} transaction={t} />
+              ))}
+            </div>
+          ) : (
+            <div
+              className="rounded-[var(--r-md)] p-8 text-center font-semibold text-sm"
+              style={{ background: "var(--card)", color: "var(--ink-2)" }}
+            >
+              No transactions yet.{" "}
+              <Link href="/transactions/add" style={{ color: "var(--violet)" }}>
+                Add one
+              </Link>
+            </div>
+          )}
+        </div>
+
+        {/* Desktop right column */}
+        <div className="hidden md:flex flex-col gap-5">
+          {primaryAccount && <WalletCard account={primaryAccount} />}
+
+          {stats && (
+            <div
+              className="rounded-[var(--r-lg)] p-6"
+              style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
+            >
+              <div className="font-extrabold text-base mb-5" style={{ color: "var(--ink)" }}>
+                {new Date().toLocaleString("default", { month: "long" })} breakdown
+              </div>
+              <div className="flex flex-col gap-5">
+                <div>
+                  <div className="flex justify-between font-bold text-[13.5px] mb-2">
+                    <span style={{ color: "var(--ink-2)" }}>Income</span>
+                    <span className="tnum">{formatCurrency(stats.income)}</span>
+                  </div>
+                  <div className="h-[9px] rounded-[6px]" style={{ background: "var(--card-2)" }}>
+                    <div className="h-full rounded-[6px]" style={{ width: "100%", background: "var(--violet)" }} />
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between font-bold text-[13.5px] mb-2">
+                    <span style={{ color: "var(--ink-2)" }}>Spending</span>
+                    <span className="tnum">{formatCurrency(stats.expense)}</span>
+                  </div>
+                  <div className="h-[9px] rounded-[6px]" style={{ background: "var(--card-2)" }}>
+                    <div
+                      className="h-full rounded-[6px]"
+                      style={{
+                        width:
+                          stats.income > 0
+                            ? `${Math.min(100, (stats.expense / stats.income) * 100)}%`
+                            : "0%",
+                        background: "var(--green)",
+                      }}
+                    />
+                  </div>
+                </div>
+                <div
+                  className="flex items-center justify-between pt-4"
+                  style={{ borderTop: "1px solid var(--line)" }}
+                >
+                  <span className="font-semibold text-[13.5px]" style={{ color: "var(--ink-2)" }}>
+                    Net saved
+                  </span>
+                  <span className="font-extrabold tnum text-[18px]" style={{ color: "var(--green)" }}>
+                    +{formatCurrency(Math.max(0, stats.net))}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
