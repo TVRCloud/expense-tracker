@@ -3,6 +3,7 @@ import type { NextConfig } from "next";
 import withPWA from "next-pwa";
 
 const nextConfig: NextConfig = {
+  turbopack: {},
   serverExternalPackages: ["mongoose", "pino", "pino-pretty"],
   images: {
     remotePatterns: [
