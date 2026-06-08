@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import connectDB from "@/lib/mongodb";
 import Loan from "@/models/Loan";
+import Account from "@/models/Account";
+import Transaction from "@/models/Transaction";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
+import { redis } from "@/lib/redis";
 
 const createSchema = z.object({
   direction: z.enum(["given", "received"]),
@@ -14,7 +17,16 @@ const createSchema = z.object({
   startDate: z.string(),
   dueDate: z.string().optional(),
   note: z.string().optional(),
+  accountId: z.string().optional(),
 });
+
+async function invalidateStatsCache(userId: string, date: Date) {
+  try {
+    await redis?.del(`stats:v2:${userId}:${date.getFullYear()}:${date.getMonth() + 1}`);
+  } catch {
+    // Redis unavailable
+  }
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -49,14 +61,48 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Validation failed", details: parsed.error.flatten() }, { status: 400 });
     }
 
+    const { accountId, ...loanData } = parsed.data;
     await connectDB();
+
+    if (accountId) {
+      const account = await Account.findOne({ _id: accountId, user: user.id, isArchived: false });
+      if (!account) return NextResponse.json({ error: "Account not found" }, { status: 404 });
+    }
+
     const loan = await Loan.create({
-      ...parsed.data,
+      ...loanData,
       user: user.id,
-      remainingAmount: parsed.data.principalAmount,
-      startDate: new Date(parsed.data.startDate),
-      dueDate: parsed.data.dueDate ? new Date(parsed.data.dueDate) : undefined,
+      account: accountId,
+      remainingAmount: loanData.principalAmount,
+      startDate: new Date(loanData.startDate),
+      dueDate: loanData.dueDate ? new Date(loanData.dueDate) : undefined,
     });
+
+    if (accountId) {
+      const transactionDate = new Date(loanData.startDate);
+      const type = loanData.direction === "received" ? "income" : "expense";
+      const balanceDelta = type === "income" ? loanData.principalAmount : -loanData.principalAmount;
+
+      await Account.findOneAndUpdate(
+        { _id: accountId, user: user.id },
+        { $inc: { balance: balanceDelta } }
+      );
+      await Transaction.create({
+        user: user.id,
+        account: accountId,
+        type,
+        amount: loanData.principalAmount,
+        currency: loanData.currency,
+        category: "loan",
+        description: loanData.direction === "received"
+          ? `Borrowed from ${loanData.counterparty}`
+          : `Lent to ${loanData.counterparty}`,
+        note: loanData.note,
+        date: transactionDate,
+        tags: [`loan:${loan._id.toString()}`, "loan_principal"],
+      });
+      await invalidateStatsCache(user.id, transactionDate);
+    }
 
     return NextResponse.json({ data: loan }, { status: 201 });
   } catch (err) {

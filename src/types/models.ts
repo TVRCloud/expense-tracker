@@ -7,7 +7,24 @@ export type NotificationType =
   | "loan_due"
   | "goal_reached"
   | "system"
-  | "transaction";
+  | "transaction"
+  | "credit_due"
+  | "credit_overdue"
+  | "emi_due";
+
+export type CardNetwork = "visa" | "mastercard" | "amex" | "rupay" | "discover" | "diners";
+export type StatementStatus = "open" | "closed" | "paid" | "overdue";
+
+export interface ICreditMeta {
+  creditLimit: number;       // cents
+  billingCycleDay: number;   // 1–31, day statement closes
+  paymentDueDay: number;     // 1–31, specific day of month payment is due
+  apr?: number;
+  network?: CardNetwork;
+  lastFourDigits?: string;
+  cardholderName?: string;
+  minPaymentPct?: number;
+}
 
 export interface UserPreferences {
   theme: "light" | "dark" | "system";
@@ -41,6 +58,25 @@ export interface IAccount {
   color?: string;
   icon?: string;
   isArchived: boolean;
+  creditMeta?: ICreditMeta;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ICreditStatement {
+  _id: string;
+  user: string;
+  account: string | IAccount;
+  periodStart: string;
+  periodEnd: string;
+  dueDate: string;
+  status: StatementStatus;
+  isPaid: boolean;
+  paidAmount: number;  // cents
+  paidAt?: string;
+  paymentTransactionId?: string;
+  balance?: number;    // cents — computed from transactions, not stored
+  minPayment?: number; // cents — computed
   createdAt: string;
   updatedAt: string;
 }
@@ -61,11 +97,15 @@ export interface ITransaction {
   attachments: string[];
   transferTo?: string | IAccount;
   isRecurring: boolean;
+  recurringId?: string;
   recurrenceFrequency?: "daily" | "weekly" | "monthly" | "yearly";
   recurrenceInterval?: number;
   recurrenceCount?: number;
   recurrenceEndDate?: string;
   recurrenceLabel?: string;
+  installmentIndex?: number;
+  installmentStatus?: "upcoming" | "paid" | "overdue" | "skipped";
+  paidAt?: string;
   createdAt: string;
   updatedAt: string;
 }

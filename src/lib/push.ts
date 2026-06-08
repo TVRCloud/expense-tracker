@@ -33,3 +33,30 @@ export async function sendPushToSubscription(
 }
 
 export { webpush };
+
+export async function sendPushToUser(
+  userId: string,
+  payload: PushPayload
+): Promise<void> {
+  try {
+    const connectDB = (await import("./mongodb")).default;
+    const PushSubscription = (await import("@/models/PushSubscription")).default;
+    await connectDB();
+
+    const subs = await PushSubscription.find({ user: userId, isActive: true }).lean();
+    await Promise.all(
+      subs.map(async (sub) => {
+        const result = await sendPushToSubscription(
+          { endpoint: sub.endpoint, keys: sub.keys as webpush.PushSubscription["keys"] },
+          payload
+        );
+        if (result.expired) {
+          await PushSubscription.findByIdAndUpdate(sub._id, { isActive: false });
+        }
+      })
+    );
+  } catch (err) {
+    const logger = (await import("./logger")).default;
+    logger.error({ err }, "sendPushToUser failed");
+  }
+}

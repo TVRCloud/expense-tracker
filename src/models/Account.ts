@@ -14,6 +14,19 @@ const AccountSchema = new Schema(
     color: { type: String },
     icon: { type: String },
     isArchived: { type: Boolean, default: false },
+    creditMeta: {
+      creditLimit: { type: Number }, // cents
+      billingCycleDay: { type: Number, min: 1, max: 31 },
+      paymentDueDay: { type: Number, min: 1, max: 31 },
+      apr: { type: Number },
+      network: {
+        type: String,
+        enum: ["visa", "mastercard", "amex", "rupay", "discover", "diners"],
+      },
+      lastFourDigits: { type: String, maxlength: 4 },
+      cardholderName: { type: String, maxlength: 60 },
+      minPaymentPct: { type: Number },
+    },
   },
   { timestamps: true }
 );

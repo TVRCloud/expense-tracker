@@ -11,14 +11,15 @@ import apiClient from "@/lib/api-client";
 import { useCurrency } from "@/hooks/useCurrency";
 import { type ITransaction } from "@/types/models";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DatePickerField } from "@/components/shared/DatePickerField";
 
 interface Props {
   id: string;
 }
 
-function formatInputDate(value?: string) {
-  if (!value) return format(new Date(), "yyyy-MM-dd");
-  return format(new Date(value), "yyyy-MM-dd");
+function parseInputDate(value?: string) {
+  if (!value) return new Date();
+  return new Date(value);
 }
 
 export function TransactionDetailClient({ id }: Props) {
@@ -32,7 +33,7 @@ export function TransactionDetailClient({ id }: Props) {
     subcategory: "",
     note: "",
     tags: "",
-    date: format(new Date(), "yyyy-MM-dd"),
+    date: new Date(),
   });
 
   const { data: transaction, isLoading, isError } = useQuery<ITransaction>({
@@ -51,7 +52,7 @@ export function TransactionDetailClient({ id }: Props) {
       subcategory: transaction.subcategory ?? "",
       note: transaction.note ?? "",
       tags: (transaction.tags ?? []).join(", "),
-      date: formatInputDate(transaction.date),
+      date: parseInputDate(transaction.date),
     });
   }, [transaction]);
 
@@ -66,7 +67,7 @@ export function TransactionDetailClient({ id }: Props) {
           .split(",")
           .map((tag) => tag.trim())
           .filter(Boolean),
-        date: form.date,
+        date: form.date.toISOString(),
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["transactions"] });
@@ -177,10 +178,15 @@ export function TransactionDetailClient({ id }: Props) {
                 <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Subcategory</span>
                 <input value={form.subcategory} onChange={(e) => setForm((f) => ({ ...f, subcategory: e.target.value }))} className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
               </label>
-              <label className="flex flex-col gap-1.5">
-                <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Date</span>
-                <input type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
-              </label>
+              <div className="flex flex-col gap-1.5">
+                <DatePickerField
+                  label="Date"
+                  value={form.date}
+                  onChange={(nextDate) => {
+                    if (nextDate) setForm((f) => ({ ...f, date: nextDate }));
+                  }}
+                />
+              </div>
               <label className="flex flex-col gap-1.5">
                 <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Tags</span>
                 <input value={form.tags} onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))} placeholder="comma separated" className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />

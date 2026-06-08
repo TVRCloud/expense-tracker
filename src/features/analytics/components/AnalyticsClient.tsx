@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { format, subMonths } from "date-fns";
 import { AnalyticsBarChart } from "./AnalyticsBarChart";
@@ -27,6 +27,20 @@ export function AnalyticsClient() {
 
   const { data, isLoading } = useMultiMonthStats(months);
   const { formatCurrency } = useCurrency();
+
+  // When data first loads, if the current month is empty auto-jump to the most recent month that has data
+  useEffect(() => {
+    if (!data) return;
+    const s = data[activeIdx]?.stats;
+    if (s && (s.income > 0 || s.expense > 0)) return;
+    for (let i = data.length - 1; i >= 0; i--) {
+      const stat = data[i]?.stats;
+      if (stat && (stat.income > 0 || stat.expense > 0)) {
+        setActiveIdx(i);
+        break;
+      }
+    }
+  }, [data]); // intentionally omit activeIdx — only auto-navigate on fresh data load, not on user navigation
 
   const activeMonth = data?.[activeIdx];
   const activeStats = activeMonth?.stats;
