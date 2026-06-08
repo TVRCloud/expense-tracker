@@ -5,6 +5,17 @@ import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
 
+const creditMetaSchema = z.object({
+  creditLimit: z.number().int().positive().optional(),
+  billingCycleDay: z.number().int().min(1).max(31).optional(),
+  paymentDueDay: z.number().int().min(1).max(31).optional(),
+  apr: z.number().min(0).max(100).optional(),
+  network: z.enum(["visa", "mastercard", "amex", "rupay", "discover", "diners"]).optional(),
+  lastFourDigits: z.string().length(4).regex(/^\d{4}$/).optional(),
+  cardholderName: z.string().max(60).optional(),
+  minPaymentPct: z.number().min(0).max(100).optional(),
+});
+
 const createSchema = z.object({
   name: z.string().min(1).max(100),
   type: z.enum(["cash", "bank", "credit_card", "savings", "investment", "wallet"]),
@@ -12,6 +23,7 @@ const createSchema = z.object({
   currency: z.string().default("USD"),
   color: z.string().optional(),
   icon: z.string().optional(),
+  creditMeta: creditMetaSchema.optional(),
 });
 
 export async function GET() {

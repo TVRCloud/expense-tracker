@@ -42,6 +42,10 @@ export async function GET(req: NextRequest) {
                 $gte: new Date(year, month - 1, 1),
                 $lt: new Date(year, month, 1),
               },
+              $nor: [{
+                recurringId: { $exists: true },
+                installmentStatus: { $nin: ["paid"] },
+              }],
             },
           },
           { $group: { _id: null, total: { $sum: "$amount" } } },

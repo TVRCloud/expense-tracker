@@ -8,6 +8,7 @@ import apiClient from "@/lib/api-client";
 import { useCurrency } from "@/hooks/useCurrency";
 import { type IGoal } from "@/types/models";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DatePickerField } from "@/components/shared/DatePickerField";
 import { toast } from "sonner";
 
 function useGoals() {
@@ -22,25 +23,34 @@ function useGoals() {
 
 const GOAL_ICONS = ["🏠", "🚗", "✈️", "📱", "💻", "🎓", "💍", "🏖️", "🎯", "💼"];
 
+interface GoalForm {
+  name: string;
+  targetAmount: string;
+  targetDate?: Date;
+  icon: string;
+}
+
+const emptyGoalForm: GoalForm = { name: "", targetAmount: "", targetDate: undefined, icon: "🎯" };
+
 export function GoalsClient() {
   const { formatCurrency } = useCurrency();
   const qc = useQueryClient();
   const { data: goals, isLoading } = useGoals();
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ name: "", targetAmount: "", targetDate: "", icon: "🎯" });
+  const [form, setForm] = useState<GoalForm>(emptyGoalForm);
   const [progressInputs, setProgressInputs] = useState<Record<string, string>>({});
 
   const createGoal = useMutation({
     mutationFn: () => apiClient.post("/goals", {
       name: form.name,
       targetAmount: Math.round(parseFloat(form.targetAmount) * 100),
-      targetDate: form.targetDate || undefined,
+      targetDate: form.targetDate?.toISOString(),
       icon: form.icon,
     }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["goals"] });
       setShowAdd(false);
-      setForm({ name: "", targetAmount: "", targetDate: "", icon: "🎯" });
+      setForm(emptyGoalForm);
       toast.success("Goal created");
     },
     onError: (err: Error) => toast.error(err.message),
@@ -245,13 +255,11 @@ export function GoalsClient() {
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Target date (optional)</label>
-              <input
-                type="date"
+              <DatePickerField
+                label="Target date (optional)"
                 value={form.targetDate}
-                onChange={e => setForm(f => ({ ...f, targetDate: e.target.value }))}
-                className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none"
-                style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }}
+                onChange={(targetDate) => setForm(f => ({ ...f, targetDate }))}
+                clearable
               />
             </div>
           </div>

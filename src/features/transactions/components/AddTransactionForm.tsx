@@ -1,17 +1,60 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Delete, ChevronDown, Repeat2 } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { format } from "date-fns";
+import {
+  addDays, addWeeks, addMonths, addYears,
+  differenceInDays, differenceInWeeks, differenceInMonths, differenceInYears,
+  format,
+} from "date-fns";
 import { useCreateTransaction } from "../hooks/useTransactions";
 import { useAccounts } from "@/features/dashboard/hooks/useDashboard";
 import { useCurrency } from "@/hooks/useCurrency";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Calendar } from "@/components/ui/calendar";
+import { DatePickerField } from "@/components/shared/DatePickerField";
+import { BillingCycleHint } from "@/features/credit-cards/components/BillingCycleHint";
+
+// Each option maps to an API {frequency, interval} pair
+const FREQ_OPTIONS = [
+  { key: "weekly",     label: "Weekly",      frequency: "weekly"  as const, interval: 1 },
+  { key: "biweekly",   label: "Bi-weekly",   frequency: "weekly"  as const, interval: 2 },
+  { key: "monthly",    label: "Monthly",     frequency: "monthly" as const, interval: 1 },
+  { key: "quarterly",  label: "Quarterly",   frequency: "monthly" as const, interval: 3 },
+  { key: "halfyearly", label: "Half-yearly", frequency: "monthly" as const, interval: 6 },
+  { key: "yearly",     label: "Yearly",      frequency: "yearly"  as const, interval: 1 },
+] as const;
+
+type FreqKey = typeof FREQ_OPTIONS[number]["key"];
+type EndMode = "count" | "date" | "never";
+
+function defaultOpenEndedCount(frequency: string): number {
+  if (frequency === "daily") return 365;
+  if (frequency === "weekly") return 260;
+  if (frequency === "yearly") return 30;
+  return 120;
+}
+
+function computeCount(start: Date, end: Date, frequency: string, interval: number): number {
+  switch (frequency) {
+    case "weekly":  return Math.max(1, Math.floor(differenceInWeeks(end, start) / interval) + 1);
+    case "monthly": return Math.max(1, Math.floor(differenceInMonths(end, start) / interval) + 1);
+    case "yearly":  return Math.max(1, Math.floor(differenceInYears(end, start) / interval) + 1);
+    default:        return Math.max(1, Math.floor(differenceInDays(end, start) / interval) + 1);
+  }
+}
+
+function computeEndDate(start: Date, frequency: string, interval: number, count: number): Date {
+  const n = Math.max(0, count - 1) * interval;
+  switch (frequency) {
+    case "weekly":  return addWeeks(start, n);
+    case "monthly": return addMonths(start, n);
+    case "yearly":  return addYears(start, n);
+    default:        return addDays(start, n);
+  }
+}
 
 const CATEGORIES: { icon: string; label: string; value: string }[] = [
   { icon: "🛒", label: "Groceries", value: "groceries" },
@@ -52,17 +95,27 @@ export function AddTransactionForm() {
   const [displayAmount, setDisplayAmount] = useState("0");
   const [selectedCategory, setSelectedCategory] = useState("groceries");
   const [date, setDate] = useState<Date>(new Date());
-  const [calOpen, setCalOpen] = useState(false);
   const [repeatEnabled, setRepeatEnabled] = useState(false);
-  const [recurrenceFrequency, setRecurrenceFrequency] = useState<"weekly" | "monthly" | "yearly">("monthly");
-  const [recurrenceInterval, setRecurrenceInterval] = useState(1);
+  const [freqKey, setFreqKey] = useState<FreqKey>("monthly");
+  const [endMode, setEndMode] = useState<EndMode>("never");
   const [recurrenceCount, setRecurrenceCount] = useState("");
+  const [recurrenceEndDate, setRecurrenceEndDate] = useState<Date | undefined>();
   const [recurrenceLabel, setRecurrenceLabel] = useState("");
 
-  const { register, handleSubmit, formState: { errors } } = useForm<FormValues>({
+  const { register, watch, handleSubmit, setValue, formState: { errors } } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { accountId: accounts[0]?._id as string ?? "" },
+    defaultValues: { accountId: "" },
   });
+
+  // Set default account once accounts load (defaultValues runs before data is available)
+  useEffect(() => {
+    if (accounts.length > 0 && !watch("accountId")) {
+      setValue("accountId", String(accounts[0]._id));
+    }
+  }, [accounts]);
+
+  const watchedAccountId = watch("accountId");
+  const selectedAccount = accounts.find(a => String(a._id) === watchedAccountId);
 
   const handleNumpad = useCallback((key: string) => {
     if (key === "⌫") {
@@ -88,6 +141,37 @@ export function AddTransactionForm() {
 
   const amountInCents = Math.round(parseFloat(displayAmount || "0") * 100);
 
+  const freqOption = FREQ_OPTIONS.find(f => f.key === freqKey) ?? FREQ_OPTIONS[2];
+
+  // Derive the effective count and end date from the chosen end mode
+  const { effectiveCount, effectiveEndDate } = useMemo(() => {
+    if (!repeatEnabled) return { effectiveCount: undefined, effectiveEndDate: undefined };
+    if (endMode === "count" && recurrenceCount) {
+      const n = Math.max(1, Number(recurrenceCount));
+      return { effectiveCount: n, effectiveEndDate: computeEndDate(date, freqOption.frequency, freqOption.interval, n) };
+    }
+    if (endMode === "date" && recurrenceEndDate && recurrenceEndDate > date) {
+      const n = computeCount(date, recurrenceEndDate, freqOption.frequency, freqOption.interval);
+      return { effectiveCount: n, effectiveEndDate: recurrenceEndDate };
+    }
+    return { effectiveCount: defaultOpenEndedCount(freqOption.frequency), effectiveEndDate: undefined };
+  }, [repeatEnabled, endMode, recurrenceCount, recurrenceEndDate, date, freqOption]);
+
+  const recurringSummary = useMemo(() => {
+    if (!repeatEnabled) return null;
+    const parts: string[] = [`${freqOption.label} from ${format(date, "MMM d, yyyy")}`];
+    if (endMode === "never" && effectiveCount) {
+      parts.push("ongoing");
+      parts.push(`${effectiveCount} upcoming payments generated`);
+      if (amountInCents > 0) parts.push(`Planned ${formatCurrency(amountInCents * effectiveCount)}`);
+    } else if (effectiveCount) {
+      parts.push(`${effectiveCount} payment${effectiveCount !== 1 ? "s" : ""}`);
+      if (effectiveEndDate) parts.push(`until ${format(effectiveEndDate, "MMM d, yyyy")}`);
+      if (amountInCents > 0) parts.push(`Total ${formatCurrency(amountInCents * effectiveCount)}`);
+    }
+    return parts.join(" · ");
+  }, [repeatEnabled, freqOption, date, effectiveCount, effectiveEndDate, amountInCents, formatCurrency, endMode]);
+
   const onSubmit = handleSubmit(async (values) => {
     if (amountInCents <= 0) return;
 
@@ -105,9 +189,10 @@ export function AddTransactionForm() {
       date: date.toISOString(),
       tags: [],
       isRecurring: repeatEnabled,
-      recurrenceFrequency: repeatEnabled ? recurrenceFrequency : undefined,
-      recurrenceInterval: repeatEnabled ? recurrenceInterval : undefined,
-      recurrenceCount: repeatEnabled && recurrenceCount ? Number(recurrenceCount) : undefined,
+      recurrenceFrequency: repeatEnabled ? freqOption.frequency : undefined,
+      recurrenceInterval: repeatEnabled ? freqOption.interval : undefined,
+      recurrenceCount: repeatEnabled ? effectiveCount : undefined,
+      recurrenceEndDate: repeatEnabled && effectiveEndDate ? effectiveEndDate.toISOString() : undefined,
       recurrenceLabel: repeatEnabled ? recurrenceLabel || undefined : undefined,
     });
 
@@ -120,7 +205,7 @@ export function AddTransactionForm() {
     <div className="grid md:grid-cols-2 gap-4 md:gap-5 h-full min-w-0">
       {/* LEFT: Numpad card */}
       <div
-        className="rounded-[var(--r-lg)] p-4 sm:p-6 flex flex-col gap-4 sm:gap-5 min-w-0"
+        className="rounded-(--r-lg) p-4 sm:p-6 flex flex-col gap-4 sm:gap-5 min-w-0"
         style={{ background: "var(--card)", boxShadow: "var(--shadow)" }}
       >
         {/* Type toggle */}
@@ -166,7 +251,7 @@ export function AddTransactionForm() {
             <button
               key={key}
               onClick={() => handleNumpad(key)}
-              className="rounded-[var(--r-sm)] h-12 sm:h-14 flex items-center justify-center text-lg sm:text-xl font-bold transition-all hover:opacity-80 active:scale-95"
+              className="rounded-(--r-sm) h-12 sm:h-14 flex items-center justify-center text-lg sm:text-xl font-bold transition-all hover:opacity-80 active:scale-95"
               style={
                 key === "⌫"
                   ? {
@@ -189,7 +274,7 @@ export function AddTransactionForm() {
       {/* RIGHT: Details card */}
       <form
         onSubmit={onSubmit}
-        className="rounded-[var(--r-lg)] p-4 sm:p-6 flex flex-col gap-4 sm:gap-5 min-w-0"
+        className="rounded-(--r-lg) p-4 sm:p-6 flex flex-col gap-4 sm:gap-5 min-w-0"
         style={{ background: "var(--card)", boxShadow: "var(--shadow)" }}
       >
         {/* Category grid (only for expenses) */}
@@ -206,7 +291,7 @@ export function AddTransactionForm() {
                     key={cat.value}
                     type="button"
                     onClick={() => setSelectedCategory(cat.value)}
-                    className="flex flex-col items-center gap-1.5 rounded-[var(--r-sm)] p-2 sm:p-2.5 transition-all min-w-0"
+                    className="flex flex-col items-center gap-1.5 rounded-(--r-sm) p-2 sm:p-2.5 transition-all min-w-0"
                     style={
                       isActive
                         ? {
@@ -240,7 +325,7 @@ export function AddTransactionForm() {
           <div className="relative">
             <select
               {...register("accountId")}
-              className="w-full rounded-[var(--r-sm)] px-4 py-3 text-sm font-semibold appearance-none outline-none"
+              className="w-full rounded-(--r-sm) px-4 py-3 text-sm font-semibold appearance-none outline-none"
               style={{
                 background: "var(--card-2)",
                 color: "var(--ink)",
@@ -249,7 +334,9 @@ export function AddTransactionForm() {
             >
               {accounts.map((acc) => (
                 <option key={String(acc._id)} value={String(acc._id)}>
-                  {acc.name} ({formatCurrency(acc.balance)})
+                  {acc.name} {acc.type === "credit_card"
+                    ? `(CC · Limit ${formatCurrency(acc.creditMeta?.creditLimit ?? 0)})`
+                    : `(${formatCurrency(acc.balance)})`}
                 </option>
               ))}
             </select>
@@ -258,146 +345,170 @@ export function AddTransactionForm() {
           {errors.accountId && (
             <p className="text-xs" style={{ color: "var(--red)" }}>{errors.accountId.message}</p>
           )}
+          {selectedAccount?.type === "credit_card" && watchedAccountId && (
+            <BillingCycleHint accountId={watchedAccountId} date={date} />
+          )}
         </div>
 
         {/* Recurring options */}
         <div
-          className="rounded-[var(--r-md)] p-4 flex flex-col gap-3"
+          className="rounded-(--r-md) p-4 flex flex-col gap-3"
           style={{ background: "var(--card-2)", border: "1px solid var(--line)" }}
         >
-          <label className="flex items-center justify-between gap-3">
+          {/* Toggle row */}
+          <label className="flex items-center justify-between gap-3 cursor-pointer">
             <span className="flex items-center gap-2 text-sm font-bold" style={{ color: "var(--ink)" }}>
               <Repeat2 size={16} />
               Recurring
             </span>
-            <input
-              type="checkbox"
-              checked={repeatEnabled}
-              onChange={(e) => setRepeatEnabled(e.target.checked)}
-              className="h-5 w-5"
-              style={{ accentColor: "var(--violet)" }}
-            />
+            <button
+              type="button"
+              onClick={() => setRepeatEnabled(v => !v)}
+              className="relative w-10 h-5 rounded-full transition-all"
+              style={{ background: repeatEnabled ? "var(--violet)" : "var(--line)" }}
+            >
+              <span
+                className="absolute top-0.5 w-4 h-4 rounded-full transition-all"
+                style={{
+                  background: "#fff",
+                  left: repeatEnabled ? "calc(100% - 18px)" : "2px",
+                  boxShadow: "0 1px 3px rgba(0,0,0,.25)",
+                }}
+              />
+            </button>
           </label>
 
           {repeatEnabled && (
             <div className="flex flex-col gap-3">
-              <div className="grid grid-cols-2 gap-2">
+              {/* Quick presets */}
+              <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setTxType("income");
-                    setRecurrenceFrequency("monthly");
-                    setRecurrenceInterval(1);
-                    setRecurrenceLabel("Salary");
-                  }}
-                  className="rounded-[var(--r-sm)] px-3 py-2 text-xs font-bold"
+                  onClick={() => { setTxType("income"); setFreqKey("monthly"); setRecurrenceLabel("Salary"); }}
+                  className="flex-1 rounded-(--r-sm) px-3 py-2 text-xs font-bold"
                   style={{ background: "var(--card)", color: "var(--green)" }}
                 >
-                  Monthly salary
+                  💰 Monthly salary
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setTxType("expense");
-                    setSelectedCategory("emi");
-                    setRecurrenceFrequency("monthly");
-                    setRecurrenceInterval(1);
-                    setRecurrenceLabel("EMI");
-                  }}
-                  className="rounded-[var(--r-sm)] px-3 py-2 text-xs font-bold"
+                  onClick={() => { setTxType("expense"); setSelectedCategory("emi"); setFreqKey("monthly"); setRecurrenceLabel("EMI"); }}
+                  className="flex-1 rounded-(--r-sm) px-3 py-2 text-xs font-bold"
                   style={{ background: "var(--card)", color: "var(--red)" }}
                 >
-                  Monthly EMI
+                  🏦 Monthly EMI
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <label className="flex flex-col gap-1.5">
-                  <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Repeats</span>
-                  <select
-                    value={recurrenceFrequency}
-                    onChange={(e) => setRecurrenceFrequency(e.target.value as "weekly" | "monthly" | "yearly")}
-                    className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none"
-                    style={{ background: "var(--card)", color: "var(--ink)", border: "1px solid var(--line)" }}
-                  >
-                    <option value="weekly">Weekly</option>
-                    <option value="monthly">Monthly</option>
-                    <option value="yearly">Yearly</option>
-                  </select>
-                </label>
-                <label className="flex flex-col gap-1.5">
-                  <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Every</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={60}
-                    value={recurrenceInterval}
-                    onChange={(e) => setRecurrenceInterval(Math.max(1, Number(e.target.value)))}
-                    className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none"
-                    style={{ background: "var(--card)", color: "var(--ink)", border: "1px solid var(--line)" }}
-                  />
-                </label>
+              {/* Frequency chips */}
+              <div className="flex flex-col gap-1.5">
+                <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Frequency</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {FREQ_OPTIONS.map(f => (
+                    <button
+                      key={f.key}
+                      type="button"
+                      onClick={() => setFreqKey(f.key)}
+                      className="px-3 py-1.5 rounded-full text-[12px] font-bold transition-all"
+                      style={
+                        freqKey === f.key
+                          ? { background: "var(--violet)", color: "#fff" }
+                          : { background: "var(--card)", color: "var(--ink-2)" }
+                      }
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <label className="flex flex-col gap-1.5">
-                  <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Months/installments</span>
+              {/* End condition */}
+              <div className="flex flex-col gap-2">
+                <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Ends</span>
+                <div className="flex gap-1.5">
+                  {(["never", "count", "date"] as EndMode[]).map(m => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setEndMode(m)}
+                      className="flex-1 py-1.5 rounded-(--r-sm) text-xs font-bold transition-all"
+                      style={
+                        endMode === m
+                          ? { background: "var(--violet)", color: "#fff" }
+                          : { background: "var(--card)", color: "var(--ink-2)" }
+                      }
+                    >
+                      {m === "never" ? "Never" : m === "count" ? "After N payments" : "On a date"}
+                    </button>
+                  ))}
+                </div>
+
+                {endMode === "count" && (
                   <input
                     type="number"
                     min={1}
+                    max={3650}
                     value={recurrenceCount}
                     onChange={(e) => setRecurrenceCount(e.target.value)}
-                    placeholder="Optional"
-                    className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none"
+                    placeholder="e.g. 12 for 1 year monthly"
+                    className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none w-full"
                     style={{ background: "var(--card)", color: "var(--ink)", border: "1px solid var(--line)" }}
                   />
-                </label>
-                <label className="flex flex-col gap-1.5">
-                  <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Label</span>
-                  <input
-                    value={recurrenceLabel}
-                    onChange={(e) => setRecurrenceLabel(e.target.value)}
-                    placeholder="Salary, EMI"
-                    className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none"
-                    style={{ background: "var(--card)", color: "var(--ink)", border: "1px solid var(--line)" }}
+                )}
+                {endMode === "date" && (
+                  <DatePickerField
+                    label="End date"
+                    value={recurrenceEndDate}
+                    onChange={setRecurrenceEndDate}
+                    clearable
                   />
-                </label>
+                )}
               </div>
+
+              {/* Label */}
+              <label className="flex flex-col gap-1.5">
+                <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Label</span>
+                <input
+                  value={recurrenceLabel}
+                  onChange={(e) => setRecurrenceLabel(e.target.value)}
+                  placeholder="e.g. House EMI, Netflix, Salary"
+                  className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none"
+                  style={{ background: "var(--card)", color: "var(--ink)", border: "1px solid var(--line)" }}
+                />
+              </label>
+
+              {/* Summary pill */}
+              {recurringSummary && (
+                <div
+                  className="rounded-(--r-sm) px-3 py-2.5 text-[12px] font-medium leading-relaxed"
+                  style={{ background: "color-mix(in srgb, var(--violet) 10%, transparent)", color: "var(--violet)" }}
+                >
+                  🔄 {recurringSummary}
+                </div>
+              )}
+
+              {/* Credit card total commitment */}
+              {selectedAccount?.type === "credit_card" && effectiveCount && amountInCents > 0 && (
+                <div
+                  className="rounded-(--r-sm) px-3 py-2.5 text-[12px] font-medium"
+                  style={{ background: "color-mix(in srgb, var(--red) 8%, transparent)", color: "var(--red)" }}
+                >
+                  💳 Total card commitment: {formatCurrency(amountInCents)} × {effectiveCount} = <strong>{formatCurrency(amountInCents * effectiveCount)}</strong>
+                  {effectiveEndDate && ` (until ${format(effectiveEndDate, "MMM yyyy")})`}
+                </div>
+              )}
             </div>
           )}
         </div>
 
         {/* Date picker */}
-        <div className="flex flex-col gap-1.5">
-          <label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
-            Date
-          </label>
-          <Popover open={calOpen} onOpenChange={setCalOpen}>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                className="w-full text-left rounded-[var(--r-sm)] px-4 py-3 text-sm font-semibold"
-                style={{
-                  background: "var(--card-2)",
-                  color: "var(--ink)",
-                  border: "1.5px solid var(--line)",
-                }}
-              >
-                {format(date, "MMMM d, yyyy")}
-              </button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="start">
-              <Calendar
-                mode="single"
-                selected={date}
-                onSelect={(d: Date | undefined) => {
-                  if (d) setDate(d);
-                  setCalOpen(false);
-                }}
-              />
-            </PopoverContent>
-          </Popover>
-        </div>
+        <DatePickerField
+          label={repeatEnabled ? "First Installment Date" : "Date"}
+          value={date}
+          onChange={(nextDate) => {
+            if (nextDate) setDate(nextDate);
+          }}
+        />
 
         {/* Description */}
         <div className="flex flex-col gap-1.5">
@@ -407,7 +518,7 @@ export function AddTransactionForm() {
           <input
             {...register("description")}
             placeholder="What was this for?"
-            className="rounded-[var(--r-sm)] px-4 py-3 text-sm outline-none"
+            className="rounded-(--r-sm) px-4 py-3 text-sm outline-none"
             style={{
               background: "var(--card-2)",
               color: "var(--ink)",
@@ -425,7 +536,7 @@ export function AddTransactionForm() {
             {...register("note")}
             placeholder="Add a note..."
             rows={2}
-            className="rounded-[var(--r-sm)] px-4 py-3 text-sm outline-none resize-none"
+            className="rounded-(--r-sm) px-4 py-3 text-sm outline-none resize-none"
             style={{
               background: "var(--card-2)",
               color: "var(--ink)",
@@ -438,7 +549,7 @@ export function AddTransactionForm() {
         <button
           type="submit"
           disabled={isPending || amountInCents <= 0}
-          className="mt-auto rounded-[var(--r-md)] py-3.5 sm:py-4 font-extrabold text-sm tracking-wide transition-all hover:opacity-90 disabled:opacity-50"
+          className="mt-auto rounded-(--r-md) py-3.5 sm:py-4 font-extrabold text-sm tracking-wide transition-all hover:opacity-90 disabled:opacity-50"
           style={{ background: "var(--violet)", color: "#fff" }}
         >
           {isPending ? "Saving..." : "Save Transaction"}

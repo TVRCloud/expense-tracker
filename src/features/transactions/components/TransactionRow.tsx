@@ -1,5 +1,6 @@
 import { ChevronRight } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCurrency } from "@/hooks/useCurrency";
 import { type ITransaction } from "@/types/models";
 import { format } from "date-fns";
@@ -29,6 +30,7 @@ interface Props {
 }
 
 export function TransactionRow({ transaction }: Props) {
+  const router = useRouter();
   const { formatCurrency } = useCurrency();
   const isIncome = transaction.type === "income";
   const sign = isIncome ? "+" : "-";
@@ -37,9 +39,12 @@ export function TransactionRow({ transaction }: Props) {
   const initial = transaction.description?.[0]?.toUpperCase() ?? transaction.category[0].toUpperCase();
 
   return (
-    <Link
-      href={`/transactions/${transaction._id}`}
-      className="flex items-center gap-4 rounded-[var(--r-md)] px-4 py-3.5 transition-all hover:-translate-y-0.5"
+    <div
+      role="link"
+      tabIndex={0}
+      onClick={() => router.push(`/transactions/${transaction._id}`)}
+      onKeyDown={e => e.key === "Enter" && router.push(`/transactions/${transaction._id}`)}
+      className="flex items-center gap-4 rounded-[var(--r-md)] px-4 py-3.5 transition-all hover:-translate-y-0.5 cursor-pointer"
       style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
     >
       {/* Avatar */}
@@ -51,12 +56,24 @@ export function TransactionRow({ transaction }: Props) {
       </div>
 
       {/* Info */}
-      <div className="min-w-0">
-        <div
-          className="font-bold text-[15px] truncate"
-          style={{ color: "var(--ink)" }}
-        >
-          {transaction.description ?? transaction.category}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div
+            className="font-bold text-[15px] truncate"
+            style={{ color: "var(--ink)" }}
+          >
+            {transaction.description ?? transaction.category}
+          </div>
+          {transaction.isRecurring && transaction.recurringId && (
+            <Link
+              href={`/transactions/recurring/${transaction.recurringId}`}
+              onClick={e => e.stopPropagation()}
+              className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-none"
+              style={{ background: "color-mix(in srgb, var(--violet) 10%, transparent)", color: "var(--violet)" }}
+            >
+              🔄 {transaction.installmentIndex != null ? `#${transaction.installmentIndex + 1}` : "recurring"}
+            </Link>
+          )}
         </div>
         <div className="text-xs font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>
           {format(new Date(transaction.date), "d MMM yyyy")} · {transaction.category}
@@ -68,6 +85,6 @@ export function TransactionRow({ transaction }: Props) {
         {sign}{formatCurrency(transaction.amount)}
       </div>
       <ChevronRight size={19} style={{ color: "var(--ink-3)", flexShrink: 0 }} />
-    </Link>
+    </div>
   );
 }

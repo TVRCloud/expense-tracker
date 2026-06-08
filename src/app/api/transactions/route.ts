@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import connectDB from "@/lib/mongodb";
 import Transaction from "@/models/Transaction";
 import Account from "@/models/Account";
-import Budget from "@/models/Budget";
-import Notification from "@/models/Notification";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
 import { Types } from "mongoose";
 import { redis } from "@/lib/redis";
+import { addDays, addWeeks, addMonths, addYears } from "date-fns";
+import { checkBudgetAlert } from "@/lib/budget-alert";
 
 const createSchema = z.object({
   accountId: z.string(),
@@ -25,7 +25,7 @@ const createSchema = z.object({
   isRecurring: z.boolean().default(false),
   recurrenceFrequency: z.enum(["daily", "weekly", "monthly", "yearly"]).optional(),
   recurrenceInterval: z.number().int().min(1).max(60).optional(),
-  recurrenceCount: z.number().int().min(1).max(600).optional(),
+  recurrenceCount: z.number().int().min(1).max(3650).optional(),
   recurrenceEndDate: z.string().optional(),
   recurrenceLabel: z.string().max(100).optional(),
 });
@@ -40,50 +40,39 @@ async function invalidateStatsCache(userId: string, date: Date) {
   }
 }
 
-async function checkBudgetAlert(userId: string, category: string, amount: number) {
-  try {
-    const now = new Date();
-    const month = now.getMonth() + 1;
-    const year = now.getFullYear();
-
-    const userObjectId = new Types.ObjectId(userId);
-    const budget = await Budget.findOne({ user: userId, category, month, year, isActive: true }).lean<{
-      _id: { toString(): string };
-      limitAmount: number;
-      alertAt: number;
-    }>();
-    if (!budget) return;
-
-    const spent = await Transaction.aggregate([
-      {
-        $match: {
-          user: userObjectId,
-          category,
-          type: "expense",
-          date: {
-            $gte: new Date(year, month - 1, 1),
-            $lt: new Date(year, month, 1),
-          },
-        },
-      },
-      { $group: { _id: null, total: { $sum: "$amount" } } },
-    ]);
-
-    const totalSpent = (spent[0]?.total ?? 0) + amount;
-    const pct = (totalSpent / budget.limitAmount) * 100;
-
-    if (pct >= budget.alertAt) {
-      await Notification.create({
-        user: userId,
-        type: "budget_alert",
-        title: `${category} budget alert`,
-        body: `You've used ${Math.round(pct)}% of your ${category} budget.`,
-        meta: { budgetId: budget._id.toString(), category, percent: pct },
-      });
-    }
-  } catch (err) {
-    logger.error({ err }, "Budget alert check failed");
+async function invalidateStatsCacheMany(userId: string, dates: Date[]) {
+  if (!redis) return;
+  const keys = new Set<string>();
+  for (const d of dates) {
+    keys.add(`stats:v2:${userId}:${d.getFullYear()}:${d.getMonth() + 1}`);
   }
+  try {
+    await Promise.all([...keys].map(k => redis!.del(k)));
+  } catch {
+    // Redis unavailable
+  }
+}
+
+function computeInstallmentDates(
+  startDate: Date,
+  frequency: string,
+  interval: number,
+  count: number
+): Date[] {
+  const adder: (d: Date, n: number) => Date =
+    frequency === "daily" ? (d, n) => addDays(d, n) :
+    frequency === "weekly" ? (d, n) => addWeeks(d, n) :
+    frequency === "yearly" ? (d, n) => addYears(d, n) :
+    (d, n) => addMonths(d, n); // monthly default
+
+  return Array.from({ length: count }, (_, i) => adder(startDate, interval * i));
+}
+
+function defaultRecurringCount(frequency: string): number {
+  if (frequency === "daily") return 365;
+  if (frequency === "weekly") return 260;
+  if (frequency === "yearly") return 30;
+  return 120;
 }
 
 export async function GET(req: NextRequest) {
@@ -112,6 +101,15 @@ export async function GET(req: NextRequest) {
       if (dateTo) (query.date as Record<string, unknown>).$lte = new Date(dateTo);
     }
 
+    // Exclude unpaid recurring installments from the main list.
+    // They live in /transactions/recurring/[id] instead.
+    query.$nor = [
+      {
+        recurringId: { $exists: true },
+        installmentStatus: { $nin: ["paid"] },
+      },
+    ];
+
     await connectDB();
     const [transactions, total] = await Promise.all([
       Transaction.find(query).sort({ date: -1 }).skip(skip).limit(limit).lean(),
@@ -139,14 +137,48 @@ export async function POST(req: NextRequest) {
     const { accountId, transferToId, ...rest } = parsed.data;
     await connectDB();
 
-    // Update account balance
-    const balanceDelta = rest.type === "income" ? rest.amount : -rest.amount;
-    const account = await Account.findOneAndUpdate(
-      { _id: accountId, user: user.id },
-      { $inc: { balance: balanceDelta } },
-      { new: true }
-    );
+    const account = await Account.findOne({ _id: accountId, user: user.id });
     if (!account) return NextResponse.json({ error: "Account not found" }, { status: 404 });
+
+    const startDate = new Date(rest.date);
+    // ── Bulk-create recurring installments ──────────────────────────────────
+    const installmentCount = rest.isRecurring && rest.recurrenceFrequency
+      ? (rest.recurrenceCount ?? defaultRecurringCount(rest.recurrenceFrequency))
+      : 0;
+    if (rest.isRecurring && installmentCount > 1 && rest.recurrenceFrequency) {
+      const recurringId = new Types.ObjectId();
+      const interval = rest.recurrenceInterval ?? 1;
+      const dates = computeInstallmentDates(startDate, rest.recurrenceFrequency, interval, installmentCount);
+
+      // No balance update at creation — installments only affect balance when marked paid
+      const docs = dates.map((d, i) => ({
+        ...rest,
+        recurrenceCount: installmentCount,
+        account: accountId,
+        user: user.id,
+        date: d,
+        recurringId,
+        installmentIndex: i,
+        installmentStatus: "upcoming" as const,
+        recurrenceInterval: interval,
+        recurrenceEndDate: rest.recurrenceEndDate ? new Date(rest.recurrenceEndDate) : undefined,
+        ...(transferToId ? { transferTo: transferToId } : {}),
+      }));
+
+      const inserted = await Transaction.insertMany(docs);
+      await invalidateStatsCacheMany(user.id, dates);
+
+      logger.info({ userId: user.id, recurringId: recurringId.toString(), count: docs.length }, "Recurring series created");
+      return NextResponse.json(
+        { data: inserted[0], seriesId: recurringId.toString(), count: docs.length },
+        { status: 201 }
+      );
+    }
+
+    // ── Single transaction (non-recurring or recurring count = 1) ───────────
+    const balanceDelta = rest.type === "income" ? rest.amount : -rest.amount;
+    account.balance += balanceDelta;
+    await account.save();
 
     if (rest.type === "transfer" && transferToId) {
       await Account.findOneAndUpdate(
@@ -155,19 +187,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const transactionDate = new Date(rest.date);
     const transaction = await Transaction.create({
       ...rest,
       account: accountId,
       user: user.id,
-      date: transactionDate,
+      date: startDate,
       recurrenceInterval: rest.isRecurring ? (rest.recurrenceInterval ?? 1) : undefined,
       recurrenceEndDate: rest.recurrenceEndDate ? new Date(rest.recurrenceEndDate) : undefined,
       ...(transferToId ? { transferTo: transferToId } : {}),
     });
-    await invalidateStatsCache(user.id, transactionDate);
+    await invalidateStatsCache(user.id, startDate);
 
-    // Check budget alert for expense transactions
     if (rest.type === "expense") {
       void checkBudgetAlert(user.id, rest.category, rest.amount);
     }

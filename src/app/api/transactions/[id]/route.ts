@@ -88,15 +88,37 @@ export async function DELETE(_req: NextRequest, { params }: { params: Params }) 
 
     const txn = await Transaction.findOne({ _id: id, user: user.id }).lean<{
       account: { toString(): string };
+      transferTo?: { toString(): string };
       type: string;
       amount: number;
       date: Date;
+      recurringId?: unknown;
+      installmentStatus?: string;
     }>();
     if (!txn) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-    // Reverse account balance
-    const balanceDelta = txn.type === "income" ? -txn.amount : txn.amount;
-    await Account.findByIdAndUpdate(txn.account, { $inc: { balance: balanceDelta } });
+    // Reverse account balance only for transactions that previously affected it.
+    const affectsBalance = !txn.recurringId || txn.installmentStatus === "paid";
+    if (affectsBalance) {
+      if (txn.type === "transfer") {
+        await Account.findOneAndUpdate(
+          { _id: txn.account, user: user.id },
+          { $inc: { balance: txn.amount } }
+        );
+        if (txn.transferTo) {
+          await Account.findOneAndUpdate(
+            { _id: txn.transferTo, user: user.id },
+            { $inc: { balance: -txn.amount } }
+          );
+        }
+      } else {
+        const balanceDelta = txn.type === "income" ? -txn.amount : txn.amount;
+        await Account.findOneAndUpdate(
+          { _id: txn.account, user: user.id },
+          { $inc: { balance: balanceDelta } }
+        );
+      }
+    }
     await Transaction.deleteOne({ _id: id, user: user.id });
     await invalidateStatsCache(user.id, new Date(txn.date));
 

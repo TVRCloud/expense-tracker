@@ -29,9 +29,15 @@ export async function GET(req: NextRequest) {
     const startDate = new Date(year, month - 1, 1);
     const endDate = new Date(year, month, 1);
 
+    // Only count recurring installments that have been explicitly marked paid.
+    // Regular transactions (no recurringId) always count.
+    const paidInstallmentsOnly = {
+      $nor: [{ recurringId: { $exists: true }, installmentStatus: { $nin: ["paid"] } }],
+    };
+
     const [agg, catAgg] = await Promise.all([
       Transaction.aggregate([
-        { $match: { user: userObjectId, date: { $gte: startDate, $lt: endDate } } },
+        { $match: { user: userObjectId, date: { $gte: startDate, $lt: endDate }, ...paidInstallmentsOnly } },
         {
           $group: {
             _id: "$type",
@@ -40,7 +46,7 @@ export async function GET(req: NextRequest) {
         },
       ]),
       Transaction.aggregate([
-        { $match: { user: userObjectId, type: "expense", date: { $gte: startDate, $lt: endDate } } },
+        { $match: { user: userObjectId, type: "expense", date: { $gte: startDate, $lt: endDate }, ...paidInstallmentsOnly } },
         { $group: { _id: "$category", total: { $sum: "$amount" } } },
         { $sort: { total: -1 } },
         { $limit: 10 },

@@ -68,6 +68,9 @@ export async function GET(req: NextRequest) {
     const rows = await Transaction.find({
       user: new Types.ObjectId(user.id),
       date: { $gte: start, $lt: end },
+      // Only count recurring installments that have been explicitly marked paid.
+      // Regular transactions (no recurringId) always count.
+      $nor: [{ recurringId: { $exists: true }, installmentStatus: { $nin: ["paid"] } }],
     })
       .select("type amount category date")
       .lean<TransactionLike[]>();

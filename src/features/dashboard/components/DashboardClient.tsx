@@ -4,13 +4,15 @@ import Link from "next/link";
 import { useDashboardStats, useRecentTransactions, useAccounts } from "@/features/dashboard/hooks/useDashboard";
 import { BalanceCard } from "./SpendCard";
 import { WalletCard } from "./WalletCard";
+import { CreditCardSummaryWidget } from "@/features/credit-cards/components/CreditCardSummaryWidget";
+import { UpcomingPaymentsWidget } from "@/features/recurring/components/UpcomingPaymentsWidget";
 import { TransactionRow } from "@/features/transactions/components/TransactionRow";
 import { useCurrency } from "@/hooks/useCurrency";
 
 function SkeletonCard({ h = 110 }: { h?: number }) {
   return (
     <div
-      className="rounded-[var(--r-lg)] animate-pulse"
+      className="rounded-(--r-lg) animate-pulse"
       style={{ height: h, background: "var(--card-2)" }}
     />
   );
@@ -22,7 +24,8 @@ export function DashboardClient() {
   const { data: transactions, isLoading: txnLoading } = useRecentTransactions();
   const { data: accounts, isLoading: acctLoading } = useAccounts();
 
-  const primaryAccount = accounts?.[0];
+  const primaryAccount = accounts?.find(a => a.type !== "credit_card") ?? accounts?.[0];
+  const creditCardAccounts = accounts?.filter(a => a.type === "credit_card") ?? [];
   const totalBalance = accounts?.reduce((s, a) => s + a.balance, 0) ?? 0;
 
   return (
@@ -41,6 +44,11 @@ export function DashboardClient() {
       <div className="md:grid md:gap-5" style={{ gridTemplateColumns: "1fr 320px" }}>
         {/* Transactions column */}
         <div>
+          {/* Upcoming installments — mobile only (desktop has right column) */}
+          <div className="md:hidden mb-5">
+            <UpcomingPaymentsWidget />
+          </div>
+
           <div className="flex items-center justify-between mb-3 mx-0.5">
             <h2 className="font-extrabold text-[18px] tracking-tight" style={{ color: "var(--ink)" }}>
               Recent Transactions
@@ -62,7 +70,7 @@ export function DashboardClient() {
             </div>
           ) : (
             <div
-              className="rounded-[var(--r-md)] p-8 text-center font-semibold text-sm"
+              className="rounded-(--r-md) p-8 text-center font-semibold text-sm"
               style={{ background: "var(--card)", color: "var(--ink-2)" }}
             >
               No transactions yet.{" "}
@@ -76,10 +84,12 @@ export function DashboardClient() {
         {/* Desktop right column */}
         <div className="hidden md:flex flex-col gap-5">
           {primaryAccount && <WalletCard account={primaryAccount} />}
+          {creditCardAccounts.length > 0 && <CreditCardSummaryWidget />}
+          <UpcomingPaymentsWidget />
 
           {stats && (
             <div
-              className="rounded-[var(--r-lg)] p-6"
+              className="rounded-(--r-lg) p-6"
               style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
             >
               <div className="font-extrabold text-base mb-5" style={{ color: "var(--ink)" }}>

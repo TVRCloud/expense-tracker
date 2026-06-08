@@ -10,6 +10,7 @@ import apiClient from "@/lib/api-client";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useTransactions } from "@/features/transactions/hooks/useTransactions";
 import { TransactionRow } from "@/features/transactions/components/TransactionRow";
+import { CreditCardDetailClient } from "@/features/credit-cards/components/CreditCardDetailClient";
 import { type IAccount } from "@/types/models";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -72,9 +73,9 @@ export function AccountDetailClient({ id }: Props) {
   if (isLoading) {
     return (
       <div className="flex flex-col gap-4">
-        <Skeleton className="h-12 w-28 rounded-[var(--r-sm)]" />
-        <Skeleton className="h-48 rounded-[var(--r-lg)]" />
-        <Skeleton className="h-72 rounded-[var(--r-lg)]" />
+        <Skeleton className="h-12 w-28 rounded-(--r-sm)" />
+        <Skeleton className="h-48 rounded-(--r-lg)" />
+        <Skeleton className="h-72 rounded-(--r-lg)" />
       </div>
     );
   }
@@ -86,12 +87,17 @@ export function AccountDetailClient({ id }: Props) {
           <ArrowLeft size={16} />
           Back to accounts
         </Link>
-        <div className="rounded-[var(--r-lg)] p-8 text-center" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
+        <div className="rounded-(--r-lg) p-8 text-center" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
           <div className="font-bold" style={{ color: "var(--ink)" }}>Account not found</div>
           <p className="text-sm mt-1" style={{ color: "var(--ink-3)" }}>It may have been archived or deleted.</p>
         </div>
       </div>
     );
+  }
+
+  // Delegate credit cards to specialised view
+  if (account.type === "credit_card") {
+    return <CreditCardDetailClient id={id} />;
   }
 
   return (
@@ -101,10 +107,10 @@ export function AccountDetailClient({ id }: Props) {
         Back to accounts
       </Link>
 
-      <section className="rounded-[var(--r-lg)] p-5" style={{ background: "var(--card)", boxShadow: "var(--shadow)" }}>
+      <section className="rounded-(--r-lg) p-5" style={{ background: "var(--card)", boxShadow: "var(--shadow)" }}>
         <div className="flex items-start gap-4">
           <div
-            className="w-14 h-14 rounded-[16px] grid place-items-center text-2xl flex-none"
+            className="w-14 h-14 rounded-2xl grid place-items-center text-2xl flex-none"
             style={{ background: account.color || "var(--card-2)", color: account.color ? "#fff" : "var(--violet)" }}
           >
             {account.icon || <Wallet size={26} />}
@@ -121,7 +127,7 @@ export function AccountDetailClient({ id }: Props) {
           <div className="ml-auto flex gap-2">
             <button
               onClick={() => setEditing((value) => !value)}
-              className="px-4 py-2 rounded-[var(--r-sm)] text-sm font-bold"
+              className="px-4 py-2 rounded-(--r-sm) text-sm font-bold"
               style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
             >
               {editing ? "Cancel" : "Edit"}
@@ -131,7 +137,7 @@ export function AccountDetailClient({ id }: Props) {
                 if (confirm(`Archive "${account.name}"?`)) archiveAccount.mutate();
               }}
               disabled={archiveAccount.isPending}
-              className="w-10 h-10 rounded-[var(--r-sm)] grid place-items-center"
+              className="w-10 h-10 rounded-(--r-sm) grid place-items-center"
               style={{ background: "rgba(235,87,87,.12)", color: "var(--red)" }}
             >
               <Archive size={16} />
@@ -143,20 +149,20 @@ export function AccountDetailClient({ id }: Props) {
           <div className="grid md:grid-cols-3 gap-3 mt-5">
             <label className="flex flex-col gap-1.5 md:col-span-3">
               <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Name</span>
-              <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
+              <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
             </label>
             <label className="flex flex-col gap-1.5">
               <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Color</span>
-              <input value={form.color} onChange={(e) => setForm((f) => ({ ...f, color: e.target.value }))} placeholder="#6B46F5" className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
+              <input value={form.color} onChange={(e) => setForm((f) => ({ ...f, color: e.target.value }))} placeholder="#6B46F5" className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
             </label>
             <label className="flex flex-col gap-1.5">
               <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Icon</span>
-              <input value={form.icon} onChange={(e) => setForm((f) => ({ ...f, icon: e.target.value }))} placeholder="Wallet" className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
+              <input value={form.icon} onChange={(e) => setForm((f) => ({ ...f, icon: e.target.value }))} placeholder="Wallet" className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
             </label>
             <button
               onClick={() => updateAccount.mutate()}
               disabled={updateAccount.isPending || !form.name}
-              className="inline-flex items-center justify-center gap-2 rounded-[var(--r-sm)] text-sm font-bold disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-2 rounded-(--r-sm) text-sm font-bold disabled:opacity-50"
               style={{ background: "var(--violet)", color: "#fff" }}
             >
               <Save size={16} />
@@ -173,10 +179,10 @@ export function AccountDetailClient({ id }: Props) {
         </div>
         {txLoading ? (
           <div className="flex flex-col gap-2">
-            {[0, 1, 2].map((i) => <Skeleton key={i} className="h-16 rounded-[var(--r-md)]" />)}
+            {[0, 1, 2].map((i) => <Skeleton key={i} className="h-16 rounded-(--r-md)" />)}
           </div>
         ) : (transactions?.data ?? []).length === 0 ? (
-          <div className="rounded-[var(--r-lg)] p-8 text-center" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
+          <div className="rounded-(--r-lg) p-8 text-center" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
             <div className="font-bold" style={{ color: "var(--ink)" }}>No transactions yet</div>
             <p className="text-sm mt-1" style={{ color: "var(--ink-3)" }}>Transactions linked to this account will appear here.</p>
           </div>

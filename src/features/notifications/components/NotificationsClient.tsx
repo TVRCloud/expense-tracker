@@ -14,6 +14,9 @@ const TYPE_ICONS: Record<string, string> = {
   goal_reached: "🎯",
   system: "📢",
   transaction: "💳",
+  credit_due: "🗓️",
+  credit_overdue: "🚨",
+  emi_due: "📅",
 };
 
 function useNotifications() {

@@ -6,8 +6,10 @@ import { Plus, ArrowDownLeft, ArrowUpRight, Trash2, Receipt } from "lucide-react
 import { format } from "date-fns";
 import apiClient from "@/lib/api-client";
 import { useCurrency } from "@/hooks/useCurrency";
+import { useAccounts } from "@/features/dashboard/hooks/useDashboard";
 import { type ILoan, type IRepayment } from "@/types/models";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DatePickerField } from "@/components/shared/DatePickerField";
 import { toast } from "sonner";
 
 function useLoans(direction?: string) {
@@ -27,12 +29,37 @@ const TABS = [
   { label: "Borrowed", value: "received" },
 ];
 
+interface LoanForm {
+  direction: "given" | "received";
+  counterparty: string;
+  principalAmount: string;
+  startDate: string;
+  dueDate?: Date;
+  accountId: string;
+  note: string;
+}
+
+function createEmptyLoanForm(): LoanForm {
+  return {
+    direction: "received",
+    counterparty: "",
+    principalAmount: "",
+    startDate: format(new Date(), "yyyy-MM-dd"),
+    dueDate: undefined,
+    accountId: "",
+    note: "",
+  };
+}
+
 function LoanRepaymentsPanel({ loan }: { loan: ILoan }) {
   const { formatCurrency } = useCurrency();
   const qc = useQueryClient();
+  const { data: accounts } = useAccounts();
   const [amount, setAmount] = useState("");
-  const [date, setDate] = useState(format(new Date(), "yyyy-MM-dd"));
+  const [date, setDate] = useState(new Date());
+  const [accountId, setAccountId] = useState("");
   const [note, setNote] = useState("");
+  const accountOptions = (accounts ?? []).filter(account => account.type !== "credit_card" && !account.isArchived);
 
   const { data: repayments, isLoading } = useQuery<IRepayment[]>({
     queryKey: ["loans", loan._id, "repayments"],
@@ -45,12 +72,15 @@ function LoanRepaymentsPanel({ loan }: { loan: ILoan }) {
   const addRepayment = useMutation({
     mutationFn: () => apiClient.post(`/loans/${loan._id}/repayments`, {
       amount: Math.round(parseFloat(amount) * 100),
-      date,
+      date: date.toISOString(),
       note: note || undefined,
+      accountId: accountId || undefined,
     }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["loans"] });
       void qc.invalidateQueries({ queryKey: ["loans", loan._id, "repayments"] });
+      void qc.invalidateQueries({ queryKey: ["accounts"] });
+      void qc.invalidateQueries({ queryKey: ["transactions"] });
       setAmount("");
       setNote("");
       toast.success("Repayment added");
@@ -60,7 +90,7 @@ function LoanRepaymentsPanel({ loan }: { loan: ILoan }) {
 
   return (
     <div className="mt-4 rounded-[var(--r-md)] p-4 flex flex-col gap-3" style={{ background: "var(--card-2)" }}>
-      <div className="grid md:grid-cols-3 gap-2">
+      <div className="grid md:grid-cols-4 gap-2">
         <input
           type="number"
           min="0"
@@ -71,13 +101,26 @@ function LoanRepaymentsPanel({ loan }: { loan: ILoan }) {
           className="rounded-[var(--r-sm)] px-3 py-2 text-sm outline-none"
           style={{ background: "var(--card)", color: "var(--ink)", border: "1px solid var(--line)" }}
         />
-        <input
-          type="date"
+        <DatePickerField
           value={date}
-          onChange={(e) => setDate(e.target.value)}
+          onChange={(nextDate) => {
+            if (nextDate) setDate(nextDate);
+          }}
+          placeholder="Repayment date"
+        />
+        <select
+          value={accountId}
+          onChange={(e) => setAccountId(e.target.value)}
           className="rounded-[var(--r-sm)] px-3 py-2 text-sm outline-none"
           style={{ background: "var(--card)", color: "var(--ink)", border: "1px solid var(--line)" }}
-        />
+        >
+          <option value="">No account impact</option>
+          {accountOptions.map(account => (
+            <option key={String(account._id)} value={String(account._id)}>
+              {account.name}
+            </option>
+          ))}
+        </select>
         <input
           value={note}
           onChange={(e) => setNote(e.target.value)}
@@ -119,30 +162,28 @@ function LoanRepaymentsPanel({ loan }: { loan: ILoan }) {
 export function LoansClient() {
   const { formatCurrency } = useCurrency();
   const qc = useQueryClient();
+  const { data: accounts } = useAccounts();
   const [tab, setTab] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [openRepayments, setOpenRepayments] = useState<string | null>(null);
-  const [form, setForm] = useState({
-    direction: "received" as "given" | "received",
-    counterparty: "",
-    principalAmount: "",
-    startDate: format(new Date(), "yyyy-MM-dd"),
-    dueDate: "",
-    note: "",
-  });
+  const [form, setForm] = useState<LoanForm>(createEmptyLoanForm);
 
   const { data: loans, isLoading } = useLoans(tab || undefined);
+  const accountOptions = (accounts ?? []).filter(account => account.type !== "credit_card" && !account.isArchived);
 
   const createLoan = useMutation({
     mutationFn: () => apiClient.post("/loans", {
       ...form,
       principalAmount: Math.round(parseFloat(form.principalAmount) * 100),
-      dueDate: form.dueDate || undefined,
+      dueDate: form.dueDate?.toISOString(),
+      accountId: form.accountId || undefined,
     }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["loans"] });
+      void qc.invalidateQueries({ queryKey: ["accounts"] });
+      void qc.invalidateQueries({ queryKey: ["transactions"] });
       setShowAdd(false);
-      setForm({ direction: "received", counterparty: "", principalAmount: "", startDate: format(new Date(), "yyyy-MM-dd"), dueDate: "", note: "" });
+      setForm(createEmptyLoanForm());
       toast.success("Loan recorded");
     },
     onError: (err: Error) => toast.error(err.message),
@@ -152,6 +193,8 @@ export function LoansClient() {
     mutationFn: (id: string) => apiClient.delete(`/loans/${id}`),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["loans"] });
+      void qc.invalidateQueries({ queryKey: ["accounts"] });
+      void qc.invalidateQueries({ queryKey: ["transactions"] });
       toast.success("Loan deleted");
     },
   });
@@ -336,14 +379,28 @@ export function LoansClient() {
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Due date</label>
-              <input
-                type="date"
+              <DatePickerField
+                label="Due date"
                 value={form.dueDate}
-                onChange={e => setForm(f => ({ ...f, dueDate: e.target.value }))}
+                onChange={(dueDate) => setForm(f => ({ ...f, dueDate }))}
+                clearable
+              />
+            </div>
+            <div className="flex flex-col gap-1.5 col-span-2">
+              <label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Account impact</label>
+              <select
+                value={form.accountId}
+                onChange={e => setForm(f => ({ ...f, accountId: e.target.value }))}
                 className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none"
                 style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }}
-              />
+              >
+                <option value="">Track loan only</option>
+                {accountOptions.map(account => (
+                  <option key={String(account._id)} value={String(account._id)}>
+                    {account.name}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
           <div className="flex gap-3">
