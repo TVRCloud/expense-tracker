@@ -4,6 +4,7 @@ import Account from "@/models/Account";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
+import { appendLedgerBlock } from "@/lib/ledger";
 
 const creditMetaSchema = z.object({
   creditLimit: z.number().int().positive().optional(),
@@ -56,6 +57,14 @@ export async function POST(req: NextRequest) {
 
     await connectDB();
     const account = await Account.create({ ...parsed.data, user: user.id });
+    await appendLedgerBlock({
+      userId: user.id,
+      scope: "account",
+      entityId: account._id.toString(),
+      action: "create",
+      after: account,
+      actor: user,
+    });
 
     logger.info({ userId: user.id, accountId: account._id.toString() }, "Account created");
     return NextResponse.json({ data: account }, { status: 201 });

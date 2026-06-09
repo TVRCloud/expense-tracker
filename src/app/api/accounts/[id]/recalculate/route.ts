@@ -5,6 +5,7 @@ import Transaction from "@/models/Transaction";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { Types } from "mongoose";
+import { appendLedgerBlock } from "@/lib/ledger";
 
 type Params = Promise<{ id: string }>;
 
@@ -18,6 +19,7 @@ export async function POST(_req: NextRequest, { params }: { params: Params }) {
 
     const account = await Account.findOne({ _id: id, user: user.id });
     if (!account) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const before = account.toObject();
 
     const accountObjectId = new Types.ObjectId(id);
 
@@ -27,6 +29,7 @@ export async function POST(_req: NextRequest, { params }: { params: Params }) {
       {
         $match: {
           user: new Types.ObjectId(user.id),
+          isDeleted: { $ne: true },
           $or: [
             { account: accountObjectId },
             { transferTo: accountObjectId },
@@ -73,6 +76,15 @@ export async function POST(_req: NextRequest, { params }: { params: Params }) {
     const trueBalance = agg?.balance ?? 0;
     account.balance = trueBalance;
     await account.save();
+    await appendLedgerBlock({
+      userId: user.id,
+      scope: "account",
+      entityId: id,
+      action: "update",
+      before,
+      after: account,
+      actor: user,
+    });
 
     logger.info({ userId: user.id, accountId: id, trueBalance }, "Account balance recalculated");
     return NextResponse.json({ data: { balance: trueBalance } });

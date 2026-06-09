@@ -5,6 +5,7 @@ import Notification from "@/models/Notification";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
+import { appendLedgerBlock } from "@/lib/ledger";
 
 const updateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
@@ -23,7 +24,7 @@ export async function GET(_req: NextRequest, { params }: { params: Params }) {
 
     const { id } = await params;
     await connectDB();
-    const goal = await Goal.findOne({ _id: id, user: user.id }).lean();
+    const goal = await Goal.findOne({ _id: id, user: user.id, isDeleted: { $ne: true } }).lean();
     if (!goal) return NextResponse.json({ error: "Not found" }, { status: 404 });
     return NextResponse.json({ data: goal });
   } catch (err) {
@@ -48,18 +49,42 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     if (parsed.data.targetDate) update.targetDate = new Date(parsed.data.targetDate);
 
     await connectDB();
+    const before = await Goal.findOne({ _id: id, user: user.id, isDeleted: { $ne: true } }).lean();
+    if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
     const goal = await Goal.findOneAndUpdate(
-      { _id: id, user: user.id },
+      { _id: id, user: user.id, isDeleted: { $ne: true } },
       { $set: update },
       { new: true }
     ).lean<{ savedAmount: number; targetAmount: number; name: string; isCompleted: boolean }>();
 
     if (!goal) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    await appendLedgerBlock({
+      userId: user.id,
+      scope: "goal",
+      entityId: id,
+      action: "update",
+      before,
+      after: goal,
+      actor: user,
+    });
 
     // Fire goal_reached notification
     if (!goal.isCompleted && goal.savedAmount >= goal.targetAmount) {
-      void Goal.findByIdAndUpdate(id, { $set: { isCompleted: true } });
-      void Notification.create({
+      const completedGoal = await Goal.findByIdAndUpdate(
+        id,
+        { $set: { isCompleted: true, completedAt: new Date() } },
+        { new: true }
+      ).lean();
+      await appendLedgerBlock({
+        userId: user.id,
+        scope: "goal",
+        entityId: id,
+        action: "update",
+        before: goal,
+        after: completedGoal,
+        actor: user,
+      });
+      await Notification.create({
         user: user.id,
         type: "goal_reached",
         title: "Goal reached! 🎉",
@@ -82,8 +107,23 @@ export async function DELETE(_req: NextRequest, { params }: { params: Params }) 
 
     const { id } = await params;
     await connectDB();
-    const goal = await Goal.findOneAndDelete({ _id: id, user: user.id });
+    const before = await Goal.findOne({ _id: id, user: user.id, isDeleted: { $ne: true } }).lean();
+    if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const goal = await Goal.findOneAndUpdate(
+      { _id: id, user: user.id, isDeleted: { $ne: true } },
+      { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: user.id } },
+      { new: true }
+    ).lean();
     if (!goal) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    await appendLedgerBlock({
+      userId: user.id,
+      scope: "goal",
+      entityId: id,
+      action: "delete",
+      before,
+      after: goal,
+      actor: user,
+    });
     return NextResponse.json({ data: { message: "Goal deleted" } });
   } catch (err) {
     logger.error({ err }, "DELETE /api/goals/[id] failed");

@@ -17,6 +17,7 @@ import {
   Bell,
   Settings,
   Shield,
+  KeyRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +27,7 @@ const NAV = [
   { href: "/analytics", label: "Analytics", icon: BarChart2 },
   { href: "/accounts", label: "Accounts", icon: Wallet },
   { href: "/notifications", label: "Notifications", icon: Bell },
+  { href: "/logs", label: "Logs", icon: KeyRound },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

@@ -9,6 +9,7 @@ import { Types } from "mongoose";
 import { redis } from "@/lib/redis";
 import { addDays, addWeeks, addMonths, addYears } from "date-fns";
 import { checkBudgetAlert } from "@/lib/budget-alert";
+import { appendLedgerBlock } from "@/lib/ledger";
 
 const createSchema = z.object({
   accountId: z.string(),
@@ -90,7 +91,7 @@ export async function GET(req: NextRequest) {
     const dateFrom = searchParams.get("dateFrom");
     const dateTo = searchParams.get("dateTo");
 
-    const query: Record<string, unknown> = { user: user.id };
+    const query: Record<string, unknown> = { user: user.id, isDeleted: { $ne: true } };
     if (type) query.type = type;
     if (category) query.category = category;
     if (accountId) query.account = accountId;
@@ -166,6 +167,16 @@ export async function POST(req: NextRequest) {
       }));
 
       const inserted = await Transaction.insertMany(docs);
+      for (const transaction of inserted) {
+        await appendLedgerBlock({
+          userId: user.id,
+          scope: "transaction",
+          entityId: transaction._id.toString(),
+          action: "create",
+          after: transaction,
+          actor: user,
+        });
+      }
       await invalidateStatsCacheMany(user.id, dates);
 
       logger.info({ userId: user.id, recurringId: recurringId.toString(), count: docs.length }, "Recurring series created");
@@ -176,15 +187,38 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Single transaction (non-recurring or recurring count = 1) ───────────
+    const accountBefore = account.toObject();
     const balanceDelta = rest.type === "income" ? rest.amount : -rest.amount;
     account.balance += balanceDelta;
     await account.save();
+    await appendLedgerBlock({
+      userId: user.id,
+      scope: "account",
+      entityId: account._id.toString(),
+      action: "update",
+      before: accountBefore,
+      after: account,
+      actor: user,
+    });
 
     if (rest.type === "transfer" && transferToId) {
-      await Account.findOneAndUpdate(
+      const transferAccountBefore = await Account.findOne({ _id: transferToId, user: user.id });
+      const transferAccount = await Account.findOneAndUpdate(
         { _id: transferToId, user: user.id },
-        { $inc: { balance: rest.amount } }
+        { $inc: { balance: rest.amount } },
+        { new: true }
       );
+      if (transferAccountBefore && transferAccount) {
+        await appendLedgerBlock({
+          userId: user.id,
+          scope: "account",
+          entityId: transferAccount._id.toString(),
+          action: "update",
+          before: transferAccountBefore,
+          after: transferAccount,
+          actor: user,
+        });
+      }
     }
 
     const transaction = await Transaction.create({
@@ -195,6 +229,14 @@ export async function POST(req: NextRequest) {
       recurrenceInterval: rest.isRecurring ? (rest.recurrenceInterval ?? 1) : undefined,
       recurrenceEndDate: rest.recurrenceEndDate ? new Date(rest.recurrenceEndDate) : undefined,
       ...(transferToId ? { transferTo: transferToId } : {}),
+    });
+    await appendLedgerBlock({
+      userId: user.id,
+      scope: "transaction",
+      entityId: transaction._id.toString(),
+      action: "create",
+      after: transaction,
+      actor: user,
     });
     await invalidateStatsCache(user.id, startDate);
 

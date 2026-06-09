@@ -7,6 +7,7 @@ import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
 import { redis } from "@/lib/redis";
+import { appendLedgerBlock } from "@/lib/ledger";
 
 const createSchema = z.object({
   direction: z.enum(["given", "received"]),
@@ -37,7 +38,7 @@ export async function GET(req: NextRequest) {
     const direction = searchParams.get("direction");
     const isSettled = searchParams.get("isSettled");
 
-    const query: Record<string, unknown> = { user: user.id };
+    const query: Record<string, unknown> = { user: user.id, isDeleted: { $ne: true } };
     if (direction) query.direction = direction;
     if (isSettled !== null) query.isSettled = isSettled === "true";
 
@@ -77,17 +78,38 @@ export async function POST(req: NextRequest) {
       startDate: new Date(loanData.startDate),
       dueDate: loanData.dueDate ? new Date(loanData.dueDate) : undefined,
     });
+    await appendLedgerBlock({
+      userId: user.id,
+      scope: "loan",
+      entityId: loan._id.toString(),
+      action: "create",
+      after: loan,
+      actor: user,
+    });
 
     if (accountId) {
       const transactionDate = new Date(loanData.startDate);
       const type = loanData.direction === "received" ? "income" : "expense";
       const balanceDelta = type === "income" ? loanData.principalAmount : -loanData.principalAmount;
 
-      await Account.findOneAndUpdate(
+      const accountBefore = await Account.findOne({ _id: accountId, user: user.id });
+      const accountAfter = await Account.findOneAndUpdate(
         { _id: accountId, user: user.id },
-        { $inc: { balance: balanceDelta } }
+        { $inc: { balance: balanceDelta } },
+        { new: true }
       );
-      await Transaction.create({
+      if (accountBefore && accountAfter) {
+        await appendLedgerBlock({
+          userId: user.id,
+          scope: "account",
+          entityId: accountAfter._id.toString(),
+          action: "update",
+          before: accountBefore,
+          after: accountAfter,
+          actor: user,
+        });
+      }
+      const transaction = await Transaction.create({
         user: user.id,
         account: accountId,
         type,
@@ -100,6 +122,14 @@ export async function POST(req: NextRequest) {
         note: loanData.note,
         date: transactionDate,
         tags: [`loan:${loan._id.toString()}`, "loan_principal"],
+      });
+      await appendLedgerBlock({
+        userId: user.id,
+        scope: "transaction",
+        entityId: transaction._id.toString(),
+        action: "create",
+        after: transaction,
+        actor: user,
       });
       await invalidateStatsCache(user.id, transactionDate);
     }

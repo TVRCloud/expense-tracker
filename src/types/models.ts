@@ -58,6 +58,8 @@ export interface IAccount {
   color?: string;
   icon?: string;
   isArchived: boolean;
+  deletedAt?: string;
+  deletedBy?: string;
   creditMeta?: ICreditMeta;
   createdAt: string;
   updatedAt: string;
@@ -77,6 +79,9 @@ export interface ICreditStatement {
   paymentTransactionId?: string;
   balance?: number;    // cents — computed from transactions, not stored
   minPayment?: number; // cents — computed
+  isDeleted?: boolean;
+  deletedAt?: string;
+  deletedBy?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -106,6 +111,9 @@ export interface ITransaction {
   installmentIndex?: number;
   installmentStatus?: "upcoming" | "paid" | "overdue" | "skipped";
   paidAt?: string;
+  isDeleted?: boolean;
+  deletedAt?: string;
+  deletedBy?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -121,6 +129,9 @@ export interface IBudget {
   alertAt: number; // percent
   isActive: boolean;
   spent?: number; // cents — computed
+  isDeleted?: boolean;
+  deletedAt?: string;
+  deletedBy?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -140,6 +151,9 @@ export interface ILoan {
   isSettled: boolean;
   settledAt?: string;
   account?: string | IAccount;
+  isDeleted?: boolean;
+  deletedAt?: string;
+  deletedBy?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -152,6 +166,9 @@ export interface IRepayment {
   date: string;
   note?: string;
   account?: string | IAccount;
+  isDeleted?: boolean;
+  deletedAt?: string;
+  deletedBy?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -170,6 +187,9 @@ export interface IGoal {
   linkedAccount?: string | IAccount;
   isCompleted: boolean;
   completedAt?: string;
+  isDeleted?: boolean;
+  deletedAt?: string;
+  deletedBy?: string;
   createdAt: string;
   updatedAt: string;
 }

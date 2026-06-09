@@ -6,6 +6,7 @@ import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
 import { Types } from "mongoose";
+import { appendLedgerBlock } from "@/lib/ledger";
 
 const paySchema = z.object({
   paidAmount: z.number().int().positive(),
@@ -26,6 +27,7 @@ async function computeStatementBalance(
     {
       $match: {
         user: new Types.ObjectId(userId),
+        isDeleted: { $ne: true },
         $or: [
           { account: accountObjectId },
           { transferTo: accountObjectId },
@@ -90,6 +92,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
       _id: statementId,
       account: accountId,
       user: user.id,
+      isDeleted: { $ne: true },
     }).lean<{
       paidAmount?: number;
       periodStart: Date;
@@ -121,12 +124,21 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     }
 
     const statement = await CreditStatement.findOneAndUpdate(
-      { _id: statementId, account: accountId, user: user.id },
+      { _id: statementId, account: accountId, user: user.id, isDeleted: { $ne: true } },
       { $set: update },
       { new: true }
     ).lean();
 
     if (!statement) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    await appendLedgerBlock({
+      userId: user.id,
+      scope: "credit_statement",
+      entityId: statementId,
+      action: "update",
+      before: existing,
+      after: statement,
+      actor: user,
+    });
 
     logger.info({ userId: user.id, statementId }, "Credit statement marked paid");
     return NextResponse.json({ data: statement });

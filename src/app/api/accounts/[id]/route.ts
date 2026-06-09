@@ -4,6 +4,7 @@ import Account from "@/models/Account";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
+import { appendLedgerBlock } from "@/lib/ledger";
 
 const creditMetaSchema = z.object({
   creditLimit: z.number().int().positive().optional(),
@@ -56,6 +57,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     }
 
     await connectDB();
+    const before = await Account.findOne({ _id: id, user: user.id }).lean();
+    if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
     const account = await Account.findOneAndUpdate(
       { _id: id, user: user.id },
       { $set: parsed.data },
@@ -63,6 +66,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     ).lean();
 
     if (!account) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    await appendLedgerBlock({
+      userId: user.id,
+      scope: "account",
+      entityId: id,
+      action: "update",
+      before,
+      after: account,
+      actor: user,
+    });
     return NextResponse.json({ data: account });
   } catch (err) {
     logger.error({ err }, "PATCH /api/accounts/[id] failed");
@@ -77,13 +89,24 @@ export async function DELETE(_req: NextRequest, { params }: { params: Params }) 
 
     const { id } = await params;
     await connectDB();
+    const before = await Account.findOne({ _id: id, user: user.id, isArchived: false }).lean();
+    if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
     const account = await Account.findOneAndUpdate(
-      { _id: id, user: user.id },
-      { $set: { isArchived: true } },
+      { _id: id, user: user.id, isArchived: false },
+      { $set: { isArchived: true, deletedAt: new Date(), deletedBy: user.id } },
       { new: true }
     ).lean();
 
     if (!account) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    await appendLedgerBlock({
+      userId: user.id,
+      scope: "account",
+      entityId: id,
+      action: "delete",
+      before,
+      after: account,
+      actor: user,
+    });
     return NextResponse.json({ data: { message: "Account archived" } });
   } catch (err) {
     logger.error({ err }, "DELETE /api/accounts/[id] failed");

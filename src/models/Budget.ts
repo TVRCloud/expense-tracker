@@ -10,11 +10,17 @@ const BudgetSchema = new Schema(
     currency: { type: String, default: "USD" },
     alertAt: { type: Number, default: 80 }, // percent threshold
     isActive: { type: Boolean, default: true },
+    isDeleted: { type: Boolean, default: false },
+    deletedAt: { type: Date },
+    deletedBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true }
 );
 
-BudgetSchema.index({ user: 1, year: 1, month: 1 });
-BudgetSchema.index({ user: 1, category: 1, year: 1, month: 1 }, { unique: true });
+BudgetSchema.index({ user: 1, isDeleted: 1, year: 1, month: 1 });
+BudgetSchema.index(
+  { user: 1, category: 1, year: 1, month: 1, isDeleted: 1 },
+  { unique: true }
+);
 
 export default models.Budget || model("Budget", BudgetSchema, "budgets");

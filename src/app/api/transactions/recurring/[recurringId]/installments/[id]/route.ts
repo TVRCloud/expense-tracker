@@ -8,6 +8,7 @@ import { Types } from "mongoose";
 import { z } from "zod";
 import { redis } from "@/lib/redis";
 import { checkBudgetAlert } from "@/lib/budget-alert";
+import { appendLedgerBlock } from "@/lib/ledger";
 
 type Params = Promise<{ recurringId: string; id: string }>;
 
@@ -32,6 +33,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     const installment = await Transaction.findOne({
       _id: id,
       user: user.id,
+      isDeleted: { $ne: true },
       recurringId: new Types.ObjectId(recurringId),
     });
 
@@ -40,6 +42,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     }
 
     const { status } = parsed.data;
+    const installmentBefore = installment.toObject();
     const prevStatus = installment.installmentStatus;
     const now = new Date();
     const installmentDate = new Date(installment.date);
@@ -47,24 +50,59 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     // Apply balance delta when marking paid — all installments, regardless of date
     if (status === "paid" && prevStatus !== "paid") {
       const delta = installment.type === "income" ? installment.amount : -installment.amount;
-      await Account.findOneAndUpdate(
+      const accountBefore = await Account.findOne({ _id: installment.account, user: user.id });
+      const accountAfter = await Account.findOneAndUpdate(
         { _id: installment.account, user: user.id },
-        { $inc: { balance: delta } }
+        { $inc: { balance: delta } },
+        { new: true }
       );
+      if (accountBefore && accountAfter) {
+        await appendLedgerBlock({
+          userId: user.id,
+          scope: "account",
+          entityId: accountAfter._id.toString(),
+          action: "update",
+          before: accountBefore,
+          after: accountAfter,
+          actor: user,
+        });
+      }
     }
 
     // Reverse balance if un-paying
     if (prevStatus === "paid" && status !== "paid") {
       const delta = installment.type === "income" ? -installment.amount : installment.amount;
-      await Account.findOneAndUpdate(
+      const accountBefore = await Account.findOne({ _id: installment.account, user: user.id });
+      const accountAfter = await Account.findOneAndUpdate(
         { _id: installment.account, user: user.id },
-        { $inc: { balance: delta } }
+        { $inc: { balance: delta } },
+        { new: true }
       );
+      if (accountBefore && accountAfter) {
+        await appendLedgerBlock({
+          userId: user.id,
+          scope: "account",
+          entityId: accountAfter._id.toString(),
+          action: "update",
+          before: accountBefore,
+          after: accountAfter,
+          actor: user,
+        });
+      }
     }
 
     installment.installmentStatus = status;
     installment.paidAt = status === "paid" ? now : undefined;
     await installment.save();
+    await appendLedgerBlock({
+      userId: user.id,
+      scope: "transaction",
+      entityId: installment._id.toString(),
+      action: "update",
+      before: installmentBefore,
+      after: installment,
+      actor: user,
+    });
 
     if (status === "paid" && prevStatus !== "paid" && installment.type === "expense") {
       void checkBudgetAlert(user.id, installment.category, installment.amount);

@@ -114,6 +114,19 @@ All monetary amounts are in **cents** (integers).
 | DELETE | `/api/notifications/:id` | Delete |
 | POST | `/api/notifications/read-all` | Mark all read |
 
+## Logs
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/logs/otp/status` | Get logs authenticator/unlock status |
+| POST | `/api/logs/otp/setup` | Start authenticator setup and return QR payload |
+| POST | `/api/logs/otp/verify` | Confirm setup, unlock logs, or use a recovery code |
+| POST | `/api/logs/otp/disable` | Disable logs authenticator after code verification |
+| GET | `/api/logs/ledger` | List append-only ledger blocks after TOTP unlock |
+| GET | `/api/logs/ledger/verify` | Verify the hash-linked ledger chain after TOTP unlock |
+
+`/api/logs/ledger` accepts `scope`, `entityId`, `skip`, and `limit` query params. `limit` is capped at 100.
+
 ## Push
 
 | Method | Path | Description |

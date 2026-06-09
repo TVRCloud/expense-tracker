@@ -4,6 +4,7 @@ import Goal from "@/models/Goal";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
+import { appendLedgerBlock } from "@/lib/ledger";
 
 const createSchema = z.object({
   name: z.string().min(1).max(100),
@@ -21,7 +22,7 @@ export async function GET() {
     if (errorResponse) return errorResponse;
 
     await connectDB();
-    const goals = await Goal.find({ user: user.id }).sort({ createdAt: -1 }).lean();
+    const goals = await Goal.find({ user: user.id, isDeleted: { $ne: true } }).sort({ createdAt: -1 }).lean();
     return NextResponse.json({ data: goals });
   } catch (err) {
     logger.error({ err }, "GET /api/goals failed");
@@ -45,6 +46,14 @@ export async function POST(req: NextRequest) {
       ...parsed.data,
       user: user.id,
       targetDate: parsed.data.targetDate ? new Date(parsed.data.targetDate) : undefined,
+    });
+    await appendLedgerBlock({
+      userId: user.id,
+      scope: "goal",
+      entityId: goal._id.toString(),
+      action: "create",
+      after: goal,
+      actor: user,
     });
 
     return NextResponse.json({ data: goal }, { status: 201 });

@@ -30,6 +30,7 @@ export async function GET(req: NextRequest) {
       const endOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 2, 0, 23, 59, 59, 999);
       const matchQ: Record<string, unknown> = {
         user: userId,
+        isDeleted: { $ne: true },
         isRecurring: true,
         installmentStatus: "upcoming",
         date: { $gte: now, $lte: endOfNextMonth },
@@ -46,6 +47,7 @@ export async function GET(req: NextRequest) {
     // Default: aggregate series by recurringId
     const matchQ: Record<string, unknown> = {
       user: userId,
+      isDeleted: { $ne: true },
       isRecurring: true,
       recurringId: { $exists: true },
     };

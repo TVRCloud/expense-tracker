@@ -67,6 +67,7 @@ export async function GET(req: NextRequest) {
     await connectDB();
     const rows = await Transaction.find({
       user: new Types.ObjectId(user.id),
+      isDeleted: { $ne: true },
       date: { $gte: start, $lt: end },
       // Only count recurring installments that have been explicitly marked paid.
       // Regular transactions (no recurringId) always count.

@@ -6,6 +6,7 @@ import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
 import { Types } from "mongoose";
+import { appendLedgerBlock } from "@/lib/ledger";
 
 const createSchema = z.object({
   category: z.string().min(1),
@@ -27,7 +28,7 @@ export async function GET(req: NextRequest) {
 
     await connectDB();
     const userObjectId = new Types.ObjectId(user.id);
-    const budgets = await Budget.find({ user: user.id, month, year }).lean();
+    const budgets = await Budget.find({ user: user.id, month, year, isDeleted: { $ne: true } }).lean();
 
     // Enrich with spent amounts
     const enriched = await Promise.all(
@@ -36,6 +37,7 @@ export async function GET(req: NextRequest) {
           {
             $match: {
               user: userObjectId,
+              isDeleted: { $ne: true },
               category: b.category,
               type: "expense",
               date: {
@@ -80,11 +82,40 @@ export async function POST(req: NextRequest) {
       month: parsed.data.month,
       year: parsed.data.year,
     });
-    if (existing) {
+    if (existing && existing.isDeleted !== true) {
       return NextResponse.json({ error: "Budget already exists for this category and period" }, { status: 409 });
     }
 
+    if (existing?.isDeleted === true) {
+      const before = existing.toObject();
+      existing.set({
+        ...parsed.data,
+        isDeleted: false,
+        deletedAt: undefined,
+        deletedBy: undefined,
+      });
+      await existing.save();
+      await appendLedgerBlock({
+        userId: user.id,
+        scope: "budget",
+        entityId: existing._id.toString(),
+        action: "restore",
+        before,
+        after: existing,
+        actor: user,
+      });
+      return NextResponse.json({ data: existing }, { status: 201 });
+    }
+
     const budget = await Budget.create({ ...parsed.data, user: user.id });
+    await appendLedgerBlock({
+      userId: user.id,
+      scope: "budget",
+      entityId: budget._id.toString(),
+      action: "create",
+      after: budget,
+      actor: user,
+    });
     return NextResponse.json({ data: budget }, { status: 201 });
   } catch (err) {
     logger.error({ err }, "POST /api/budgets failed");

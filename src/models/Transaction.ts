@@ -29,17 +29,21 @@ const TransactionSchema = new Schema(
       default: "upcoming",
     },
     paidAt: { type: Date },
+    isDeleted: { type: Boolean, default: false },
+    deletedAt: { type: Date },
+    deletedBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true }
 );
 
-TransactionSchema.index({ user: 1, date: -1 });
-TransactionSchema.index({ user: 1, account: 1, date: -1 });
-TransactionSchema.index({ user: 1, type: 1, date: -1 });
-TransactionSchema.index({ user: 1, category: 1, date: -1 });
+TransactionSchema.index({ user: 1, isDeleted: 1, date: -1 });
+TransactionSchema.index({ user: 1, isDeleted: 1, account: 1, date: -1 });
+TransactionSchema.index({ user: 1, isDeleted: 1, type: 1, date: -1 });
+TransactionSchema.index({ user: 1, isDeleted: 1, category: 1, date: -1 });
 TransactionSchema.index({ description: "text", note: "text" });
-TransactionSchema.index({ user: 1, recurringId: 1, installmentIndex: 1 });
-TransactionSchema.index({ user: 1, recurringId: 1, date: 1 });
-TransactionSchema.index({ user: 1, isRecurring: 1, installmentStatus: 1, date: 1 });
+TransactionSchema.index({ user: 1, isDeleted: 1, recurringId: 1, installmentIndex: 1 });
+TransactionSchema.index({ user: 1, isDeleted: 1, recurringId: 1, date: 1 });
+TransactionSchema.index({ user: 1, isDeleted: 1, isRecurring: 1, installmentStatus: 1, date: 1 });
+TransactionSchema.index({ user: 1, tags: 1 });
 
 export default models.Transaction || model("Transaction", TransactionSchema, "transactions");

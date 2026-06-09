@@ -16,13 +16,17 @@ const CreditStatementSchema = new Schema(
     paidAmount: { type: Number, default: 0 }, // cents
     paidAt: { type: Date },
     paymentTransactionId: { type: Schema.Types.ObjectId, ref: "Transaction" },
+    isDeleted: { type: Boolean, default: false },
+    deletedAt: { type: Date },
+    deletedBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true }
 );
 
-CreditStatementSchema.index({ user: 1, account: 1, periodStart: -1 });
-CreditStatementSchema.index({ user: 1, status: 1 });
+CreditStatementSchema.index({ user: 1, isDeleted: 1, account: 1, periodStart: -1 });
+CreditStatementSchema.index({ user: 1, isDeleted: 1, status: 1 });
 CreditStatementSchema.index({ account: 1, periodStart: 1 }, { unique: true });
+CreditStatementSchema.index({ user: 1, isDeleted: 1, account: 1, status: 1, dueDate: 1 });
 CreditStatementSchema.index({ dueDate: 1 });
 
 export default models.CreditStatement ||

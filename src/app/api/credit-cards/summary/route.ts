@@ -71,6 +71,7 @@ export async function GET() {
           {
             $match: {
               user: new Types.ObjectId(user.id),
+              isDeleted: { $ne: true },
               $or: [
                 { account: cardObjectId },
                 { transferTo: cardObjectId },
