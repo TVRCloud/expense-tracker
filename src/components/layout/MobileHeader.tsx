@@ -1,7 +1,9 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { Bell, ChevronLeft, Settings } from "lucide-react";
+import { Bell, ChevronLeft } from "lucide-react";
+import { useSession } from "next-auth/react";
+import { getGreeting } from "@/lib/utils";
 
 const TITLES: Record<string, string> = {
   "/dashboard": "Home",
@@ -21,9 +23,13 @@ const TITLES: Record<string, string> = {
 export function MobileHeader() {
   const pathname = usePathname();
   const router = useRouter();
+  const { data: session } = useSession();
 
   const title = TITLES[pathname] ?? "Finance OS";
   const isHome = pathname === "/dashboard";
+  const userName = session?.user?.name ?? "";
+  const userInitial = userName[0]?.toUpperCase() ?? "U";
+  const greeting = getGreeting();
 
   return (
     <header
@@ -34,18 +40,47 @@ export function MobileHeader() {
       }}
     >
       <div className="flex items-center justify-between">
-        <button
-          onClick={() => (isHome ? router.push("/settings") : router.back())}
-          className="w-11 h-11 rounded-full grid place-items-center"
-          style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
-        >
-          {isHome ? <Settings size={21} /> : <ChevronLeft size={21} />}
-        </button>
+        {/* Left: avatar on home, back button elsewhere */}
+        {isHome ? (
+          <button
+            onClick={() => router.push("/settings")}
+            className="w-11 h-11 rounded-full grid place-items-center text-white font-bold text-base flex-none"
+            style={{
+              background: "var(--fab)",
+              color: "var(--fab-ink)",
+              boxShadow: "var(--shadow-sm)",
+              fontSize: 16,
+            }}
+          >
+            {userInitial}
+          </button>
+        ) : (
+          <button
+            onClick={() => router.back()}
+            className="w-11 h-11 rounded-full grid place-items-center"
+            style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
+          >
+            <ChevronLeft size={21} />
+          </button>
+        )}
 
-        <span className="font-extrabold text-[22px]" style={{ color: "var(--ink)" }}>
-          {title}
-        </span>
+        {/* Center: greeting on home, page title elsewhere */}
+        {isHome ? (
+          <div className="text-left">
+            <div className="text-[12px] font-medium" style={{ color: "var(--ink-2)" }}>
+              {greeting}
+            </div>
+            <div className="font-extrabold text-[18px] leading-tight" style={{ color: "var(--ink)" }}>
+              {userName || "there"}
+            </div>
+          </div>
+        ) : (
+          <span className="font-extrabold text-[22px]" style={{ color: "var(--ink)" }}>
+            {title}
+          </span>
+        )}
 
+        {/* Right: notifications bell */}
         <button
           onClick={() => router.push("/notifications")}
           className="w-11 h-11 rounded-full grid place-items-center"

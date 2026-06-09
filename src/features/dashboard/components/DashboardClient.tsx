@@ -9,6 +9,7 @@ import { UpcomingPaymentsWidget } from "@/features/recurring/components/Upcoming
 import { TransactionRow } from "@/features/transactions/components/TransactionRow";
 import { useCurrency } from "@/hooks/useCurrency";
 
+
 function SkeletonCard({ h = 110 }: { h?: number }) {
   return (
     <div
@@ -109,7 +110,7 @@ export function DashboardClient() {
                     <span style={{ color: "var(--ink-2)" }}>Income</span>
                     <span className="tnum">{formatCurrency(stats.income)}</span>
                   </div>
-                  <div className="h-[9px] rounded-[6px]" style={{ background: "var(--card-2)" }}>
+                  <div className="h-2.25 rounded-[6px]" style={{ background: "var(--card-2)" }}>
                     <div className="h-full rounded-[6px]" style={{ width: "100%", background: "var(--violet)" }} />
                   </div>
                 </div>
@@ -118,7 +119,7 @@ export function DashboardClient() {
                     <span style={{ color: "var(--ink-2)" }}>Spending</span>
                     <span className="tnum">{formatCurrency(stats.expense)}</span>
                   </div>
-                  <div className="h-[9px] rounded-[6px]" style={{ background: "var(--card-2)" }}>
+                  <div className="h-2.25 rounded-[6px]" style={{ background: "var(--card-2)" }}>
                     <div
                       className="h-full rounded-[6px]"
                       style={{

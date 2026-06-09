@@ -22,7 +22,7 @@ export function HistoryRow({ history, onClick, isActive }: Props) {
       className="flex items-center gap-4 w-full text-left rounded-[var(--r-md)] px-4 py-3.5 transition-all hover:opacity-90"
       style={
         isActive
-          ? { background: "var(--violet)", boxShadow: "0 4px 14px rgba(107,70,245,.25)" }
+          ? { background: "var(--violet)", boxShadow: "0 4px 14px rgba(0,0,0,.25)" }
           : { background: "var(--card)", boxShadow: "var(--shadow-sm)" }
       }
     >

@@ -1,4 +1,3 @@
-import { Wallet, ChevronRight } from "lucide-react";
 import { useCurrency } from "@/hooks/useCurrency";
 import Link from "next/link";
 import { type IAccount } from "@/types/models";
@@ -9,34 +8,70 @@ interface Props {
 
 export function WalletCard({ account }: Props) {
   const { formatCurrency } = useCurrency();
+  const lastFour = (account as IAccount & { creditMeta?: { lastFourDigits?: string } }).creditMeta?.lastFourDigits;
+
   return (
     <Link
       href={`/accounts/${account._id}`}
-      className="flex items-center gap-4 rounded-[var(--r-lg)] px-5 py-4 transition-all hover:-translate-y-0.5"
+      className="block rounded-(--r-lg) p-5 transition-all hover:-translate-y-1"
       style={{
-        background: "var(--card)",
-        boxShadow: "var(--shadow-sm)",
-        marginBottom: 4,
+        background: "linear-gradient(135deg, #18181b 0%, #27272a 60%, #3f3f46 100%)",
+        boxShadow: "0 20px 50px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.07)",
+        minHeight: 164,
       }}
     >
+      {/* Row 1: EMV chip + contactless icon */}
+      <div className="flex items-start justify-between mb-4">
+        {/* Gold EMV chip */}
+        <div
+          className="rounded flex-none"
+          style={{
+            width: 32,
+            height: 24,
+            background: "linear-gradient(135deg, #c9a227 0%, #f0d060 45%, #a07c18 100%)",
+            boxShadow: "0 2px 6px rgba(0,0,0,.35)",
+          }}
+        />
+        {/* Contactless waves */}
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" style={{ opacity: 0.65 }}>
+          <path d="M12 4C17.5 4 22 8.5 22 14" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
+          <path d="M12 8C15.3 8 18 10.7 18 14" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
+          <path d="M12 12C13.1 12 14 12.9 14 14" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
+          <circle cx="12" cy="14" r="1.5" fill="white"/>
+        </svg>
+      </div>
+
+      {/* Account name */}
       <div
-        className="w-12 h-12 rounded-[14px] grid place-items-center flex-none"
-        style={{ background: "var(--card-2)", color: "var(--violet)" }}
+        className="text-[11px] font-bold uppercase tracking-widest mb-3"
+        style={{ color: "rgba(255,255,255,.52)" }}
       >
-        <Wallet size={23} />
+        {account.name}
       </div>
-      <div>
-        <div className="font-bold text-[15.5px]" style={{ color: "var(--ink)" }}>
-          {account.name}
-        </div>
-        <div className="text-xs font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>
-          {account.type.replace("_", " ")}
-        </div>
-      </div>
-      <div className="ml-auto font-extrabold text-[17px] tnum" style={{ color: "var(--ink)" }}>
+
+      {/* Balance */}
+      <div
+        className="font-extrabold tnum leading-none mb-4"
+        style={{ fontSize: 26, color: "#fff" }}
+      >
         {formatCurrency(account.balance)}
       </div>
-      <ChevronRight size={20} style={{ color: "var(--ink-3)" }} />
+
+      {/* Row 3: account type + masked number */}
+      <div className="flex items-center justify-between">
+        <span
+          className="text-[11px] font-bold uppercase tracking-wider"
+          style={{ color: "rgba(255,255,255,.46)" }}
+        >
+          {account.type.replace("_", " ")}
+        </span>
+        <span
+          className="font-mono text-[13px] tracking-widest"
+          style={{ color: "rgba(255,255,255,.60)" }}
+        >
+          {lastFour ? `•••• ${lastFour}` : "•••• ••••"}
+        </span>
+      </div>
     </Link>
   );
 }

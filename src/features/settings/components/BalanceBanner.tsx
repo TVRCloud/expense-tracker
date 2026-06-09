@@ -15,7 +15,7 @@ export function BalanceBanner({ totalBalance, accountCount }: Props) {
       className="relative rounded-[var(--r-lg)] p-7 overflow-hidden"
       style={{
         background: "linear-gradient(135deg, #6B46F5 0%, #8A6BFF 100%)",
-        boxShadow: "0 20px 60px rgba(107,70,245,.40)",
+        boxShadow: "0 20px 60px rgba(0,0,0,.40)",
       }}
     >
       {/* Decorative orbs */}

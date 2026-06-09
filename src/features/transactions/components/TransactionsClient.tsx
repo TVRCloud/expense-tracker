@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { startOfDay } from "date-fns";
-import { Plus, Search, X } from "lucide-react";
+import { Search, X } from "lucide-react";
 import Link from "next/link";
 import { FilterChips } from "./FilterChips";
 import { DayGroup } from "./DayGroup";
@@ -150,14 +150,6 @@ export function TransactionsClient({ accountId }: { accountId?: string }) {
         </div>
       )}
 
-      {/* FAB for mobile (desktop has Add Transaction in sidebar) */}
-      <Link
-        href="/transactions/add"
-        className="fixed bottom-24 right-5 md:hidden w-14 h-14 rounded-full grid place-items-center shadow-lg z-30 transition-transform hover:scale-105"
-        style={{ background: "var(--fab)" }}
-      >
-        <Plus size={24} style={{ color: "var(--fab-ink)" }} />
-      </Link>
     </div>
   );
 }

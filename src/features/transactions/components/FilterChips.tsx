@@ -26,7 +26,7 @@ export function FilterChips({ chips, active, onChange }: Props) {
                 ? {
                     background: "var(--violet)",
                     color: "#fff",
-                    boxShadow: "0 4px 14px rgba(107,70,245,.30)",
+                    boxShadow: "0 4px 14px rgba(0,0,0,.30)",
                   }
                 : {
                     background: "var(--card)",

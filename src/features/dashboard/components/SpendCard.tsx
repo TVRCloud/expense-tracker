@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { TrendingDown, TrendingUp } from "lucide-react";
 import { useCurrency } from "@/hooks/useCurrency";
 
 interface Props {
@@ -24,52 +24,77 @@ export function BalanceCard({ accountBalance, income, expense, isLoading }: Prop
 
   return (
     <div
-      className="relative overflow-hidden rounded-(--r-lg) text-white p-5 pb-0 sm:p-7 sm:pb-0"
+      className="relative overflow-hidden rounded-(--r-lg) text-white p-5 sm:p-7"
       style={{
         background:
-          "linear-gradient(135deg, #2D1B69 0%, #6B21A8 38%, #8B5CF6 68%, #EC4899 100%)",
-        boxShadow: "0 20px 48px rgba(107,33,168,.38)",
+          "linear-gradient(145deg, var(--hero-from) 0%, var(--hero-mid1) 30%, var(--hero-mid2) 65%, var(--hero-to) 100%)",
+        boxShadow: "0 24px 56px rgba(13,7,40,.50)",
+        minHeight: 220,
       }}
     >
+      {/* Dot-grid mesh texture */}
       <span
         aria-hidden
-        className="absolute rounded-full pointer-events-none"
-        style={{ width: 240, height: 240, right: -70, top: -90, background: "rgba(255,255,255,.09)" }}
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          backgroundImage: "radial-gradient(circle, rgba(255,255,255,.10) 1px, transparent 1px)",
+          backgroundSize: "22px 22px",
+          maskImage: "radial-gradient(ellipse 80% 80% at 80% 20%, black 30%, transparent 100%)",
+          WebkitMaskImage: "radial-gradient(ellipse 80% 80% at 80% 20%, black 30%, transparent 100%)",
+        }}
       />
+      {/* Subtle ambient highlight — top-right corner only */}
       <span
         aria-hidden
         className="absolute rounded-full pointer-events-none"
-        style={{ width: 140, height: 140, left: 14, bottom: 30, background: "rgba(255,255,255,.06)" }}
+        style={{ width: 180, height: 180, right: -50, top: -60, background: "rgba(196,146,42,.14)", filter: "blur(55px)" }}
+      />
+      {/* Gold EMV chip */}
+      <div
+        aria-hidden
+        className="absolute rounded-[4px]"
+        style={{
+          width: 34,
+          height: 26,
+          top: 20,
+          right: 20,
+          background: "linear-gradient(135deg, #d4af37 0%, #f5e08a 45%, #b8860b 100%)",
+          boxShadow: "0 2px 8px rgba(0,0,0,.30)",
+          opacity: 0.88,
+        }}
       />
 
       <div className="relative">
-        <div className="text-[13px] font-semibold mb-3" style={{ opacity: 0.82 }}>
-          Account Balance
+        <div className="text-[10px] font-bold uppercase tracking-widest mb-1" style={{ opacity: 0.55 }}>
+          Total Balance
         </div>
 
         <div
-          className="font-extrabold tnum leading-none mb-5 sm:mb-7 text-[34px] min-[390px]:text-[38px] sm:text-[44px] max-w-full overflow-hidden"
+          className="font-extrabold tnum leading-none mb-4 text-[34px] min-[390px]:text-[38px] sm:text-[44px] max-w-full overflow-hidden"
           style={{ minHeight: 44 }}
         >
           {isLoading ? <Shimmer w={180} /> : formatCurrency(accountBalance)}
         </div>
 
+        {/* Shimmer separator */}
         <div
-          className="flex mx-[-20px] sm:mx-[-28px]"
-          style={{ borderTop: "1px solid rgba(255,255,255,0.18)" }}
-        >
+          className="mb-4 h-px"
+          style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,.35) 30%, rgba(255,255,255,.60) 60%, transparent)" }}
+        />
+
+        <div className="flex mx-[-20px] sm:mx-[-28px]">
           <div
             className="flex-1 flex items-center gap-2 sm:gap-3 py-4 sm:py-5 pl-5 sm:pl-7 min-w-0"
-            style={{ borderRight: "1px solid rgba(255,255,255,0.18)" }}
+            style={{ borderRight: "1px solid rgba(255,255,255,0.14)" }}
           >
             <div
               className="w-9 h-9 rounded-full grid place-items-center flex-none"
-              style={{ background: "rgba(255,255,255,0.18)" }}
+              style={{ background: "rgba(79,192,126,.22)", border: "1px solid rgba(79,192,126,.35)" }}
             >
-              <ArrowDownLeft size={16} />
+              <TrendingUp size={16} color="#4fc07e" />
             </div>
             <div className="min-w-0">
-              <div className="text-[10.5px] font-bold uppercase tracking-wider" style={{ opacity: 0.72 }}>
+              <div className="text-[10.5px] font-bold uppercase tracking-wider" style={{ opacity: 0.65 }}>
                 Income
               </div>
               <div className="font-bold tnum text-[13px] min-[390px]:text-[14px] sm:text-[16px] mt-0.5 max-w-full overflow-hidden">
@@ -81,12 +106,12 @@ export function BalanceCard({ accountBalance, income, expense, isLoading }: Prop
           <div className="flex-1 flex items-center gap-2 sm:gap-3 py-4 sm:py-5 pl-5 sm:pl-7 min-w-0">
             <div
               className="w-9 h-9 rounded-full grid place-items-center flex-none"
-              style={{ background: "rgba(255,255,255,0.18)" }}
+              style={{ background: "rgba(235,87,87,.22)", border: "1px solid rgba(235,87,87,.35)" }}
             >
-              <ArrowUpRight size={16} />
+              <TrendingDown size={16} color="#eb5757" />
             </div>
             <div className="min-w-0">
-              <div className="text-[10.5px] font-bold uppercase tracking-wider" style={{ opacity: 0.72 }}>
+              <div className="text-[10.5px] font-bold uppercase tracking-wider" style={{ opacity: 0.65 }}>
                 Expenses
               </div>
               <div className="font-bold tnum text-[13px] min-[390px]:text-[14px] sm:text-[16px] mt-0.5 max-w-full overflow-hidden">

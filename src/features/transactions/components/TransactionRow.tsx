@@ -1,4 +1,21 @@
-import { ChevronRight } from "lucide-react";
+import {
+  ChevronRight,
+  TrendingUp,
+  ShoppingCart,
+  Plane,
+  Car,
+  Repeat,
+  Heart,
+  ShoppingBag,
+  Home,
+  Dumbbell,
+  Coffee,
+  GraduationCap,
+  Wifi,
+  CreditCard,
+  ArrowLeftRight,
+  type LucideIcon,
+} from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -22,6 +39,22 @@ const CAT_COLORS: Record<string, string> = {
   education: "#7C3AED",
 };
 
+const CAT_ICONS: Record<string, LucideIcon> = {
+  income: TrendingUp,
+  groceries: ShoppingCart,
+  travel: Plane,
+  car: Car,
+  subscription: Repeat,
+  health: Heart,
+  shopping: ShoppingBag,
+  rent: Home,
+  gym: Dumbbell,
+  coffee: Coffee,
+  education: GraduationCap,
+  internet: Wifi,
+  other: CreditCard,
+};
+
 function getAvatarColor(category: string) {
   return CAT_COLORS[category.toLowerCase()] ?? "#6B46F5";
 }
@@ -37,15 +70,16 @@ export function TransactionRow({ transaction }: Props) {
   const isTransfer = transaction.type === "transfer";
   const sign = isTransfer ? "" : isIncome ? "+" : "-";
   const color = isTransfer ? "var(--violet)" : isIncome ? "var(--green)" : "var(--red)";
-  const avatarBg = getAvatarColor(transaction.category);
-  const initial = transaction.description?.[0]?.toUpperCase() ?? transaction.category[0].toUpperCase();
+  const catKey = transaction.category.toLowerCase();
+  const CategoryIcon = isTransfer ? ArrowLeftRight : (CAT_ICONS[catKey] ?? CreditCard);
+  const avatarHex = isTransfer ? null : getAvatarColor(transaction.category);
   const activityDate = getTransactionActivityDate(transaction);
   const paidRecurring = isPaidRecurringTransaction(transaction);
   const meta = paidRecurring
     ? `Paid ${format(activityDate, "d MMM yyyy")} · Due ${format(new Date(transaction.date), "d MMM yyyy")} · ${transaction.category}`
     : isTransfer
       ? `${format(activityDate, "d MMM yyyy")} · Transfer`
-    : `${format(activityDate, "d MMM yyyy")} · ${transaction.category}`;
+      : `${format(activityDate, "d MMM yyyy")} · ${transaction.category}`;
 
   return (
     <div
@@ -53,16 +87,31 @@ export function TransactionRow({ transaction }: Props) {
       tabIndex={0}
       onClick={() => router.push(`/transactions/${transaction._id}`)}
       onKeyDown={e => e.key === "Enter" && router.push(`/transactions/${transaction._id}`)}
-      className="flex items-center gap-4 rounded-[var(--r-md)] px-4 py-3.5 transition-all hover:-translate-y-0.5 cursor-pointer"
+      className="flex items-center gap-4 rounded-(--r-md) px-4 py-3.5 transition-all hover:-translate-y-0.5 active:scale-[0.99] cursor-pointer"
       style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
     >
-      {/* Avatar */}
-      <div
-        className="w-12 h-12 rounded-full grid place-items-center text-white font-bold text-lg flex-none"
-        style={{ background: avatarBg }}
-      >
-        {initial}
-      </div>
+      {/* Avatar — category icon with tinted bg */}
+      {isTransfer ? (
+        <div
+          className="w-12 h-12 rounded-full grid place-items-center flex-none"
+          style={{
+            background: "color-mix(in srgb, var(--violet) 14%, transparent)",
+            border: "1.5px solid color-mix(in srgb, var(--violet) 28%, transparent)",
+          }}
+        >
+          <CategoryIcon size={20} style={{ color: "var(--violet)" }} />
+        </div>
+      ) : (
+        <div
+          className="w-12 h-12 rounded-full grid place-items-center flex-none"
+          style={{
+            background: `${avatarHex}22`,
+            border: `1.5px solid ${avatarHex}44`,
+          }}
+        >
+          <CategoryIcon size={20} color={avatarHex!} />
+        </div>
+      )}
 
       {/* Info */}
       <div className="min-w-0 flex-1">
@@ -80,7 +129,8 @@ export function TransactionRow({ transaction }: Props) {
               className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-none"
               style={{ background: "color-mix(in srgb, var(--violet) 10%, transparent)", color: "var(--violet)" }}
             >
-              🔄 {transaction.installmentIndex != null ? `#${transaction.installmentIndex + 1}` : "recurring"}
+              <Repeat size={9} className="inline" />
+              {transaction.installmentIndex != null ? ` #${transaction.installmentIndex + 1}` : " recurring"}
             </Link>
           )}
         </div>
@@ -89,8 +139,18 @@ export function TransactionRow({ transaction }: Props) {
         </div>
       </div>
 
-      {/* Amount */}
-      <div className="ml-auto font-extrabold text-[15.5px] tnum whitespace-nowrap" style={{ color }}>
+      {/* Amount — tinted chip */}
+      <div
+        className="ml-auto font-extrabold text-[14px] tnum whitespace-nowrap px-2.5 py-1 rounded-xl"
+        style={{
+          color,
+          background: isTransfer
+            ? "color-mix(in srgb, var(--violet) 10%, transparent)"
+            : isIncome
+            ? "color-mix(in srgb, var(--green) 12%, transparent)"
+            : "color-mix(in srgb, var(--red) 10%, transparent)",
+        }}
+      >
         {sign}{formatCurrency(transaction.amount)}
       </div>
       <ChevronRight size={19} style={{ color: "var(--ink-3)", flexShrink: 0 }} />

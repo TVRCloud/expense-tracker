@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutDashboard, ArrowLeftRight, Plus, BarChart2, Wallet } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 const ITEMS = [
   { href: "/dashboard", label: "Home", icon: LayoutDashboard },
@@ -27,7 +26,7 @@ export function BottomNav() {
         backdropFilter: "var(--glass-blur)",
         WebkitBackdropFilter: "var(--glass-blur)",
         borderTop: "1px solid var(--glass-border)",
-        boxShadow: "0 -8px 30px rgba(28,18,68,.08), inset 0 1px 0 rgba(255,255,255,.55)",
+        boxShadow: "0 -8px 30px rgba(28,18,68,.10), 0 -1px 0 rgba(200,196,220,0.22)",
       }}
     >
       {ITEMS.map(({ href, label, icon: Icon, fab }) => {
@@ -36,11 +35,11 @@ export function BottomNav() {
             <Link
               key={href}
               href={href}
-              className="w-[60px] h-[60px] rounded-full grid place-items-center mx-auto text-white"
+              className="w-15 h-15 rounded-full grid place-items-center mx-auto text-white"
               style={{
                 background: "var(--fab)",
-                boxShadow: "0 12px 26px rgba(27,19,56,.4)",
-                border: "5px solid var(--bg)",
+                boxShadow: "0 12px 26px rgba(0,0,0,.45), 0 0 0 4px rgba(212,168,67,.16)",
+                border: "4px solid var(--bg)",
                 marginTop: "-34px",
               }}
             >
@@ -53,10 +52,19 @@ export function BottomNav() {
           <Link
             key={href}
             href={href}
-            className={cn("flex flex-col items-center gap-1 text-[11px] font-semibold transition-colors")}
-            style={{ color: active ? "var(--violet)" : "var(--ink-3)" }}
+            className="flex flex-col items-center gap-1 text-[11px] font-semibold transition-colors"
+            style={{ color: active ? "var(--ink)" : "var(--ink-3)" }}
           >
-            <Icon size={23} />
+            <div
+              className="w-10 h-8 rounded-[10px] grid place-items-center transition-all"
+              style={{
+                background: active
+                  ? "var(--card-2)"
+                  : "transparent",
+              }}
+            >
+              <Icon size={22} />
+            </div>
             <span>{label}</span>
           </Link>
         );
