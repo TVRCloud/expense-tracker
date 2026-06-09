@@ -6,6 +6,7 @@ import { useCreditSummary } from "@/features/credit-cards/hooks/useCreditSummary
 import { CreditUtilizationBar } from "./CreditUtilizationBar";
 import { useCurrency } from "@/hooks/useCurrency";
 import { format } from "date-fns";
+import { Skeleton } from "@/components/ui/skeleton";
 
 function MetricTile({
   label,
@@ -19,7 +20,7 @@ function MetricTile({
   const color = tone === "red" ? "var(--red)" : tone === "green" ? "var(--green)" : "var(--ink)";
 
   return (
-    <div className="rounded-[var(--r-sm)] p-3 min-w-0" style={{ background: "var(--card-2)" }}>
+    <div className="rounded-(--r-sm) p-3 min-w-0" style={{ background: "var(--card-2)" }}>
       <div className="text-[10px] font-bold uppercase tracking-wider mb-1 truncate" style={{ color: "var(--ink-3)" }}>
         {label}
       </div>
@@ -34,7 +35,27 @@ export function CreditCardSummaryWidget() {
   const { data, isLoading } = useCreditSummary();
   const { formatCurrency } = useCurrency();
 
-  if (isLoading || !data || data.cards.length === 0) return null;
+  if (isLoading) {
+    return (
+      <div
+        className="rounded-(--r-lg) p-5 flex flex-col gap-4"
+        style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
+      >
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-4 w-28 rounded-full" />
+          <Skeleton className="h-3 w-12 rounded-full" />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-14 rounded-(--r-sm)" />
+          ))}
+        </div>
+        <Skeleton className="h-16 rounded-(--r-sm)" />
+      </div>
+    );
+  }
+
+  if (!data || data.cards.length === 0) return null;
 
   const totalPayable = data.totalPayableStatementDue ?? data.cards.reduce((sum, card) => sum + (card.payableStatementDue ?? 0), 0);
   const totalUnbilled = data.totalUnbilledUsage ?? data.cards.reduce((sum, card) => sum + (card.unbilledUsage ?? 0), 0);
@@ -46,7 +67,7 @@ export function CreditCardSummaryWidget() {
 
   return (
     <div
-      className="rounded-[var(--r-lg)] p-5 flex flex-col gap-4"
+      className="rounded-(--r-lg) p-5 flex flex-col gap-4"
       style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
     >
       <div className="flex items-center justify-between">
@@ -71,7 +92,7 @@ export function CreditCardSummaryWidget() {
           <Link
             key={card.accountId}
             href={`/accounts/${card.accountId}`}
-            className="flex flex-col gap-2 rounded-[var(--r-sm)] p-2.5 transition-colors"
+            className="flex flex-col gap-2 rounded-(--r-sm) p-2.5 transition-colors"
             style={{ background: "var(--card-2)" }}
           >
             <div className="flex items-center justify-between">

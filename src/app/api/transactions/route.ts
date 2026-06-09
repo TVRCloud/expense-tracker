@@ -11,6 +11,7 @@ import { addDays, addWeeks, addMonths, addYears } from "date-fns";
 import { checkBudgetAlert } from "@/lib/budget-alert";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { activityDateAddFields } from "@/lib/transaction-activity";
+import { getIO } from "@/lib/io";
 
 const createSchema = z.object({
   accountId: z.string(),
@@ -338,6 +339,7 @@ export async function POST(req: NextRequest) {
     }
 
     logger.info({ userId: user.id, transactionId: transaction._id.toString() }, "Transaction created");
+    getIO()?.to(`user:${user.id}`).emit("data:changed", { resource: "transactions" });
     return NextResponse.json({ data: transaction }, { status: 201 });
   } catch (err) {
     logger.error({ err }, "POST /api/transactions failed");

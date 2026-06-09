@@ -5,6 +5,7 @@ import Transaction from "@/models/Transaction";
 import Notification from "@/models/Notification";
 import logger from "@/lib/logger";
 import { activityDateAddFields } from "@/lib/transaction-activity";
+import { sendPushToUser } from "@/lib/push";
 
 export async function checkBudgetAlert(userId: string, category: string, _amount: number, activityDate = new Date()) {
   try {
@@ -57,13 +58,25 @@ export async function checkBudgetAlert(userId: string, category: string, _amount
     const pct = (totalSpent / budget.limitAmount) * 100;
 
     if (pct >= budget.alertAt) {
-      await Notification.create({
+      const dedupKey = `budget-${budget._id.toString()}-${year}-${month}`;
+      const alreadyNotified = await Notification.exists({
         user: userId,
         type: "budget_alert",
-        title: `${category} budget alert`,
-        body: `You've used ${Math.round(pct)}% of your ${category} budget.`,
-        meta: { budgetId: budget._id.toString(), category, percent: pct },
+        "meta.dedupKey": dedupKey,
+        createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
       });
+      if (!alreadyNotified) {
+        const title = `${category} budget alert`;
+        const body = `You've used ${Math.round(pct)}% of your ${category} budget.`;
+        await Notification.create({
+          user: userId,
+          type: "budget_alert",
+          title,
+          body,
+          meta: { budgetId: budget._id.toString(), category, percent: pct, dedupKey },
+        });
+        void sendPushToUser(userId, { title, body, url: "/budgets" });
+      }
     }
   } catch (err) {
     logger.error({ err }, "Budget alert check failed");

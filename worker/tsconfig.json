@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["WebWorker", "ES2017"],
+    "module": "ES2015",
+    "strict": true,
+    "noEmit": true
+  },
+  "include": ["index.ts"]
+}

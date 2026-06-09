@@ -1,9 +1,11 @@
 "use client";
 
+import { useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import apiClient from "@/lib/api-client";
 import { type ITransaction } from "@/types/models";
 import { toast } from "sonner";
+import { useSocket } from "@/hooks/useSocket";
 
 export interface TransactionFilters {
   type?: string;
@@ -19,6 +21,12 @@ export interface TransactionFilters {
 }
 
 export function useTransactions(filters: TransactionFilters = {}) {
+  const qc = useQueryClient();
+  const onDataChanged = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: ["transactions"] });
+  }, [qc]);
+  useSocket("data:changed", onDataChanged);
+
   const params = new URLSearchParams();
   if (filters.type) params.set("type", filters.type);
   if (filters.category) params.set("category", filters.category);

@@ -4,11 +4,12 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useTheme } from "next-themes";
-import { ArrowLeft, Bell, Check, HelpCircle, Lock, Monitor, Moon, Shield, Sun, User } from "lucide-react";
+import { ArrowLeft, Bell, BellOff, Check, HelpCircle, Lock, Monitor, Moon, Shield, Sun, User } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useChangePassword, useProfile, useUpdatePreferences, useUpdateProfile } from "@/features/settings/hooks/useProfile";
+import { usePushNotification, type PushStatus } from "@/features/settings/hooks/usePushNotification";
 
 function PageShell({
   title,
@@ -72,16 +73,16 @@ export function ProfileSettingsPage() {
             </div>
             <label className="flex flex-col gap-1.5">
               <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Name</span>
-              <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
+              <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
             </label>
             <label className="flex flex-col gap-1.5">
               <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Avatar URL</span>
-              <input value={form.avatar} onChange={(e) => setForm((f) => ({ ...f, avatar: e.target.value }))} placeholder="https://..." className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
+              <input value={form.avatar} onChange={(e) => setForm((f) => ({ ...f, avatar: e.target.value }))} placeholder="https://..." className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
             </label>
             <button
               onClick={() => updateProfile.mutate({ name: form.name, avatar: form.avatar || undefined })}
               disabled={updateProfile.isPending || !form.name}
-              className="inline-flex items-center justify-center gap-2 rounded-[var(--r-sm)] py-3 text-sm font-bold disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-2 rounded-(--r-sm) py-3 text-sm font-bold disabled:opacity-50"
               style={{ background: "var(--violet)", color: "#fff" }}
             >
               <Check size={16} />
@@ -103,15 +104,15 @@ export function SecuritySettingsPage() {
       <Panel>
         <label className="flex flex-col gap-1.5">
           <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Current password</span>
-          <input type="password" value={form.currentPassword} onChange={(e) => setForm((f) => ({ ...f, currentPassword: e.target.value }))} className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
+          <input type="password" value={form.currentPassword} onChange={(e) => setForm((f) => ({ ...f, currentPassword: e.target.value }))} className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
         </label>
         <label className="flex flex-col gap-1.5">
           <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>New password</span>
-          <input type="password" value={form.newPassword} onChange={(e) => setForm((f) => ({ ...f, newPassword: e.target.value }))} className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
+          <input type="password" value={form.newPassword} onChange={(e) => setForm((f) => ({ ...f, newPassword: e.target.value }))} className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
         </label>
         <label className="flex flex-col gap-1.5">
           <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Confirm new password</span>
-          <input type="password" value={form.confirm} onChange={(e) => setForm((f) => ({ ...f, confirm: e.target.value }))} className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
+          <input type="password" value={form.confirm} onChange={(e) => setForm((f) => ({ ...f, confirm: e.target.value }))} className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
         </label>
         <button
           onClick={() => {
@@ -123,7 +124,7 @@ export function SecuritySettingsPage() {
             setForm({ currentPassword: "", newPassword: "", confirm: "" });
           }}
           disabled={changePassword.isPending || !form.currentPassword || form.newPassword.length < 8}
-          className="rounded-[var(--r-sm)] py-3 text-sm font-bold disabled:opacity-50"
+          className="rounded-(--r-sm) py-3 text-sm font-bold disabled:opacity-50"
           style={{ background: "var(--violet)", color: "#fff" }}
         >
           {changePassword.isPending ? "Updating..." : "Update password"}
@@ -133,10 +134,27 @@ export function SecuritySettingsPage() {
   );
 }
 
+const PUSH_STATUS_LABEL: Record<PushStatus, string> = {
+  unsupported: "Not supported",
+  blocked: "Blocked by browser",
+  disabled: "Not enabled",
+  enabled: "Enabled",
+  loading: "Loading...",
+};
+
+const PUSH_STATUS_COLOR: Record<PushStatus, string> = {
+  unsupported: "var(--ink-3)",
+  blocked: "var(--red)",
+  disabled: "var(--ink-2)",
+  enabled: "var(--green)",
+  loading: "var(--ink-3)",
+};
+
 export function NotificationSettingsPage() {
   const { data: profile, isLoading } = useProfile();
   const updatePreferences = useUpdatePreferences();
   const prefs = profile?.preferences;
+  const push = usePushNotification();
 
   return (
     <PageShell title="Notifications" icon={Bell}>
@@ -145,13 +163,59 @@ export function NotificationSettingsPage() {
           <Skeleton className="h-28 rounded-[var(--r-md)]" />
         ) : (
           <>
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <div className="text-sm font-bold" style={{ color: "var(--ink)" }}>Push notifications</div>
-                <div className="text-xs mt-0.5" style={{ color: "var(--ink-3)" }}>Budget alerts and reminders on this device</div>
+            {/* Push notifications row */}
+            <div className="flex flex-col gap-3">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-sm font-bold" style={{ color: "var(--ink)" }}>Push notifications</div>
+                  <div className="text-xs mt-0.5" style={{ color: "var(--ink-3)" }}>EMI reminders, credit due dates, and budget alerts</div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span
+                    className="text-[11px] font-bold px-2 py-0.5 rounded-full"
+                    style={{
+                      color: PUSH_STATUS_COLOR[push.status],
+                      background: `color-mix(in srgb, ${PUSH_STATUS_COLOR[push.status]} 12%, transparent)`,
+                    }}
+                  >
+                    {PUSH_STATUS_LABEL[push.status]}
+                  </span>
+                  {push.status !== "unsupported" && push.status !== "blocked" && (
+                    <Switch
+                      checked={push.status === "enabled"}
+                      disabled={push.isLoading}
+                      onCheckedChange={(on) => (on ? push.subscribe() : push.unsubscribe())}
+                    />
+                  )}
+                </div>
               </div>
-              <Switch checked={prefs?.pushNotifications ?? false} onCheckedChange={(value) => updatePreferences.mutate({ pushNotifications: value })} />
+
+              {push.status === "blocked" && (
+                <div
+                  className="flex items-center gap-2 rounded-(--r-sm) px-3 py-2 text-xs"
+                  style={{ background: "color-mix(in srgb, var(--red) 10%, transparent)", color: "var(--red)" }}
+                >
+                  <BellOff size={13} />
+                  Notifications are blocked in your browser settings. To enable, allow notifications for this site in your browser.
+                </div>
+              )}
+
+              {push.status === "enabled" && (
+                <button
+                  onClick={() => {
+                    push.sendTest();
+                    toast.info("Test notification sent");
+                  }}
+                  disabled={push.isLoading}
+                  className="self-start text-xs font-semibold px-3 py-1.5 rounded-(--r-sm) transition-opacity disabled:opacity-50"
+                  style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
+                >
+                  Send test notification
+                </button>
+              )}
             </div>
+
+            {/* Email notifications row */}
             <div className="flex items-center justify-between gap-4">
               <div>
                 <div className="text-sm font-bold" style={{ color: "var(--ink)" }}>Email notifications</div>

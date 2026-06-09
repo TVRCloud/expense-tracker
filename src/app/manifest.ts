@@ -7,8 +7,8 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "Track your expenses, budgets, loans, and savings goals.",
     start_url: "/dashboard",
     display: "standalone",
-    background_color: "#e8e7ef",
-    theme_color: "#6B46F5",
+    background_color: "#18181b",
+    theme_color: "#18181b",
     orientation: "portrait",
     icons: [
       {
