@@ -5,6 +5,7 @@ import { getCurrentCycle, getPastCycles, getDueDateStatus } from "@/lib/credit-c
 import { type ICreditMeta } from "@/types/models";
 import logger from "@/lib/logger";
 import { Types } from "mongoose";
+import { sendPushToUser } from "@/lib/push";
 
 const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -22,6 +23,7 @@ async function createNotif(userId: string, type: string, title: string, body: st
   try {
     if (await alreadySent(userId, type, meta.dedupKey as string)) return;
     await Notification.create({ user: userId, type, title, body, meta });
+    void sendPushToUser(userId, { title, body, url: `/accounts/${meta.accountId as string}` });
   } catch (err) {
     logger.error({ err }, `Failed to create ${type} notification`);
   }

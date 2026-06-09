@@ -9,6 +9,7 @@ import { z } from "zod";
 import { redis } from "@/lib/redis";
 import { checkBudgetAlert } from "@/lib/budget-alert";
 import { appendLedgerBlock } from "@/lib/ledger";
+import { getIO } from "@/lib/io";
 
 type Params = Promise<{ recurringId: string; id: string }>;
 
@@ -119,6 +120,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
       // ignore
     }
 
+    getIO()?.to(`user:${user.id}`).emit("data:changed", { resource: "transactions" });
     return NextResponse.json({ data: installment });
   } catch (err) {
     logger.error({ err }, "PATCH installment status failed");

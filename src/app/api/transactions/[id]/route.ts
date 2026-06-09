@@ -9,6 +9,7 @@ import { z } from "zod";
 import { redis } from "@/lib/redis";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { Types } from "mongoose";
+import { getIO } from "@/lib/io";
 
 const updateSchema = z.object({
   description: z.string().optional(),
@@ -109,6 +110,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     });
     if (existing?.date) await invalidateStatsCache(user.id, new Date(existing.date));
     if (parsed.data.date) await invalidateStatsCache(user.id, new Date(parsed.data.date));
+    getIO()?.to(`user:${user.id}`).emit("data:changed", { resource: "transactions" });
     return NextResponse.json({ data: txn });
   } catch (err) {
     logger.error({ err }, "PATCH /api/transactions/[id] failed");
@@ -219,7 +221,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Params }) 
       actor: user,
     });
     await invalidateStatsCache(user.id, new Date(txn.date));
-
+    getIO()?.to(`user:${user.id}`).emit("data:changed", { resource: "transactions" });
     return NextResponse.json({ data: { message: "Transaction deleted" } });
   } catch (err) {
     logger.error({ err }, "DELETE /api/transactions/[id] failed");

@@ -5,6 +5,8 @@ import { createServer } from "http";
 import { parse } from "url";
 import next from "next";
 import { Server } from "socket.io";
+import { setIO } from "./src/lib/io";
+import { runReminderChecks } from "./src/lib/reminder-scheduler";
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = process.env.HOSTNAME ?? "localhost";
@@ -13,25 +15,21 @@ const port = parseInt(process.env.PORT ?? "3000", 10);
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
 
-let io: Server | null = null;
-
-export function getIO(): Server | null {
-  return io;
-}
-
 app.prepare().then(() => {
   const httpServer = createServer((req, res) => {
     const parsedUrl = parse(req.url ?? "", true);
     void handle(req, res, parsedUrl);
   });
 
-  io = new Server(httpServer, {
+  const io = new Server(httpServer, {
     path: "/api/socket",
     cors: {
       origin: process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
       credentials: true,
     },
   });
+
+  setIO(io);
 
   io.on("connection", (socket) => {
     const userId = socket.handshake.auth.userId as string | undefined;
@@ -50,5 +48,8 @@ app.prepare().then(() => {
 
   httpServer.listen(port, () => {
     console.log(`> Ready on http://${hostname}:${port}`);
+    // Run reminder checks once on startup (after warm-up), then every 6 hours
+    setTimeout(() => void runReminderChecks(), 30_000);
+    setInterval(() => void runReminderChecks(), 6 * 60 * 60 * 1000);
   });
 });
