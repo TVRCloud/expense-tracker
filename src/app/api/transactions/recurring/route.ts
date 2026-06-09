@@ -22,18 +22,21 @@ export async function GET(req: NextRequest) {
     // Fire-and-forget EMI due notifications
     void checkEmiDueNotifications(user.id);
 
-    // ?upcoming=N → return next N upcoming installments due by end of next month
+    // ?upcoming=N → return next N unpaid installments due within the next 7 days.
     if (upcoming) {
       const limit = Math.min(parseInt(upcoming, 10) || 5, 20);
       const now = new Date();
-      // End of next calendar month (day 0 of month+2 = last day of month+1)
-      const endOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 2, 0, 23, 59, 59, 999);
+      const startOfToday = new Date(now);
+      startOfToday.setHours(0, 0, 0, 0);
+      const endOfWindow = new Date(startOfToday);
+      endOfWindow.setDate(endOfWindow.getDate() + 7);
+      endOfWindow.setHours(23, 59, 59, 999);
       const matchQ: Record<string, unknown> = {
         user: userId,
         isDeleted: { $ne: true },
         isRecurring: true,
         installmentStatus: "upcoming",
-        date: { $gte: now, $lte: endOfNextMonth },
+        date: { $gte: startOfToday, $lte: endOfWindow },
       };
       if (accountId) matchQ.account = new Types.ObjectId(accountId);
 

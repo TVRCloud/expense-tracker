@@ -5,6 +5,7 @@ import { requireAuth } from "@/lib/auth-guard";
 import { hashPassword, verifyPassword } from "@/utils/password";
 import logger from "@/lib/logger";
 import { z } from "zod";
+import { revokeAllLogUnlocks } from "@/lib/log-security";
 
 const schema = z.object({
   currentPassword: z.string().min(1),
@@ -33,6 +34,7 @@ export async function PATCH(req: NextRequest) {
 
     const hashed = await hashPassword(parsed.data.newPassword);
     await User.findByIdAndUpdate(user.id, { $set: { password: hashed } });
+    await revokeAllLogUnlocks(user.id);
 
     logger.info({ userId: user.id }, "Password changed");
     return NextResponse.json({ data: { message: "Password updated" } });

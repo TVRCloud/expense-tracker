@@ -4,6 +4,7 @@ import User from "@/models/User";
 import { hashPassword } from "@/utils/password";
 import logger from "@/lib/logger";
 import { z } from "zod";
+import { revokeAllLogUnlocks } from "@/lib/log-security";
 
 const schema = z.object({
   token: z.string().min(1),
@@ -37,6 +38,7 @@ export async function POST(req: NextRequest) {
     user.passwordResetToken = undefined;
     user.passwordResetExpires = undefined;
     await user.save();
+    await revokeAllLogUnlocks(user._id.toString());
 
     logger.info({ userId: user._id.toString() }, "Password reset completed");
     return NextResponse.json({ data: { message: "Password updated successfully" } });

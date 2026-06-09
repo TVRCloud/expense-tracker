@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCurrency } from "@/hooks/useCurrency";
 import { type ITransaction } from "@/types/models";
 import { format } from "date-fns";
+import { getTransactionActivityDate, isPaidRecurringTransaction } from "../utils/activity-date";
 
 const CAT_COLORS: Record<string, string> = {
   income: "#4FC07E",
@@ -37,6 +38,11 @@ export function TransactionRow({ transaction }: Props) {
   const color = isIncome ? "var(--green)" : "var(--red)";
   const avatarBg = getAvatarColor(transaction.category);
   const initial = transaction.description?.[0]?.toUpperCase() ?? transaction.category[0].toUpperCase();
+  const activityDate = getTransactionActivityDate(transaction);
+  const paidRecurring = isPaidRecurringTransaction(transaction);
+  const meta = paidRecurring
+    ? `Paid ${format(activityDate, "d MMM yyyy")} · Due ${format(new Date(transaction.date), "d MMM yyyy")} · ${transaction.category}`
+    : `${format(activityDate, "d MMM yyyy")} · ${transaction.category}`;
 
   return (
     <div
@@ -76,7 +82,7 @@ export function TransactionRow({ transaction }: Props) {
           )}
         </div>
         <div className="text-xs font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>
-          {format(new Date(transaction.date), "d MMM yyyy")} · {transaction.category}
+          {meta}
         </div>
       </div>
 

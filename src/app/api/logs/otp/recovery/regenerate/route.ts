@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth-guard";
-import { disableTotp } from "@/lib/log-security";
+import { regenerateRecoveryCodes } from "@/lib/log-security";
+import { enforceSensitiveActionLimit } from "@/lib/log-auth-request";
 import logger from "@/lib/logger";
 import { z } from "zod";
-import { enforceSensitiveActionLimit } from "@/lib/log-auth-request";
 
 const schema = z.object({
   currentPassword: z.string().min(1),
@@ -21,17 +21,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Validation failed", details: parsed.error.flatten() }, { status: 400 });
     }
 
-    const limited = await enforceSensitiveActionLimit(user.id, "disable", req);
+    const limited = await enforceSensitiveActionLimit(user.id, "recovery-regenerate", req);
     if (limited) return limited;
 
-    const result = await disableTotp(user.id, parsed.data.currentPassword, parsed.data.code);
-    if (!result.ok) {
-      return NextResponse.json({ error: result.reason }, { status: 400 });
-    }
+    const result = await regenerateRecoveryCodes(user.id, parsed.data.currentPassword, parsed.data.code);
+    if (!result.ok) return NextResponse.json({ error: result.reason }, { status: 400 });
 
-    return NextResponse.json({ data: { message: "Logs authenticator disabled" } });
+    return NextResponse.json({ data: result });
   } catch (err) {
-    logger.error({ err }, "POST /api/logs/otp/disable failed");
+    logger.error({ err }, "POST /api/logs/otp/recovery/regenerate failed");
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

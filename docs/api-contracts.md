@@ -119,13 +119,18 @@ All monetary amounts are in **cents** (integers).
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/logs/otp/status` | Get logs authenticator/unlock status |
-| POST | `/api/logs/otp/setup` | Start authenticator setup and return QR payload |
+| POST | `/api/logs/otp/setup` | Start first-time authenticator setup and return QR payload |
 | POST | `/api/logs/otp/verify` | Confirm setup, unlock logs, or use a recovery code |
-| POST | `/api/logs/otp/disable` | Disable logs authenticator after code verification |
+| POST | `/api/logs/otp/rotate/start` | Start authenticator rotation with current password + current TOTP |
+| POST | `/api/logs/otp/rotate/confirm` | Confirm authenticator rotation with the new TOTP code |
+| POST | `/api/logs/otp/recovery/regenerate` | Regenerate recovery codes with current password + current TOTP |
+| POST | `/api/logs/otp/disable` | Disable logs authenticator with current password + current TOTP |
+| POST | `/api/logs/otp/lock` | Lock the current logs unlock session |
 | GET | `/api/logs/ledger` | List append-only ledger blocks after TOTP unlock |
 | GET | `/api/logs/ledger/verify` | Verify the hash-linked ledger chain after TOTP unlock |
 
 `/api/logs/ledger` accepts `scope`, `entityId`, `skip`, and `limit` query params. `limit` is capped at 100.
+Ledger/status requests include `x-logs-device-id`, a tab-scoped random id stored in `sessionStorage`.
 
 ## Push
 

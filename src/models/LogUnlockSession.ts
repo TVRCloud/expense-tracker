@@ -4,6 +4,8 @@ const LogUnlockSessionSchema = new Schema(
   {
     user: { type: Schema.Types.ObjectId, ref: "User", required: true },
     sessionJti: { type: String, required: true },
+    deviceHash: { type: String, required: true },
+    userAgentHash: { type: String, required: true },
     expiresAt: { type: Date, required: true },
   },
   { timestamps: true }

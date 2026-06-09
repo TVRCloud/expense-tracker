@@ -12,6 +12,7 @@ export interface TransactionFilters {
   search?: string;
   dateFrom?: string;
   dateTo?: string;
+  hideFuture?: boolean;
   skip?: number;
   limit?: number;
 }
@@ -24,6 +25,7 @@ export function useTransactions(filters: TransactionFilters = {}) {
   if (filters.search) params.set("search", filters.search);
   if (filters.dateFrom) params.set("dateFrom", filters.dateFrom);
   if (filters.dateTo) params.set("dateTo", filters.dateTo);
+  if (filters.hideFuture) params.set("hideFuture", "true");
   params.set("skip", String(filters.skip ?? 0));
   params.set("limit", String(filters.limit ?? 20));
 

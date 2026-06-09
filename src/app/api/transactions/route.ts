@@ -5,7 +5,7 @@ import Account from "@/models/Account";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
-import { Types } from "mongoose";
+import { type PipelineStage, Types } from "mongoose";
 import { redis } from "@/lib/redis";
 import { addDays, addWeeks, addMonths, addYears } from "date-fns";
 import { checkBudgetAlert } from "@/lib/budget-alert";
@@ -90,6 +90,7 @@ export async function GET(req: NextRequest) {
     const search = searchParams.get("search");
     const dateFrom = searchParams.get("dateFrom");
     const dateTo = searchParams.get("dateTo");
+    const hideFuture = searchParams.get("hideFuture") === "true";
 
     const query: Record<string, unknown> = { user: user.id, isDeleted: { $ne: true } };
     if (type) query.type = type;
@@ -112,6 +113,74 @@ export async function GET(req: NextRequest) {
     ];
 
     await connectDB();
+    if (hideFuture) {
+      const now = new Date();
+      const endOfToday = new Date(now);
+      endOfToday.setHours(23, 59, 59, 999);
+      const visibilityFilter = {
+        $or: [
+          {
+            recurringId: { $exists: false },
+            date: { $lte: endOfToday },
+          },
+          {
+            recurringId: { $exists: true },
+            installmentStatus: "paid",
+            paidAt: { $exists: true, $lte: now },
+          },
+          {
+            recurringId: { $exists: true },
+            installmentStatus: "paid",
+            paidAt: { $exists: false },
+            date: { $lte: endOfToday },
+          },
+        ],
+      };
+      const aggregateQuery = {
+        ...query,
+        user: new Types.ObjectId(user.id),
+        ...(accountId ? { account: new Types.ObjectId(accountId) } : {}),
+        $and: [...((query.$and as Record<string, unknown>[]) ?? []), visibilityFilter],
+      };
+      const pipeline: PipelineStage[] = [
+        { $match: aggregateQuery },
+        {
+          $addFields: {
+            activityDate: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ["$installmentStatus", "paid"] },
+                    { $ne: ["$paidAt", null] },
+                  ],
+                },
+                "$paidAt",
+                "$date",
+              ],
+            },
+          },
+        },
+        {
+          $facet: {
+            data: [
+              { $sort: { activityDate: -1, date: -1, _id: -1 } },
+              { $skip: skip },
+              { $limit: limit },
+              { $project: { activityDate: 0 } },
+            ],
+            total: [{ $count: "count" }],
+          },
+        },
+      ];
+      const [result] = await Transaction.aggregate(pipeline);
+      return NextResponse.json({
+        data: result?.data ?? [],
+        total: result?.total?.[0]?.count ?? 0,
+        skip,
+        limit,
+      });
+    }
+
     const [transactions, total] = await Promise.all([
       Transaction.find(query).sort({ date: -1 }).skip(skip).limit(limit).lean(),
       Transaction.countDocuments(query),

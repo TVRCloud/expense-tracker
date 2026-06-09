@@ -9,6 +9,7 @@ import { DayGroup } from "./DayGroup";
 import { useTransactions } from "../hooks/useTransactions";
 import { type ITransaction } from "@/types/models";
 import { Skeleton } from "@/components/ui/skeleton";
+import { getTransactionActivityDate } from "../utils/activity-date";
 
 const TYPE_CHIPS = [
   { label: "All", value: "" },
@@ -31,7 +32,7 @@ const CAT_CHIPS = [
 function groupByDay(transactions: ITransaction[]): Map<string, { date: Date; items: ITransaction[] }> {
   const map = new Map<string, { date: Date; items: ITransaction[] }>();
   for (const t of transactions) {
-    const day = startOfDay(new Date(t.date));
+    const day = startOfDay(getTransactionActivityDate(t));
     const key = day.toISOString();
     if (!map.has(key)) map.set(key, { date: day, items: [] });
     map.get(key)!.items.push(t);
@@ -51,6 +52,7 @@ export function TransactionsClient({ accountId }: { accountId?: string }) {
     category: catFilter || undefined,
     accountId,
     search: search || undefined,
+    hideFuture: true,
     limit,
   });
 
