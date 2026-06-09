@@ -9,6 +9,7 @@ import { getCurrentCycle, getPastCycles, computeMinPayment } from "@/lib/credit-
 import { checkCreditDueNotifications } from "@/lib/credit-notifications";
 import { type ICreditMeta } from "@/types/models";
 import { Types } from "mongoose";
+import { appendLedgerBlock } from "@/lib/ledger";
 
 type Params = Promise<{ accountId: string }>;
 
@@ -18,6 +19,7 @@ async function computeBalance(userId: string, accountId: string, periodStart: Da
     {
       $match: {
         user: new Types.ObjectId(userId),
+        isDeleted: { $ne: true },
         $or: [
           { account: accountObjectId },
           { transferTo: accountObjectId },
@@ -112,28 +114,38 @@ export async function GET(req: NextRequest, { params }: { params: Params }) {
 
     // Lazy-create statement records for past cycles that don't have one yet
     for (const cycle of pastCycles) {
-      await CreditStatement.findOneAndUpdate(
-        { account: new Types.ObjectId(accountId), periodStart: cycle.periodStart },
-        {
-          $setOnInsert: {
-            user: new Types.ObjectId(user.id),
-            account: new Types.ObjectId(accountId),
-            periodStart: cycle.periodStart,
-            periodEnd: cycle.periodEnd,
-            dueDate: cycle.dueDate,
-            status: cycle.dueDate < new Date() ? "overdue" : "closed",
-            isPaid: false,
-            paidAmount: 0,
-          },
-        },
-        { upsert: true, new: false }
-      );
+      const existingStatement = await CreditStatement.findOne({
+        account: new Types.ObjectId(accountId),
+        periodStart: cycle.periodStart,
+        isDeleted: { $ne: true },
+      });
+      if (!existingStatement) {
+        const statement = await CreditStatement.create({
+          user: new Types.ObjectId(user.id),
+          account: new Types.ObjectId(accountId),
+          periodStart: cycle.periodStart,
+          periodEnd: cycle.periodEnd,
+          dueDate: cycle.dueDate,
+          status: cycle.dueDate < new Date() ? "overdue" : "closed",
+          isPaid: false,
+          paidAmount: 0,
+        });
+        await appendLedgerBlock({
+          userId: user.id,
+          scope: "credit_statement",
+          entityId: statement._id.toString(),
+          action: "create",
+          after: statement,
+          actor: user,
+        });
+      }
     }
 
     // Fetch all statement records
     const statements = await CreditStatement.find({
       account: new Types.ObjectId(accountId),
       user: user.id,
+      isDeleted: { $ne: true },
     })
       .sort({ periodStart: -1 })
       .lean();

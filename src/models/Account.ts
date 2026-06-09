@@ -27,11 +27,13 @@ const AccountSchema = new Schema(
       cardholderName: { type: String, maxlength: 60 },
       minPaymentPct: { type: Number },
     },
+    deletedAt: { type: Date },
+    deletedBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true }
 );
 
-AccountSchema.index({ user: 1, isArchived: 1 });
+AccountSchema.index({ user: 1, isArchived: 1, createdAt: -1 });
 AccountSchema.index({ user: 1, type: 1 });
 
 export default models.Account || model("Account", AccountSchema, "accounts");

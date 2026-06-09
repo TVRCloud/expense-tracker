@@ -15,12 +15,15 @@ const LoanSchema = new Schema(
     isSettled: { type: Boolean, default: false },
     settledAt: { type: Date },
     account: { type: Schema.Types.ObjectId, ref: "Account" },
+    isDeleted: { type: Boolean, default: false },
+    deletedAt: { type: Date },
+    deletedBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true }
 );
 
-LoanSchema.index({ user: 1, isSettled: 1 });
-LoanSchema.index({ user: 1, direction: 1 });
-LoanSchema.index({ user: 1, dueDate: 1 });
+LoanSchema.index({ user: 1, isDeleted: 1, isSettled: 1, createdAt: -1 });
+LoanSchema.index({ user: 1, isDeleted: 1, direction: 1, createdAt: -1 });
+LoanSchema.index({ user: 1, isDeleted: 1, dueDate: 1 });
 
 export default models.Loan || model("Loan", LoanSchema, "loans");

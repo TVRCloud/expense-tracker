@@ -6,6 +6,7 @@ import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { Types } from "mongoose";
 import { redis } from "@/lib/redis";
+import { appendLedgerBlock } from "@/lib/ledger";
 
 type Params = Promise<{ recurringId: string }>;
 
@@ -19,6 +20,7 @@ export async function GET(_req: NextRequest, { params }: { params: Params }) {
 
     const installments = await Transaction.find({
       user: user.id,
+      isDeleted: { $ne: true },
       recurringId: new Types.ObjectId(recurringId),
     })
       .sort({ installmentIndex: 1 })
@@ -77,6 +79,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Params }) 
 
     const toDelete = await Transaction.find({
       user: user.id,
+      isDeleted: { $ne: true },
       recurringId: new Types.ObjectId(recurringId),
       installmentStatus: { $in: ["upcoming", "overdue"] },
     }).lean();
@@ -87,9 +90,21 @@ export async function DELETE(_req: NextRequest, { params }: { params: Params }) 
 
     const accountObjectId = toDelete[0].account;
 
-    await Transaction.deleteMany({
-      _id: { $in: toDelete.map(t => t._id) },
-    });
+    await Transaction.updateMany(
+      { _id: { $in: toDelete.map(t => t._id) } },
+      { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: user.id } }
+    );
+    for (const transaction of toDelete) {
+      await appendLedgerBlock({
+        userId: user.id,
+        scope: "transaction",
+        entityId: String(transaction._id),
+        action: "delete",
+        before: transaction,
+        after: { ...transaction, isDeleted: true },
+        actor: user,
+      });
+    }
 
     // Recompute the account balance from remaining transactions.
     // This corrects any stale balance left behind by old pre-Pay-to-Record data.
@@ -98,6 +113,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Params }) 
         $match: {
           account: accountObjectId,
           user: new Types.ObjectId(user.id),
+          isDeleted: { $ne: true },
           // Only count paid recurring installments + all regular transactions
           $nor: [{ recurringId: { $exists: true }, installmentStatus: { $nin: ["paid"] } }],
         },
@@ -113,10 +129,23 @@ export async function DELETE(_req: NextRequest, { params }: { params: Params }) 
         },
       },
     ]);
-    await Account.findOneAndUpdate(
+    const accountBefore = await Account.findOne({ _id: accountObjectId, user: user.id });
+    const accountAfter = await Account.findOneAndUpdate(
       { _id: accountObjectId, user: user.id },
-      { balance: balanceAgg?.balance ?? 0 }
+      { balance: balanceAgg?.balance ?? 0 },
+      { new: true }
     );
+    if (accountBefore && accountAfter) {
+      await appendLedgerBlock({
+        userId: user.id,
+        scope: "account",
+        entityId: accountAfter._id.toString(),
+        action: "update",
+        before: accountBefore,
+        after: accountAfter,
+        actor: user,
+      });
+    }
 
     // Invalidate cache for all affected months
     if (redis) {

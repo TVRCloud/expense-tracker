@@ -13,7 +13,14 @@ export async function checkBudgetAlert(userId: string, category: string, _amount
     const year = now.getFullYear();
 
     const userObjectId = new Types.ObjectId(userId);
-    const budget = await Budget.findOne({ user: userId, category, month, year, isActive: true }).lean<{
+    const budget = await Budget.findOne({
+      user: userId,
+      category,
+      month,
+      year,
+      isActive: true,
+      isDeleted: { $ne: true },
+    }).lean<{
       _id: { toString(): string };
       limitAmount: number;
       alertAt: number;
@@ -24,6 +31,7 @@ export async function checkBudgetAlert(userId: string, category: string, _amount
       {
         $match: {
           user: userObjectId,
+          isDeleted: { $ne: true },
           category,
           type: "expense",
           date: {

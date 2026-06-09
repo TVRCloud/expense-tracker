@@ -65,6 +65,9 @@ Indexes: `{user, isArchived}`, `{user, type}`
 | `tags` | [String] | |
 | `transferTo` | ObjectId | ref: Account, only for transfers |
 | `isRecurring` | Boolean | |
+| `isDeleted` | Boolean | soft delete |
+| `deletedAt` | Date | |
+| `deletedBy` | ObjectId | ref: User |
 
 Indexes: `{user, date}`, `{user, account}`, `{user, type}`, `{user, category}`, full-text on `{description, note}`
 
@@ -134,6 +137,31 @@ Unique index: `{user, category, year, month}`
 | `meta` | Mixed | type-specific payload |
 | `isRead` | Boolean | |
 | `createdAt` | Date | TTL 90 days |
+
+## ledger_blocks
+
+Append-only hash-linked log for finance data.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | ref: User |
+| `sequence` | Number | unique per user |
+| `scope` | String | finance collection scope |
+| `entityId` | String | original record id |
+| `action` | String | `import\|create\|update\|delete\|restore\|system` |
+| `before` | Mixed | normalized previous state |
+| `after` | Mixed | normalized next state |
+| `previousHash` | String | prior block hash |
+| `hash` | String | SHA-256 block hash |
+| `idempotencyKey` | String | used for safe backfill |
+
+## log_security
+
+Stores encrypted authenticator secrets and hashed recovery codes for `/logs`.
+
+## log_unlock_sessions
+
+Short-lived TOTP unlocks tied to the active JWT session id.
 
 ## pushSubscriptions
 

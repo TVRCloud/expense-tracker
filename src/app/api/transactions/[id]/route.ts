@@ -6,6 +6,7 @@ import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
 import { redis } from "@/lib/redis";
+import { appendLedgerBlock } from "@/lib/ledger";
 
 const updateSchema = z.object({
   description: z.string().optional(),
@@ -35,7 +36,7 @@ export async function GET(_req: NextRequest, { params }: { params: Params }) {
 
     const { id } = await params;
     await connectDB();
-    const txn = await Transaction.findOne({ _id: id, user: user.id }).lean();
+    const txn = await Transaction.findOne({ _id: id, user: user.id, isDeleted: { $ne: true } }).lean();
     if (!txn) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     return NextResponse.json({ data: txn });
@@ -58,17 +59,27 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     }
 
     await connectDB();
-    const existing = await Transaction.findOne({ _id: id, user: user.id }).lean<{ date: Date }>();
+    const existing = await Transaction.findOne({ _id: id, user: user.id, isDeleted: { $ne: true } }).lean<{ date: Date }>();
+    if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
     const update: Record<string, unknown> = { ...parsed.data };
     if (parsed.data.date) update.date = new Date(parsed.data.date);
 
     const txn = await Transaction.findOneAndUpdate(
-      { _id: id, user: user.id },
+      { _id: id, user: user.id, isDeleted: { $ne: true } },
       { $set: update },
       { new: true }
     ).lean();
 
     if (!txn) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    await appendLedgerBlock({
+      userId: user.id,
+      scope: "transaction",
+      entityId: id,
+      action: "update",
+      before: existing,
+      after: txn,
+      actor: user,
+    });
     if (existing?.date) await invalidateStatsCache(user.id, new Date(existing.date));
     if (parsed.data.date) await invalidateStatsCache(user.id, new Date(parsed.data.date));
     return NextResponse.json({ data: txn });
@@ -86,7 +97,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Params }) 
     const { id } = await params;
     await connectDB();
 
-    const txn = await Transaction.findOne({ _id: id, user: user.id }).lean<{
+    const txn = await Transaction.findOne({ _id: id, user: user.id, isDeleted: { $ne: true } }).lean<{
       account: { toString(): string };
       transferTo?: { toString(): string };
       type: string;
@@ -101,25 +112,77 @@ export async function DELETE(_req: NextRequest, { params }: { params: Params }) 
     const affectsBalance = !txn.recurringId || txn.installmentStatus === "paid";
     if (affectsBalance) {
       if (txn.type === "transfer") {
-        await Account.findOneAndUpdate(
+        const accountBefore = await Account.findOne({ _id: txn.account, user: user.id });
+        const accountAfter = await Account.findOneAndUpdate(
           { _id: txn.account, user: user.id },
-          { $inc: { balance: txn.amount } }
+          { $inc: { balance: txn.amount } },
+          { new: true }
         );
+        if (accountBefore && accountAfter) {
+          await appendLedgerBlock({
+            userId: user.id,
+            scope: "account",
+            entityId: accountAfter._id.toString(),
+            action: "update",
+            before: accountBefore,
+            after: accountAfter,
+            actor: user,
+          });
+        }
         if (txn.transferTo) {
-          await Account.findOneAndUpdate(
+          const transferBefore = await Account.findOne({ _id: txn.transferTo, user: user.id });
+          const transferAfter = await Account.findOneAndUpdate(
             { _id: txn.transferTo, user: user.id },
-            { $inc: { balance: -txn.amount } }
+            { $inc: { balance: -txn.amount } },
+            { new: true }
           );
+          if (transferBefore && transferAfter) {
+            await appendLedgerBlock({
+              userId: user.id,
+              scope: "account",
+              entityId: transferAfter._id.toString(),
+              action: "update",
+              before: transferBefore,
+              after: transferAfter,
+              actor: user,
+            });
+          }
         }
       } else {
         const balanceDelta = txn.type === "income" ? -txn.amount : txn.amount;
-        await Account.findOneAndUpdate(
+        const accountBefore = await Account.findOne({ _id: txn.account, user: user.id });
+        const accountAfter = await Account.findOneAndUpdate(
           { _id: txn.account, user: user.id },
-          { $inc: { balance: balanceDelta } }
+          { $inc: { balance: balanceDelta } },
+          { new: true }
         );
+        if (accountBefore && accountAfter) {
+          await appendLedgerBlock({
+            userId: user.id,
+            scope: "account",
+            entityId: accountAfter._id.toString(),
+            action: "update",
+            before: accountBefore,
+            after: accountAfter,
+            actor: user,
+          });
+        }
       }
     }
-    await Transaction.deleteOne({ _id: id, user: user.id });
+    const deleted = await Transaction.findOneAndUpdate(
+      { _id: id, user: user.id, isDeleted: { $ne: true } },
+      { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: user.id } },
+      { new: true }
+    ).lean();
+    await appendLedgerBlock({
+      userId: user.id,
+      scope: "transaction",
+      entityId: id,
+      action: "delete",
+      before: txn,
+      after: deleted,
+      actor: user,
+    });
     await invalidateStatsCache(user.id, new Date(txn.date));
 
     return NextResponse.json({ data: { message: "Transaction deleted" } });

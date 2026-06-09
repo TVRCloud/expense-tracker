@@ -28,6 +28,7 @@ export async function checkEmiDueNotifications(userId: string): Promise<void> {
 
     const upcoming = await Transaction.find({
       user: userId,
+      isDeleted: { $ne: true },
       isRecurring: true,
       installmentStatus: "upcoming",
       date: { $gte: now, $lte: tomorrow },

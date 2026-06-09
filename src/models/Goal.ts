@@ -14,11 +14,14 @@ const GoalSchema = new Schema(
     linkedAccount: { type: Schema.Types.ObjectId, ref: "Account" },
     isCompleted: { type: Boolean, default: false },
     completedAt: { type: Date },
+    isDeleted: { type: Boolean, default: false },
+    deletedAt: { type: Date },
+    deletedBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true }
 );
 
-GoalSchema.index({ user: 1, isCompleted: 1 });
-GoalSchema.index({ user: 1, targetDate: 1 });
+GoalSchema.index({ user: 1, isDeleted: 1, isCompleted: 1, createdAt: -1 });
+GoalSchema.index({ user: 1, isDeleted: 1, targetDate: 1 });
 
 export default models.Goal || model("Goal", GoalSchema, "goals");

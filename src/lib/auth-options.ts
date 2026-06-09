@@ -93,6 +93,7 @@ export const authOptions: AuthOptions = {
         session.user.role = token.role as string;
         session.user.avatar = token.avatar as string | null | undefined;
       }
+      session.jti = token.jti as string | undefined;
       if (token.error) session.error = token.error;
       return session;
     },

@@ -8,6 +8,7 @@ export type AuthUser = {
   email: string;
   role: string;
   avatar?: string | null;
+  jti?: string;
 };
 
 type GuardResult =
@@ -36,6 +37,7 @@ export async function requireAuth(allowedRoles?: string[]): Promise<GuardResult>
       email: session.user.email ?? "",
       role: session.user.role,
       avatar: session.user.avatar,
+      jti: session.jti,
     },
   };
 }

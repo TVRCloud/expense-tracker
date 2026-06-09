@@ -37,7 +37,7 @@ export async function GET(req: NextRequest) {
 
     const [agg, catAgg] = await Promise.all([
       Transaction.aggregate([
-        { $match: { user: userObjectId, date: { $gte: startDate, $lt: endDate }, ...paidInstallmentsOnly } },
+        { $match: { user: userObjectId, isDeleted: { $ne: true }, date: { $gte: startDate, $lt: endDate }, ...paidInstallmentsOnly } },
         {
           $group: {
             _id: "$type",
@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
         },
       ]),
       Transaction.aggregate([
-        { $match: { user: userObjectId, type: "expense", date: { $gte: startDate, $lt: endDate }, ...paidInstallmentsOnly } },
+        { $match: { user: userObjectId, isDeleted: { $ne: true }, type: "expense", date: { $gte: startDate, $lt: endDate }, ...paidInstallmentsOnly } },
         { $group: { _id: "$category", total: { $sum: "$amount" } } },
         { $sort: { total: -1 } },
         { $limit: 10 },

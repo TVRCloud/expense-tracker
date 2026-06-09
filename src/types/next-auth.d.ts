@@ -17,6 +17,7 @@ declare module "next-auth" {
       role: string;
       avatar?: string | null;
     };
+    jti?: string;
     error?: string;
   }
 }
@@ -26,6 +27,7 @@ declare module "next-auth/jwt" {
     id: string;
     role: string;
     avatar?: string | null;
+    jti?: string;
     error?: string;
   }
 }
