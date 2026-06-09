@@ -210,7 +210,7 @@ export function LoansClient() {
             className="rounded-full px-4 py-2 text-[13px] font-semibold transition-all"
             style={
               tab === t.value
-                ? { background: "var(--violet)", color: "#fff", boxShadow: "0 4px 14px rgba(107,70,245,.30)" }
+                ? { background: "var(--violet)", color: "#fff", boxShadow: "0 4px 14px rgba(0,0,0,.30)" }
                 : { background: "var(--card)", color: "var(--ink-2)", boxShadow: "var(--shadow-sm)" }
             }
           >

@@ -51,7 +51,7 @@ export function AdminUsersClient() {
     >
       <div className="flex flex-col gap-5">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-[12px] grid place-items-center" style={{ background: "rgba(107,70,245,.10)", color: "var(--violet)" }}>
+          <div className="w-10 h-10 rounded-[12px] grid place-items-center" style={{ background: "rgba(0,0,0,.10)", color: "var(--violet)" }}>
             <Shield size={19} />
           </div>
           <div>

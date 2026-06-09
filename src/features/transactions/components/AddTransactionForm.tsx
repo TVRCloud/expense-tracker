@@ -296,7 +296,7 @@ export function AddTransactionForm() {
                       isActive
                         ? {
                             background: "var(--violet)",
-                            boxShadow: "0 4px 12px rgba(107,70,245,.3)",
+                            boxShadow: "0 4px 12px rgba(0,0,0,.3)",
                           }
                         : {
                             background: "var(--card-2)",

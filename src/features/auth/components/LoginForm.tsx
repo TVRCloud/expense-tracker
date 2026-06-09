@@ -47,7 +47,7 @@ export function LoginForm() {
       {/* Brand */}
       <div className="flex items-center gap-3 mb-8">
         <div
-          className="w-10 h-10 rounded-[12px] grid place-items-center text-white shadow-[0_8px_18px_rgba(107,70,245,.34)]"
+          className="w-10 h-10 rounded-[12px] grid place-items-center text-white shadow-[0_8px_18px_rgba(0,0,0,.34)]"
           style={{ background: "linear-gradient(150deg,var(--violet),var(--violet-2))" }}
         >
           <Wallet size={20} />

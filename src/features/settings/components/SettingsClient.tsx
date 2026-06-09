@@ -60,7 +60,7 @@ function CardHeader({ icon: Icon, title }: { icon: React.ElementType; title: str
     >
       <div
         className="w-8 h-8 rounded-[10px] grid place-items-center flex-none"
-        style={{ background: "rgba(107,70,245,.10)" }}
+        style={{ background: "rgba(0,0,0,.10)" }}
       >
         <Icon size={15} style={{ color: "var(--violet)" }} />
       </div>
@@ -141,7 +141,7 @@ export function SettingsClient() {
             className="w-16 h-16 rounded-2xl grid place-items-center text-white font-extrabold text-2xl flex-none select-none"
             style={{
               background: "linear-gradient(150deg,var(--violet),var(--violet-2))",
-              boxShadow: "0 8px 20px rgba(107,70,245,.28)",
+              boxShadow: "0 8px 20px rgba(0,0,0,.28)",
             }}
           >
             {profile?.name?.[0]?.toUpperCase() ?? "U"}
@@ -187,7 +187,7 @@ export function SettingsClient() {
             </div>
             <span
               className="inline-flex items-center mt-1.5 px-2 py-0.5 rounded-full text-[10.5px] font-bold capitalize"
-              style={{ background: "rgba(107,70,245,.10)", color: "var(--violet)" }}
+              style={{ background: "rgba(0,0,0,.10)", color: "var(--violet)" }}
             >
               {profile?.role ?? "user"}
             </span>
@@ -213,7 +213,7 @@ export function SettingsClient() {
                     className="flex flex-col items-center gap-0.5 rounded-(--r-sm) py-3 px-1 transition-all"
                     style={
                       active
-                        ? { background: "var(--violet)", color: "#fff", boxShadow: "0 4px 14px rgba(107,70,245,.32)" }
+                        ? { background: "var(--violet)", color: "#fff", boxShadow: "0 4px 14px rgba(0,0,0,.32)" }
                         : { background: "var(--card-2)", color: "var(--ink-2)" }
                     }
                   >
@@ -287,7 +287,7 @@ export function SettingsClient() {
                   className="flex-1 flex flex-col items-center gap-2 py-4 rounded-(--r-md) font-semibold text-sm transition-all"
                   style={
                     active
-                      ? { background: "var(--violet)", color: "#fff", boxShadow: "0 4px 14px rgba(107,70,245,.30)" }
+                      ? { background: "var(--violet)", color: "#fff", boxShadow: "0 4px 14px rgba(0,0,0,.30)" }
                       : { background: "var(--card-2)", color: "var(--ink-2)" }
                   }
                 >

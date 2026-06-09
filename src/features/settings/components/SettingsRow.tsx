@@ -23,7 +23,7 @@ export function SettingsRow({
   trailing,
   danger,
 }: Props) {
-  const tintAlpha = danger ? "rgba(235,87,87,.12)" : "rgba(107,70,245,.12)";
+  const tintAlpha = danger ? "rgba(235,87,87,.12)" : "rgba(0,0,0,.12)";
   const finalIconColor = danger ? "var(--red)" : iconColor;
 
   const inner = (
