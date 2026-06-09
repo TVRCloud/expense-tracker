@@ -5,12 +5,16 @@ import Transaction from "@/models/Transaction";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { type TransactionStats } from "@/types/models";
+import { getTransactionActivityDate } from "@/lib/transaction-activity";
 
 interface TransactionLike {
   type: "income" | "expense" | "transfer";
   amount: number;
   category: string;
   date: Date;
+  recurringId?: unknown;
+  installmentStatus?: string;
+  paidAt?: Date;
 }
 
 function parseMonths(raw: string | null): { month: number; year: number }[] {
@@ -68,12 +72,15 @@ export async function GET(req: NextRequest) {
     const rows = await Transaction.find({
       user: new Types.ObjectId(user.id),
       isDeleted: { $ne: true },
-      date: { $gte: start, $lt: end },
+      $or: [
+        { date: { $gte: start, $lt: end } },
+        { paidAt: { $gte: start, $lt: end } },
+      ],
       // Only count recurring installments that have been explicitly marked paid.
       // Regular transactions (no recurringId) always count.
       $nor: [{ recurringId: { $exists: true }, installmentStatus: { $nin: ["paid"] } }],
     })
-      .select("type amount category date")
+      .select("type amount category date recurringId installmentStatus paidAt")
       .lean<TransactionLike[]>();
 
     const statsByMonth = new Map<string, TransactionStats>();
@@ -86,7 +93,8 @@ export async function GET(req: NextRequest) {
     }
 
     for (const tx of rows) {
-      const date = new Date(tx.date);
+      const date = getTransactionActivityDate(tx);
+      if (date < start || date >= end) continue;
       const key = monthKey(date.getFullYear(), date.getMonth() + 1);
       if (!monthSet.has(key)) continue;
 

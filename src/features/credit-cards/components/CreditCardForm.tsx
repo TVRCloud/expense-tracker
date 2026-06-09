@@ -81,7 +81,7 @@ export function CreditCardForm({ value, onChange }: CreditCardFormProps) {
         <label className="flex flex-col gap-1.5">
           <span className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider" style={labelStyle}>
             Payment Due Day
-            <FieldHint text="Day of the month your payment is due (e.g., 10 = due on the 10th every month). Your bank prints this on your card agreement." />
+            <FieldHint text="Day of the month your payment is due in the month after the statement closes. Example: close Jun 20 and due day 31 means payment due Jul 31." />
           </span>
           <input
             type="number"
@@ -93,7 +93,7 @@ export function CreditCardForm({ value, onChange }: CreditCardFormProps) {
             className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none"
             style={inputStyle}
           />
-          <span className="text-[10px]" style={{ color: "var(--ink-3)" }}>Specific day of month payment is due</span>
+          <span className="text-[10px]" style={{ color: "var(--ink-3)" }}>Due day in the month after statement close</span>
         </label>
 
         {/* Card network */}

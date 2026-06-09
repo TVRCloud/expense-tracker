@@ -2,11 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import connectDB from "@/lib/mongodb";
 import Transaction from "@/models/Transaction";
 import Account from "@/models/Account";
+import CreditStatement from "@/models/CreditStatement";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
 import { redis } from "@/lib/redis";
 import { appendLedgerBlock } from "@/lib/ledger";
+import { Types } from "mongoose";
 
 const updateSchema = z.object({
   description: z.string().optional(),
@@ -18,6 +20,21 @@ const updateSchema = z.object({
 });
 
 type Params = Promise<{ id: string }>;
+
+function hasRepaymentTag(tags?: unknown[]) {
+  return (tags ?? []).some((tag) => typeof tag === "string" && tag.startsWith("repayment:"));
+}
+
+async function getLinkedTransactionBlocker(userId: string, transactionId: string, tags?: unknown[]) {
+  const linkedStatement = await CreditStatement.findOne({
+    user: userId,
+    paymentTransactionId: transactionId,
+    isDeleted: { $ne: true },
+  }).select("_id").lean();
+  if (linkedStatement) return "This transaction is linked to a credit statement payment.";
+  if (hasRepaymentTag(tags)) return "This transaction is linked to a loan repayment.";
+  return null;
+}
 
 async function invalidateStatsCache(userId: string, date: Date) {
   const month = date.getMonth() + 1;
@@ -35,6 +52,9 @@ export async function GET(_req: NextRequest, { params }: { params: Params }) {
     if (errorResponse) return errorResponse;
 
     const { id } = await params;
+    if (!Types.ObjectId.isValid(id)) {
+      return NextResponse.json({ error: "Invalid transaction" }, { status: 400 });
+    }
     await connectDB();
     const txn = await Transaction.findOne({ _id: id, user: user.id, isDeleted: { $ne: true } }).lean();
     if (!txn) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -52,6 +72,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     if (errorResponse) return errorResponse;
 
     const { id } = await params;
+    if (!Types.ObjectId.isValid(id)) {
+      return NextResponse.json({ error: "Invalid transaction" }, { status: 400 });
+    }
     const body = await req.json();
     const parsed = updateSchema.safeParse(body);
     if (!parsed.success) {
@@ -59,8 +82,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     }
 
     await connectDB();
-    const existing = await Transaction.findOne({ _id: id, user: user.id, isDeleted: { $ne: true } }).lean<{ date: Date }>();
+    const existing = await Transaction.findOne({ _id: id, user: user.id, isDeleted: { $ne: true } }).lean<{ date: Date; tags?: unknown[] }>();
     if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const editBlocker = await getLinkedTransactionBlocker(user.id, id, existing.tags);
+    if (editBlocker) {
+      return NextResponse.json({ error: `${editBlocker} Use the linked record flow to change it.` }, { status: 409 });
+    }
     const update: Record<string, unknown> = { ...parsed.data };
     if (parsed.data.date) update.date = new Date(parsed.data.date);
 
@@ -95,6 +122,9 @@ export async function DELETE(_req: NextRequest, { params }: { params: Params }) 
     if (errorResponse) return errorResponse;
 
     const { id } = await params;
+    if (!Types.ObjectId.isValid(id)) {
+      return NextResponse.json({ error: "Invalid transaction" }, { status: 400 });
+    }
     await connectDB();
 
     const txn = await Transaction.findOne({ _id: id, user: user.id, isDeleted: { $ne: true } }).lean<{
@@ -103,10 +133,15 @@ export async function DELETE(_req: NextRequest, { params }: { params: Params }) 
       type: string;
       amount: number;
       date: Date;
+      tags?: unknown[];
       recurringId?: unknown;
       installmentStatus?: string;
     }>();
     if (!txn) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const deleteBlocker = await getLinkedTransactionBlocker(user.id, id, txn.tags);
+    if (deleteBlocker) {
+      return NextResponse.json({ error: `${deleteBlocker} Use the linked record flow to reverse it.` }, { status: 409 });
+    }
 
     // Reverse account balance only for transactions that previously affected it.
     const affectsBalance = !txn.recurringId || txn.installmentStatus === "paid";

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import connectDB from "@/lib/mongodb";
+import Account from "@/models/Account";
 import CreditStatement from "@/models/CreditStatement";
 import Transaction from "@/models/Transaction";
 import { requireAuth } from "@/lib/auth-guard";
@@ -7,11 +8,23 @@ import logger from "@/lib/logger";
 import { z } from "zod";
 import { Types } from "mongoose";
 import { appendLedgerBlock } from "@/lib/ledger";
+import { getDueDateForStatementClose } from "@/lib/credit-card";
 
 const paySchema = z.object({
   paidAmount: z.number().int().positive(),
   paidAt: z.string().optional(),
   paymentTransactionId: z.string().optional(),
+  sourceAccountId: z.string().optional(),
+}).superRefine((data, ctx) => {
+  if (data.paymentTransactionId && !Types.ObjectId.isValid(data.paymentTransactionId)) {
+    ctx.addIssue({ code: "custom", path: ["paymentTransactionId"], message: "Invalid payment transaction" });
+  }
+  if (data.sourceAccountId && !Types.ObjectId.isValid(data.sourceAccountId)) {
+    ctx.addIssue({ code: "custom", path: ["sourceAccountId"], message: "Invalid source account" });
+  }
+  if (data.sourceAccountId && data.paymentTransactionId) {
+    ctx.addIssue({ code: "custom", path: ["sourceAccountId"], message: "Provide source account or payment transaction, not both" });
+  }
 });
 
 type Params = Promise<{ accountId: string; statementId: string }>;
@@ -46,20 +59,20 @@ async function computeStatementBalance(
                   case: {
                     $and: [
                       { $eq: ["$type", "transfer"] },
-                      { $eq: ["$transferTo", accountObjectId] },
+                      { $eq: ["$account", accountObjectId] },
                     ],
                   },
-                  then: { $multiply: [-1, "$amount"] },
+                  then: "$amount",
                 },
                 { case: { $eq: ["$type", "income"] }, then: { $multiply: [-1, "$amount"] } },
                 {
                   case: {
                     $and: [
                       { $eq: ["$type", "transfer"] },
-                      { $eq: ["$account", accountObjectId] },
+                      { $eq: ["$transferTo", accountObjectId] },
                     ],
                   },
-                  then: "$amount",
+                  then: 0,
                 },
                 { case: { $eq: ["$type", "expense"] }, then: "$amount" },
               ],
@@ -80,6 +93,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     if (errorResponse) return errorResponse;
 
     const { accountId, statementId } = await params;
+    if (!Types.ObjectId.isValid(accountId) || !Types.ObjectId.isValid(statementId)) {
+      return NextResponse.json({ error: "Invalid statement" }, { status: 400 });
+    }
     const body = await req.json();
     const parsed = paySchema.safeParse(body);
     if (!parsed.success) {
@@ -101,6 +117,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     }>();
 
     if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const cardForConfig = await Account.findOne({ _id: accountId, user: user.id, type: "credit_card", isArchived: false }).lean<{
+      creditMeta?: { paymentDueDay?: number };
+    }>();
+    if (!cardForConfig?.creditMeta?.paymentDueDay) {
+      return NextResponse.json({ error: "Credit card billing cycle is not configured" }, { status: 400 });
+    }
 
     const statementBalance = await computeStatementBalance(
       user.id,
@@ -111,16 +133,80 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     const paidAmount = (existing.paidAmount ?? 0) + parsed.data.paidAmount;
     const isPaid = statementBalance === 0 || paidAmount >= statementBalance;
     const now = new Date();
-    const unpaidStatus = new Date(existing.dueDate) < now ? "overdue" : "closed";
+    const dueDate = getDueDateForStatementClose(cardForConfig.creditMeta.paymentDueDay, new Date(existing.periodEnd));
+    const unpaidStatus = dueDate < now ? "overdue" : "closed";
 
+    const paymentDate = parsed.data.paidAt ? new Date(parsed.data.paidAt) : new Date();
     const update: Record<string, unknown> = {
       isPaid,
       status: isPaid ? "paid" : unpaidStatus,
       paidAmount,
-      paidAt: parsed.data.paidAt ? new Date(parsed.data.paidAt) : new Date(),
+      paidAt: paymentDate,
+      dueDate,
     };
     if (parsed.data.paymentTransactionId) {
       update.paymentTransactionId = new Types.ObjectId(parsed.data.paymentTransactionId);
+    }
+    if (parsed.data.sourceAccountId) {
+      if (parsed.data.sourceAccountId === accountId) {
+        return NextResponse.json({ error: "Source account must be different from credit card" }, { status: 400 });
+      }
+
+      const [sourceAccount, cardAccount] = await Promise.all([
+        Account.findOne({ _id: parsed.data.sourceAccountId, user: user.id, isArchived: false }),
+        Account.findOne({ _id: accountId, user: user.id, type: "credit_card", isArchived: false }),
+      ]);
+      if (!sourceAccount) return NextResponse.json({ error: "Source account not found" }, { status: 404 });
+      if (!cardAccount) return NextResponse.json({ error: "Credit card account not found" }, { status: 404 });
+      if (sourceAccount.type === "credit_card") {
+        return NextResponse.json({ error: "Source account cannot be a credit card" }, { status: 400 });
+      }
+
+      const sourceBefore = sourceAccount.toObject();
+      const cardBefore = cardAccount.toObject();
+      sourceAccount.balance -= parsed.data.paidAmount;
+      cardAccount.balance += parsed.data.paidAmount;
+      await Promise.all([sourceAccount.save(), cardAccount.save()]);
+      await appendLedgerBlock({
+        userId: user.id,
+        scope: "account",
+        entityId: sourceAccount._id.toString(),
+        action: "update",
+        before: sourceBefore,
+        after: sourceAccount,
+        actor: user,
+      });
+      await appendLedgerBlock({
+        userId: user.id,
+        scope: "account",
+        entityId: cardAccount._id.toString(),
+        action: "update",
+        before: cardBefore,
+        after: cardAccount,
+        actor: user,
+      });
+
+      const paymentTransaction = await Transaction.create({
+        user: user.id,
+        account: parsed.data.sourceAccountId,
+        type: "transfer",
+        amount: parsed.data.paidAmount,
+        currency: cardAccount.currency ?? "USD",
+        category: "Transfer",
+        description: `Payment to ${cardAccount.name}`,
+        date: paymentDate,
+        transferTo: accountId,
+        tags: [`credit_statement:${statementId}`],
+      });
+      await appendLedgerBlock({
+        userId: user.id,
+        scope: "transaction",
+        entityId: paymentTransaction._id.toString(),
+        action: "create",
+        after: paymentTransaction,
+        actor: user,
+      });
+      update.paymentTransactionId = paymentTransaction._id;
     }
 
     const statement = await CreditStatement.findOneAndUpdate(

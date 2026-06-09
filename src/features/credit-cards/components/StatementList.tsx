@@ -49,24 +49,22 @@ export function StatementList({ accountId, account }: StatementListProps) {
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="text-[10px] font-bold uppercase tracking-wider mb-0.5" style={{ color: "var(--violet)" }}>
-                Current Statement · Open
+                Current Cycle · Unbilled
               </div>
               <div className="text-[13px] font-bold" style={{ color: "var(--ink)" }}>
                 {current.label}
               </div>
               <div className="text-[11px] font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>
-                Closes {format(new Date(current.periodEnd), "MMM d")} · Due {format(new Date(current.dueDate), "MMM d")}
+                Closes {format(new Date(current.periodEnd), "MMM d")} · Due after close {format(new Date(current.dueDate), "MMM d")}
               </div>
             </div>
             <div className="text-right flex-none">
               <div className="text-[20px] font-extrabold tnum" style={{ color: current.balance > 0 ? "var(--red)" : "var(--ink)" }}>
-                {formatCurrency(current.balance)}
+                {formatCurrency(current.unbilledUsage ?? current.balance)}
               </div>
-              {current.minPayment > 0 && (
-                <div className="text-[10px] font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>
-                  Min {formatCurrency(current.minPayment)}
-                </div>
-              )}
+              <div className="text-[10px] font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>
+                Not payable yet
+              </div>
             </div>
           </div>
         </div>

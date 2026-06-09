@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import connectDB from "@/lib/mongodb";
 import Account from "@/models/Account";
+import CreditStatement from "@/models/CreditStatement";
 import Transaction from "@/models/Transaction";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
-import { getCurrentCycle, computeUtilization, getDueDateStatus } from "@/lib/credit-card";
+import { getCurrentCycle, getPastCycles, computeUtilization, getDueDateStatus } from "@/lib/credit-card";
 import { checkCreditDueNotifications } from "@/lib/credit-notifications";
 import { type ICreditMeta } from "@/types/models";
 import { Types } from "mongoose";
@@ -65,7 +66,7 @@ export async function GET() {
         // Fire-and-forget notification checks (non-blocking)
         void checkCreditDueNotifications(user.id, String(card._id), card.name, meta as ICreditMeta);
 
-        // Compute current cycle balance from card charges and payments.
+        // Compute unbilled open-cycle usage. Statement payment transfers do not reduce this.
         const cardObjectId = new Types.ObjectId(String(card._id));
         const result = await Transaction.aggregate([
           {
@@ -90,20 +91,20 @@ export async function GET() {
                         case: {
                           $and: [
                             { $eq: ["$type", "transfer"] },
-                            { $eq: ["$transferTo", cardObjectId] },
+                            { $eq: ["$account", cardObjectId] },
                           ],
                         },
-                        then: { $multiply: [-1, "$amount"] },
+                        then: "$amount",
                       },
                       { case: { $eq: ["$type", "income"] }, then: { $multiply: [-1, "$amount"] } },
                       {
                         case: {
                           $and: [
                             { $eq: ["$type", "transfer"] },
-                            { $eq: ["$account", cardObjectId] },
+                            { $eq: ["$transferTo", cardObjectId] },
                           ],
                         },
-                        then: "$amount",
+                        then: 0,
                       },
                       { case: { $eq: ["$type", "expense"] }, then: "$amount" },
                     ],
@@ -115,20 +116,87 @@ export async function GET() {
           },
         ]);
 
-        const balance = Math.max(0, result[0]?.balance ?? 0);
+        const unbilledUsage = Math.max(0, result[0]?.balance ?? 0);
+        const statementRecords = await CreditStatement.find({
+          account: cardObjectId,
+          user: user.id,
+          isDeleted: { $ne: true },
+        }).lean();
+        const payableStatements = await Promise.all(
+          getPastCycles(config, 12).map(async (pastCycle) => {
+            const [statementResult] = await Transaction.aggregate([
+              {
+                $match: {
+                  user: new Types.ObjectId(user.id),
+                  isDeleted: { $ne: true },
+                  $or: [{ account: cardObjectId }, { transferTo: cardObjectId }],
+                  date: { $gte: pastCycle.periodStart, $lte: pastCycle.periodEnd },
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  balance: {
+                    $sum: {
+                      $switch: {
+                        branches: [
+                          {
+                            case: {
+                              $and: [
+                                { $eq: ["$type", "transfer"] },
+                                { $eq: ["$account", cardObjectId] },
+                              ],
+                            },
+                            then: "$amount",
+                          },
+                          { case: { $eq: ["$type", "income"] }, then: { $multiply: [-1, "$amount"] } },
+                          {
+                            case: {
+                              $and: [
+                                { $eq: ["$type", "transfer"] },
+                                { $eq: ["$transferTo", cardObjectId] },
+                              ],
+                            },
+                            then: 0,
+                          },
+                          { case: { $eq: ["$type", "expense"] }, then: "$amount" },
+                        ],
+                        default: 0,
+                      },
+                    },
+                  },
+                },
+              },
+            ]);
+            const statementBalance = Math.max(0, statementResult?.balance ?? 0);
+            const record = statementRecords.find((item) =>
+              new Date(item.periodStart).getTime() === pastCycle.periodStart.getTime()
+            );
+            const remainingDue = Math.max(0, statementBalance - (record?.paidAmount ?? 0));
+            return { ...pastCycle, remainingDue };
+          })
+        );
+        const unpaidStatements = payableStatements
+          .filter((statement) => statement.remainingDue > 0)
+          .sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
+        const payableStatementDue = unpaidStatements.reduce((sum, statement) => sum + statement.remainingDue, 0);
+        const balance = unbilledUsage + payableStatementDue;
         const utilization = computeUtilization(balance, config.creditLimit);
-        const dueStatus = getDueDateStatus(cycle.dueDate);
+        const nextPayable = unpaidStatements[0] ?? null;
+        const dueStatus = nextPayable ? getDueDateStatus(nextPayable.dueDate) : null;
 
         return {
           accountId: String(card._id),
           name: card.name,
           balance,
+          unbilledUsage,
+          payableStatementDue,
           creditLimit: config.creditLimit,
           utilization,
-          nextDueDate: cycle.dueDate.toISOString(),
-          daysUntilDue: dueStatus.daysUntilDue,
-          isOverdue: dueStatus.isOverdue,
-          status: "open",
+          nextDueDate: nextPayable ? nextPayable.dueDate.toISOString() : null,
+          daysUntilDue: dueStatus?.daysUntilDue ?? null,
+          isOverdue: dueStatus?.isOverdue ?? false,
+          status: nextPayable ? (dueStatus?.isOverdue ? "overdue" : "closed") : "open",
           network: meta.network,
           lastFourDigits: meta.lastFourDigits,
         };

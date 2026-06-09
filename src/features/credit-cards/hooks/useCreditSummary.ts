@@ -7,6 +7,8 @@ export interface CardSummary {
   accountId: string;
   name: string;
   balance: number;
+  unbilledUsage?: number;
+  payableStatementDue?: number;
   creditLimit: number;
   utilization: number;
   nextDueDate: string | null;
