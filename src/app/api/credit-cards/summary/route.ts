@@ -24,7 +24,16 @@ export async function GET() {
     }).lean();
 
     if (cards.length === 0) {
-      return NextResponse.json({ data: { totalDebt: 0, cards: [] } });
+      return NextResponse.json({
+        data: {
+          totalDebt: 0,
+          totalPayableStatementDue: 0,
+          totalUnbilledUsage: 0,
+          totalCreditExposure: 0,
+          totalAvailableCredit: 0,
+          cards: [],
+        },
+      });
     }
 
     const cardSummaries = await Promise.all(
@@ -43,6 +52,8 @@ export async function GET() {
             accountId: String(card._id),
             name: card.name,
             balance: 0,
+            unbilledUsage: 0,
+            payableStatementDue: 0,
             creditLimit: meta?.creditLimit ?? 0,
             utilization: 0,
             nextDueDate: null,
@@ -203,9 +214,23 @@ export async function GET() {
       })
     );
 
-    const totalDebt = cardSummaries.reduce((s, c) => s + c.balance, 0);
+    const totalPayableStatementDue = cardSummaries.reduce((s, c) => s + (c.payableStatementDue ?? 0), 0);
+    const totalUnbilledUsage = cardSummaries.reduce((s, c) => s + (c.unbilledUsage ?? 0), 0);
+    const totalCreditExposure = totalPayableStatementDue + totalUnbilledUsage;
+    const totalCreditLimit = cardSummaries.reduce((s, c) => s + c.creditLimit, 0);
+    const totalAvailableCredit = Math.max(0, totalCreditLimit - totalCreditExposure);
+    const totalDebt = totalCreditExposure;
 
-    return NextResponse.json({ data: { totalDebt, cards: cardSummaries } });
+    return NextResponse.json({
+      data: {
+        totalDebt,
+        totalPayableStatementDue,
+        totalUnbilledUsage,
+        totalCreditExposure,
+        totalAvailableCredit,
+        cards: cardSummaries,
+      },
+    });
   } catch (err) {
     logger.error({ err }, "GET /api/credit-cards/summary failed");
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

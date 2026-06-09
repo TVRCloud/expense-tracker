@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useAccounts } from "@/features/dashboard/hooks/useDashboard";
 import { useRecurringSeriesList } from "@/features/recurring/hooks/useRecurringSeries";
 import { CreditCardForm } from "@/features/credit-cards/components/CreditCardForm";
+import { type CardSummary, useCreditSummary } from "@/features/credit-cards/hooks/useCreditSummary";
 import { computeUtilization, utilizationColor } from "@/lib/credit-card";
 import apiClient from "@/lib/api-client";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -27,10 +28,22 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "other", label: "Banks & More" },
 ];
 
-function CreditRow({ acc, onArchive, formatCurrency, emiCommitment = 0 }: { acc: IAccount; onArchive: () => void; formatCurrency: (n: number) => string; emiCommitment?: number }) {
+function CreditRow({
+  acc,
+  onArchive,
+  formatCurrency,
+  emiCommitment = 0,
+  summary,
+}: {
+  acc: IAccount;
+  onArchive: () => void;
+  formatCurrency: (n: number) => string;
+  emiCommitment?: number;
+  summary?: CardSummary;
+}) {
   const meta = acc.creditMeta;
-  const paidBalance = Math.abs(acc.balance);
-  const displayBalance = paidBalance + emiCommitment;
+  const cycleExposure = summary?.balance ?? Math.abs(Math.min(0, acc.balance));
+  const displayBalance = cycleExposure + emiCommitment;
   const limit = meta?.creditLimit ?? 0;
   const utilPct = limit > 0 ? computeUtilization(displayBalance, limit) : 0;
   const utilCol = utilizationColor(utilPct);
@@ -76,6 +89,16 @@ function CreditRow({ acc, onArchive, formatCurrency, emiCommitment = 0 }: { acc:
             <div className="text-[10px] font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>
               Limit {formatCurrency(limit)}
             </div>
+            {summary && (
+              <div className="grid grid-cols-2 gap-2 mt-1.5 text-[10px] font-bold">
+                <span className="tnum truncate" style={{ color: "var(--ink-3)" }}>
+                  Payable {formatCurrency(summary.payableStatementDue ?? 0)}
+                </span>
+                <span className="tnum truncate text-right" style={{ color: "var(--ink-3)" }}>
+                  Unbilled {formatCurrency(summary.unbilledUsage ?? 0)}
+                </span>
+              </div>
+            )}
           </div>
         ) : (
           <div className="text-xs font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>Credit card · Setup billing cycle</div>
@@ -141,6 +164,7 @@ export function AccountsClient() {
   const qc = useQueryClient();
   const { data: accounts, isLoading } = useAccounts();
   const { data: seriesData } = useRecurringSeriesList();
+  const { data: creditSummary } = useCreditSummary();
   const [filter, setFilter] = useState<FilterKey>("all");
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ name: "", type: "bank" as IAccount["type"], currency: "USD" });
@@ -162,7 +186,12 @@ export function AccountsClient() {
   });
 
   const creditCards = (accounts ?? []).filter(a => a.type === "credit_card");
-  const totalCreditDebt = creditCards.reduce((s, a) => s + Math.abs(Math.min(0, a.balance)), 0);
+  const totalCreditDebt = creditSummary?.totalCreditExposure
+    ?? creditCards.reduce((sum, account) => sum + Math.abs(Math.min(0, account.balance)), 0);
+  const creditSummaryByAccount = (creditSummary?.cards ?? []).reduce<Record<string, CardSummary>>((map, card) => {
+    map[card.accountId] = card;
+    return map;
+  }, {});
 
   const createAccount = useMutation({
     mutationFn: () => {
@@ -207,7 +236,7 @@ export function AccountsClient() {
           </div>
           {creditCards.length > 0 && (
             <div className="rounded-[var(--r-lg)] p-4" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
-              <div className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: "var(--ink-3)" }}>Credit Debt</div>
+              <div className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: "var(--ink-3)" }}>Credit Exposure</div>
               <div className="text-[22px] font-extrabold tnum" style={{ color: totalCreditDebt > 0 ? "var(--red)" : "var(--green)" }}>
                 {formatCurrency(totalCreditDebt)}
               </div>
@@ -268,6 +297,7 @@ export function AccountsClient() {
                 acc={acc}
                 formatCurrency={formatCurrency}
                 emiCommitment={emiByCard[String(acc._id)] ?? 0}
+                summary={creditSummaryByAccount[String(acc._id)]}
                 onArchive={() => { if (confirm(`Archive "${acc.name}"?`)) archiveAccount.mutate(String(acc._id)); }}
               />
             ) : (
