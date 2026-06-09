@@ -22,7 +22,8 @@ export function StatementRow({ statement, onPayNow }: StatementRowProps) {
   const status = statement.status as keyof typeof STATUS_CONFIG;
   const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.open;
   const Icon = cfg.icon;
-  const balance = statement.balance ?? 0;
+  const statementBalance = statement.statementBalance ?? statement.balance ?? 0;
+  const remainingDue = statement.remainingDue ?? Math.max(0, statementBalance - (statement.paidAmount ?? 0));
 
   const periodLabel = `${format(new Date(statement.periodStart), "MMM d")} – ${format(new Date(statement.periodEnd), "MMM d, yyyy")}`;
   const dueLabel = format(new Date(statement.dueDate), "MMM d, yyyy");
@@ -55,8 +56,11 @@ export function StatementRow({ statement, onPayNow }: StatementRowProps) {
       </div>
 
       <div className="text-right flex-none">
-        <div className="text-[15px] font-extrabold tnum" style={{ color: balance > 0 ? "var(--red)" : "var(--ink)" }}>
-          {formatCurrency(balance)}
+        <div className="text-[15px] font-extrabold tnum" style={{ color: remainingDue > 0 ? "var(--red)" : "var(--ink)" }}>
+          {formatCurrency(remainingDue)}
+        </div>
+        <div className="text-[10px] font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>
+          of {formatCurrency(statementBalance)}
         </div>
         <div
           className="inline-flex items-center gap-1 text-[10px] font-bold mt-0.5 px-1.5 py-0.5 rounded"
@@ -66,7 +70,7 @@ export function StatementRow({ statement, onPayNow }: StatementRowProps) {
         </div>
       </div>
 
-      {!statement.isPaid && status !== "open" && (
+      {remainingDue > 0 && status !== "open" && (
         <button
           type="button"
           onClick={() => onPayNow(statement)}

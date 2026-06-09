@@ -72,6 +72,8 @@ export function TransactionDetailClient({ id }: Props) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["transactions"] });
       void qc.invalidateQueries({ queryKey: ["transactions", id] });
+      void qc.invalidateQueries({ queryKey: ["credit-summary"] });
+      void qc.invalidateQueries({ queryKey: ["credit-statements"] });
       setEditing(false);
       toast.success("Transaction updated");
     },
@@ -83,6 +85,8 @@ export function TransactionDetailClient({ id }: Props) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["transactions"] });
       void qc.invalidateQueries({ queryKey: ["accounts"] });
+      void qc.invalidateQueries({ queryKey: ["credit-summary"] });
+      void qc.invalidateQueries({ queryKey: ["credit-statements"] });
       toast.success("Transaction deleted");
       router.push("/transactions");
     },

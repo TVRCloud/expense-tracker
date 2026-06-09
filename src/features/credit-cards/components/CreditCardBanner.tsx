@@ -19,9 +19,18 @@ const NETWORK_LABELS: Record<string, string> = {
 interface CreditCardBannerProps {
   account: IAccount;
   currentBalance: number;
+  unbilledUsage?: number;
+  payableStatementDue?: number;
+  payableDueDate?: string;
 }
 
-export function CreditCardBanner({ account, currentBalance }: CreditCardBannerProps) {
+export function CreditCardBanner({
+  account,
+  currentBalance,
+  unbilledUsage = 0,
+  payableStatementDue = 0,
+  payableDueDate,
+}: CreditCardBannerProps) {
   const { formatCurrency } = useCurrency();
   const meta = account.creditMeta;
   const limit = meta?.creditLimit ?? 0;
@@ -31,7 +40,7 @@ export function CreditCardBanner({ account, currentBalance }: CreditCardBannerPr
     ? getCurrentCycle({ billingCycleDay: meta.billingCycleDay, paymentDueDay: meta.paymentDueDay, creditLimit: limit, minPaymentPct: meta.minPaymentPct ?? 2 })
     : null;
 
-  const dueStatus = cycle ? getDueDateStatus(cycle.dueDate) : null;
+  const dueStatus = payableDueDate ? getDueDateStatus(new Date(payableDueDate)) : null;
 
   let dueColor = "var(--ink-3)";
   let dueLabel = "";
@@ -44,7 +53,7 @@ export function CreditCardBanner({ account, currentBalance }: CreditCardBannerPr
       dueLabel = `Due in ${dueStatus.daysUntilDue}d`;
     } else {
       dueColor = "var(--ink-3)";
-      dueLabel = `Due ${format(new Date(cycle!.dueDate), "MMM d")}`;
+      dueLabel = `Due ${format(new Date(payableDueDate!), "MMM d")}`;
     }
   }
 
@@ -79,7 +88,7 @@ export function CreditCardBanner({ account, currentBalance }: CreditCardBannerPr
             <div className="text-xs font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>{meta.cardholderName}</div>
           )}
         </div>
-        {dueStatus && (
+        {dueStatus && payableStatementDue > 0 && (
           <div
             className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold flex-none"
             style={{ background: dueStatus.isOverdue ? "rgba(235,87,87,.12)" : dueStatus.daysUntilDue <= 7 ? "rgba(245,158,11,.12)" : "var(--card-2)", color: dueColor }}
@@ -93,7 +102,7 @@ export function CreditCardBanner({ account, currentBalance }: CreditCardBannerPr
       {/* Balance row */}
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <div className="text-[10px] font-bold uppercase tracking-wider mb-0.5" style={{ color: "var(--ink-3)" }}>Current Balance</div>
+          <div className="text-[10px] font-bold uppercase tracking-wider mb-0.5" style={{ color: "var(--ink-3)" }}>Total Exposure</div>
           <div className="text-[26px] font-extrabold tnum leading-none" style={{ color: currentBalance > 0 ? "var(--red)" : "var(--ink)" }}>
             {formatCurrency(currentBalance)}
           </div>
@@ -102,6 +111,21 @@ export function CreditCardBanner({ account, currentBalance }: CreditCardBannerPr
           <div className="text-[10px] font-bold uppercase tracking-wider mb-0.5" style={{ color: "var(--ink-3)" }}>Available Credit</div>
           <div className="text-[26px] font-extrabold tnum leading-none" style={{ color: available > 0 ? "var(--green)" : "var(--red)" }}>
             {formatCurrency(available)}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-[var(--r-sm)] p-3" style={{ background: "var(--card-2)" }}>
+          <div className="text-[10px] font-bold uppercase tracking-wider mb-0.5" style={{ color: "var(--ink-3)" }}>Unbilled Usage</div>
+          <div className="text-[16px] font-extrabold tnum" style={{ color: unbilledUsage > 0 ? "var(--red)" : "var(--ink)" }}>
+            {formatCurrency(unbilledUsage)}
+          </div>
+        </div>
+        <div className="rounded-[var(--r-sm)] p-3" style={{ background: "var(--card-2)" }}>
+          <div className="text-[10px] font-bold uppercase tracking-wider mb-0.5" style={{ color: "var(--ink-3)" }}>Payable Due</div>
+          <div className="text-[16px] font-extrabold tnum" style={{ color: payableStatementDue > 0 ? dueColor : "var(--ink)" }}>
+            {formatCurrency(payableStatementDue)}
           </div>
         </div>
       </div>
@@ -116,7 +140,9 @@ export function CreditCardBanner({ account, currentBalance }: CreditCardBannerPr
         <div className="flex items-center gap-4 text-[11px] font-medium" style={{ color: "var(--ink-3)" }}>
           <span>Statement closes {format(cycle.periodEnd, "MMM d")}</span>
           <span>·</span>
-          <span style={{ color: dueColor }}>Payment due {format(cycle.dueDate, "MMM d")}</span>
+          <span style={{ color: payableStatementDue > 0 ? dueColor : "var(--ink-3)" }}>
+            {payableDueDate ? `Payable due ${format(new Date(payableDueDate), "MMM d")}` : `Next statement due ${format(cycle.dueDate, "MMM d")}`}
+          </span>
           {meta?.apr && <><span>·</span><span>APR {meta.apr}%</span></>}
         </div>
       )}

@@ -10,6 +10,7 @@ import { redis } from "@/lib/redis";
 import { addDays, addWeeks, addMonths, addYears } from "date-fns";
 import { checkBudgetAlert } from "@/lib/budget-alert";
 import { appendLedgerBlock } from "@/lib/ledger";
+import { activityDateAddFields } from "@/lib/transaction-activity";
 
 const createSchema = z.object({
   accountId: z.string(),
@@ -29,6 +30,25 @@ const createSchema = z.object({
   recurrenceCount: z.number().int().min(1).max(3650).optional(),
   recurrenceEndDate: z.string().optional(),
   recurrenceLabel: z.string().max(100).optional(),
+}).superRefine((data, ctx) => {
+  if (!Types.ObjectId.isValid(data.accountId)) {
+    ctx.addIssue({ code: "custom", path: ["accountId"], message: "Invalid account" });
+  }
+  if (data.transferToId && !Types.ObjectId.isValid(data.transferToId)) {
+    ctx.addIssue({ code: "custom", path: ["transferToId"], message: "Invalid transfer account" });
+  }
+  if (data.type === "transfer" && !data.transferToId) {
+    ctx.addIssue({ code: "custom", path: ["transferToId"], message: "Transfer destination is required" });
+  }
+  if (data.type !== "transfer" && data.transferToId) {
+    ctx.addIssue({ code: "custom", path: ["transferToId"], message: "Transfer destination is only allowed for transfers" });
+  }
+  if (data.type === "transfer" && data.transferToId === data.accountId) {
+    ctx.addIssue({ code: "custom", path: ["transferToId"], message: "Transfer destination must be different" });
+  }
+  if (data.type === "transfer" && data.isRecurring) {
+    ctx.addIssue({ code: "custom", path: ["isRecurring"], message: "Recurring transfers are not supported" });
+  }
 });
 
 async function invalidateStatsCache(userId: string, date: Date) {
@@ -76,6 +96,10 @@ function defaultRecurringCount(frequency: string): number {
   return 120;
 }
 
+function isValidObjectId(value: string | null) {
+  return !value || Types.ObjectId.isValid(value);
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { user, errorResponse } = await requireAuth();
@@ -91,6 +115,11 @@ export async function GET(req: NextRequest) {
     const dateFrom = searchParams.get("dateFrom");
     const dateTo = searchParams.get("dateTo");
     const hideFuture = searchParams.get("hideFuture") === "true";
+    const includeUnpaidRecurring = searchParams.get("includeUnpaidRecurring") === "true";
+
+    if (!isValidObjectId(accountId)) {
+      return NextResponse.json({ error: "Invalid account" }, { status: 400 });
+    }
 
     const query: Record<string, unknown> = { user: user.id, isDeleted: { $ne: true } };
     if (type) query.type = type;
@@ -105,12 +134,14 @@ export async function GET(req: NextRequest) {
 
     // Exclude unpaid recurring installments from the main list.
     // They live in /transactions/recurring/[id] instead.
-    query.$nor = [
-      {
-        recurringId: { $exists: true },
-        installmentStatus: { $nin: ["paid"] },
-      },
-    ];
+    if (!includeUnpaidRecurring) {
+      query.$nor = [
+        {
+          recurringId: { $exists: true },
+          installmentStatus: { $nin: ["paid"] },
+        },
+      ];
+    }
 
     await connectDB();
     if (hideFuture) {
@@ -146,18 +177,7 @@ export async function GET(req: NextRequest) {
         { $match: aggregateQuery },
         {
           $addFields: {
-            activityDate: {
-              $cond: [
-                {
-                  $and: [
-                    { $eq: ["$installmentStatus", "paid"] },
-                    { $ne: ["$paidAt", null] },
-                  ],
-                },
-                "$paidAt",
-                "$date",
-              ],
-            },
+            ...activityDateAddFields(),
           },
         },
         {
@@ -209,6 +229,10 @@ export async function POST(req: NextRequest) {
 
     const account = await Account.findOne({ _id: accountId, user: user.id });
     if (!account) return NextResponse.json({ error: "Account not found" }, { status: 404 });
+    if (transferToId) {
+      const transferAccount = await Account.findOne({ _id: transferToId, user: user.id, isArchived: false });
+      if (!transferAccount) return NextResponse.json({ error: "Transfer account not found" }, { status: 404 });
+    }
 
     const startDate = new Date(rest.date);
     // ── Bulk-create recurring installments ──────────────────────────────────
@@ -310,7 +334,7 @@ export async function POST(req: NextRequest) {
     await invalidateStatsCache(user.id, startDate);
 
     if (rest.type === "expense") {
-      void checkBudgetAlert(user.id, rest.category, rest.amount);
+      void checkBudgetAlert(user.id, rest.category, rest.amount, startDate);
     }
 
     logger.info({ userId: user.id, transactionId: transaction._id.toString() }, "Transaction created");

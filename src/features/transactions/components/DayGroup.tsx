@@ -17,6 +17,7 @@ function formatDayLabel(date: Date): string {
 export function DayGroup({ date, transactions }: Props) {
   const { formatCurrency } = useCurrency();
   const dayTotal = transactions.reduce((sum, t) => {
+    if (t.type === "transfer") return sum;
     return sum + (t.type === "income" ? t.amount : -t.amount);
   }, 0);
   const isPositive = dayTotal >= 0;

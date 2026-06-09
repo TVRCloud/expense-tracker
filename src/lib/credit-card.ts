@@ -38,6 +38,29 @@ function cycleDate(day: number, year: number, month: number): Date {
   return new Date(year, month, clamped, 0, 0, 0, 0);
 }
 
+function nextMonth(year: number, month: number) {
+  return month === 11
+    ? { year: year + 1, month: 0 }
+    : { year, month: month + 1 };
+}
+
+/**
+ * Payment is always due in the month after the statement closes.
+ */
+export function getDueDateForStatementClose(paymentDueDay: number, periodEnd: Date): Date {
+  const periodEndYear = periodEnd.getFullYear();
+  const periodEndMonth = periodEnd.getMonth();
+  const dueMonth = nextMonth(periodEndYear, periodEndMonth);
+  const dueDate = cycleDate(paymentDueDay, dueMonth.year, dueMonth.month);
+  if (
+    dueDate.getFullYear() < periodEnd.getFullYear() ||
+    (dueDate.getFullYear() === periodEnd.getFullYear() && dueDate.getMonth() <= periodEnd.getMonth())
+  ) {
+    throw new Error("Credit card payment due date must be after statement close month");
+  }
+  return dueDate;
+}
+
 /**
  * Returns the current open billing cycle dates.
  *
@@ -81,21 +104,7 @@ export function getCurrentCycle(config: CardConfig, now?: Date): CycleDates {
   const prevClose = cycleDate(closeDay, prevCloseYear, prevCloseMonth);
   const periodStart = addDays(prevClose, 1);
 
-  // Due date is a fixed calendar day each month; find its next occurrence after periodEnd
-  const dueCandidateSameMonth = new Date(
-    periodEndYear,
-    periodEndMonth,
-    clampDay(config.paymentDueDay, periodEndYear, periodEndMonth),
-    0, 0, 0, 0
-  );
-  let dueDate: Date;
-  if (dueCandidateSameMonth > periodEnd) {
-    dueDate = dueCandidateSameMonth;
-  } else {
-    const nextMonth = periodEndMonth === 11 ? 0 : periodEndMonth + 1;
-    const nextYear = periodEndMonth === 11 ? periodEndYear + 1 : periodEndYear;
-    dueDate = new Date(nextYear, nextMonth, clampDay(config.paymentDueDay, nextYear, nextMonth), 0, 0, 0, 0);
-  }
+  const dueDate = getDueDateForStatementClose(config.paymentDueDay, periodEnd);
 
   return {
     periodStart,
@@ -128,20 +137,7 @@ export function getPastCycles(
     const prevYear = refMonth === 0 ? refYear - 1 : refYear;
     const prevClose = cycleDate(config.billingCycleDay, prevYear, prevMonth);
     const periodStart = addDays(prevClose, 1);
-    const dueCandidateSameMonth = new Date(
-      refYear,
-      refMonth,
-      clampDay(config.paymentDueDay, refYear, refMonth),
-      0, 0, 0, 0
-    );
-    let dueDate: Date;
-    if (dueCandidateSameMonth > periodEnd) {
-      dueDate = dueCandidateSameMonth;
-    } else {
-      const nm = refMonth === 11 ? 0 : refMonth + 1;
-      const ny = refMonth === 11 ? refYear + 1 : refYear;
-      dueDate = new Date(ny, nm, clampDay(config.paymentDueDay, ny, nm), 0, 0, 0, 0);
-    }
+    const dueDate = getDueDateForStatementClose(config.paymentDueDay, periodEnd);
 
     cycles.push({
       periodStart,
@@ -222,5 +218,6 @@ export function getDueDateStatus(dueDate: Date, now?: Date): DueDateStatus {
 export function getStatementLabelForDate(date: Date, config: CardConfig): string {
   const cycle = getCurrentCycle(config, date);
   const closesLabel = format(cycle.periodEnd, "MMM d");
-  return `This will appear on your ${cycle.label} statement (closes ${closesLabel})`;
+  const dueLabel = format(cycle.dueDate, "MMM d");
+  return `Appears on your ${cycle.label} statement, closes ${closesLabel}, due ${dueLabel}`;
 }

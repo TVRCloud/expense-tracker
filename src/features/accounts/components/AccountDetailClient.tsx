@@ -33,7 +33,7 @@ export function AccountDetailClient({ id }: Props) {
     },
   });
 
-  const { data: transactions, isLoading: txLoading } = useTransactions({ accountId: id, limit: 10 });
+  const { data: transactions, isLoading: txLoading } = useTransactions({ accountId: id, limit: 10, includeUnpaidRecurring: true });
 
   useEffect(() => {
     if (!account) return;

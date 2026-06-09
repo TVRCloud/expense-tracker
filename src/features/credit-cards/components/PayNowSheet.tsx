@@ -28,8 +28,8 @@ export function PayNowSheet({ statement, account, open, onOpenChange }: PayNowSh
   const { data: allAccounts } = useAccounts();
   const qc = useQueryClient();
 
-  const statementBalance = statement.balance ?? 0;
-  const balance = Math.max(0, statementBalance - (statement.paidAmount ?? 0));
+  const statementBalance = statement.statementBalance ?? statement.balance ?? 0;
+  const balance = statement.remainingDue ?? Math.max(0, statementBalance - (statement.paidAmount ?? 0));
   const minPayment = Math.min(balance, computeMinPayment(balance, account.creditMeta?.minPaymentPct ?? 2));
 
   const [mode, setMode] = React.useState<AmountMode>("full");
@@ -59,33 +59,15 @@ export function PayNowSheet({ statement, account, open, onOpenChange }: PayNowSh
       if (!sourceAccountId) throw new Error("Select a source account");
       if (payAmount <= 0) throw new Error("Amount must be greater than zero");
 
-      // Create transfer transaction: from bank → credit card
-      const txRes = await apiClient.post<{ data: { _id: string } }>("/transactions", {
-        accountId: sourceAccountId,
-        type: "transfer",
-        amount: payAmount,
-        currency: account.currency ?? "USD",
-        category: "Transfer",
-        description: `Payment to ${account.name}`,
-        date: (payDate ?? new Date()).toISOString(),
-        transferToId: String(account._id),
-        tags: [],
-        isRecurring: false,
-      });
-
-      const txId = txRes.data.data._id;
-
-      // Mark statement as paid
+      // Server creates the linked transfer and updates the statement together.
       await apiClient.patch(
         `/credit-cards/${String(account._id)}/statements/${String(statement._id)}`,
         {
           paidAmount: payAmount,
           paidAt: (payDate ?? new Date()).toISOString(),
-          paymentTransactionId: txId,
+          sourceAccountId,
         }
       );
-
-      return txId;
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["credit-statements", String(account._id)] });

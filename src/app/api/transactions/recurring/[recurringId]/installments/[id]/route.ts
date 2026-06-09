@@ -44,6 +44,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     const { status } = parsed.data;
     const installmentBefore = installment.toObject();
     const prevStatus = installment.installmentStatus;
+    const previousPaidAt = installment.paidAt ? new Date(installment.paidAt) : undefined;
     const now = new Date();
     const installmentDate = new Date(installment.date);
 
@@ -105,12 +106,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     });
 
     if (status === "paid" && prevStatus !== "paid" && installment.type === "expense") {
-      void checkBudgetAlert(user.id, installment.category, installment.amount);
+      void checkBudgetAlert(user.id, installment.category, installment.amount, now);
     }
 
-    // Invalidate Redis cache for this installment's month
+    // Invalidate Redis cache for both schedule month and activity/payment month.
     try {
-      await redis?.del(`stats:v2:${user.id}:${installmentDate.getFullYear()}:${installmentDate.getMonth() + 1}`);
+      const cacheDates = [installmentDate, now, previousPaidAt].filter((item): item is Date => Boolean(item));
+      await Promise.all(cacheDates.map((date) =>
+        redis?.del(`stats:v2:${user.id}:${date.getFullYear()}:${date.getMonth() + 1}`)
+      ));
     } catch {
       // ignore
     }

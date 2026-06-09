@@ -83,6 +83,9 @@ export function useMarkInstallment(recurringId: string) {
       void qc.invalidateQueries({ queryKey: ["recurring-series"] });
       void qc.invalidateQueries({ queryKey: ["upcoming-installments"] });
       void qc.invalidateQueries({ queryKey: ["transactions"] });
+      void qc.invalidateQueries({ queryKey: ["accounts"] });
+      void qc.invalidateQueries({ queryKey: ["credit-summary"] });
+      void qc.invalidateQueries({ queryKey: ["credit-statements"] });
     },
   });
 }

@@ -13,6 +13,7 @@ export interface TransactionFilters {
   dateFrom?: string;
   dateTo?: string;
   hideFuture?: boolean;
+  includeUnpaidRecurring?: boolean;
   skip?: number;
   limit?: number;
 }
@@ -26,6 +27,7 @@ export function useTransactions(filters: TransactionFilters = {}) {
   if (filters.dateFrom) params.set("dateFrom", filters.dateFrom);
   if (filters.dateTo) params.set("dateTo", filters.dateTo);
   if (filters.hideFuture) params.set("hideFuture", "true");
+  if (filters.includeUnpaidRecurring) params.set("includeUnpaidRecurring", "true");
   params.set("skip", String(filters.skip ?? 0));
   params.set("limit", String(filters.limit ?? 20));
 
@@ -61,6 +63,8 @@ export function useCreateTransaction() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["transactions"] });
       void qc.invalidateQueries({ queryKey: ["accounts"] });
+      void qc.invalidateQueries({ queryKey: ["credit-summary"] });
+      void qc.invalidateQueries({ queryKey: ["credit-statements"] });
       toast.success("Transaction saved");
     },
     onError: (err: Error) => toast.error(err.message),

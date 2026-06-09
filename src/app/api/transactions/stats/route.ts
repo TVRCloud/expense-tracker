@@ -5,6 +5,7 @@ import { requireAuth } from "@/lib/auth-guard";
 import { redis } from "@/lib/redis";
 import logger from "@/lib/logger";
 import { Types } from "mongoose";
+import { activityDateAddFields } from "@/lib/transaction-activity";
 
 export async function GET(req: NextRequest) {
   try {
@@ -37,7 +38,9 @@ export async function GET(req: NextRequest) {
 
     const [agg, catAgg] = await Promise.all([
       Transaction.aggregate([
-        { $match: { user: userObjectId, isDeleted: { $ne: true }, date: { $gte: startDate, $lt: endDate }, ...paidInstallmentsOnly } },
+        { $match: { user: userObjectId, isDeleted: { $ne: true }, ...paidInstallmentsOnly } },
+        { $addFields: activityDateAddFields() },
+        { $match: { activityDate: { $gte: startDate, $lt: endDate } } },
         {
           $group: {
             _id: "$type",
@@ -46,7 +49,9 @@ export async function GET(req: NextRequest) {
         },
       ]),
       Transaction.aggregate([
-        { $match: { user: userObjectId, isDeleted: { $ne: true }, type: "expense", date: { $gte: startDate, $lt: endDate }, ...paidInstallmentsOnly } },
+        { $match: { user: userObjectId, isDeleted: { $ne: true }, type: "expense", ...paidInstallmentsOnly } },
+        { $addFields: activityDateAddFields() },
+        { $match: { activityDate: { $gte: startDate, $lt: endDate } } },
         { $group: { _id: "$category", total: { $sum: "$amount" } } },
         { $sort: { total: -1 } },
         { $limit: 10 },

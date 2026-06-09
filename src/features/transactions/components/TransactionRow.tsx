@@ -34,14 +34,17 @@ export function TransactionRow({ transaction }: Props) {
   const router = useRouter();
   const { formatCurrency } = useCurrency();
   const isIncome = transaction.type === "income";
-  const sign = isIncome ? "+" : "-";
-  const color = isIncome ? "var(--green)" : "var(--red)";
+  const isTransfer = transaction.type === "transfer";
+  const sign = isTransfer ? "" : isIncome ? "+" : "-";
+  const color = isTransfer ? "var(--violet)" : isIncome ? "var(--green)" : "var(--red)";
   const avatarBg = getAvatarColor(transaction.category);
   const initial = transaction.description?.[0]?.toUpperCase() ?? transaction.category[0].toUpperCase();
   const activityDate = getTransactionActivityDate(transaction);
   const paidRecurring = isPaidRecurringTransaction(transaction);
   const meta = paidRecurring
     ? `Paid ${format(activityDate, "d MMM yyyy")} · Due ${format(new Date(transaction.date), "d MMM yyyy")} · ${transaction.category}`
+    : isTransfer
+      ? `${format(activityDate, "d MMM yyyy")} · Transfer`
     : `${format(activityDate, "d MMM yyyy")} · ${transaction.category}`;
 
   return (

@@ -78,6 +78,9 @@ export interface ICreditStatement {
   paidAt?: string;
   paymentTransactionId?: string;
   balance?: number;    // cents — computed from transactions, not stored
+  statementBalance?: number; // cents — original closed statement amount
+  remainingDue?: number;    // cents — statementBalance minus paidAmount
+  isPayable?: boolean;
   minPayment?: number; // cents — computed
   isDeleted?: boolean;
   deletedAt?: string;

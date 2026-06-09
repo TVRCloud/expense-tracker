@@ -4,13 +4,13 @@ import Budget from "@/models/Budget";
 import Transaction from "@/models/Transaction";
 import Notification from "@/models/Notification";
 import logger from "@/lib/logger";
+import { activityDateAddFields } from "@/lib/transaction-activity";
 
-export async function checkBudgetAlert(userId: string, category: string, _amount: number) {
+export async function checkBudgetAlert(userId: string, category: string, _amount: number, activityDate = new Date()) {
   try {
     await connectDB();
-    const now = new Date();
-    const month = now.getMonth() + 1;
-    const year = now.getFullYear();
+    const month = activityDate.getMonth() + 1;
+    const year = activityDate.getFullYear();
 
     const userObjectId = new Types.ObjectId(userId);
     const budget = await Budget.findOne({
@@ -34,15 +34,20 @@ export async function checkBudgetAlert(userId: string, category: string, _amount
           isDeleted: { $ne: true },
           category,
           type: "expense",
-          date: {
-            $gte: new Date(year, month - 1, 1),
-            $lt: new Date(year, month, 1),
-          },
           // Only count paid installments toward budget
           $nor: [{
             recurringId: { $exists: true },
             installmentStatus: { $nin: ["paid"] },
           }],
+        },
+      },
+      { $addFields: activityDateAddFields() },
+      {
+        $match: {
+          activityDate: {
+            $gte: new Date(year, month - 1, 1),
+            $lt: new Date(year, month, 1),
+          },
         },
       },
       { $group: { _id: null, total: { $sum: "$amount" } } },

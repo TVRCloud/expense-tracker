@@ -14,6 +14,7 @@ import { EmiCommitmentCard } from "./EmiCommitmentCard";
 import { StatementList } from "./StatementList";
 import { CreditCardForm } from "./CreditCardForm";
 import { useRecurringSeriesList } from "@/features/recurring/hooks/useRecurringSeries";
+import { useCreditStatements } from "@/features/credit-cards/hooks/useCreditStatements";
 import { type IAccount, type ICreditMeta } from "@/types/models";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -37,7 +38,8 @@ export function CreditCardDetailClient({ id }: Props) {
   });
 
   const { data: seriesData } = useRecurringSeriesList(id);
-  const { data: transactions, isLoading: txLoading } = useTransactions({ accountId: id, limit: 10 });
+  const { data: statementsData } = useCreditStatements(id);
+  const { data: transactions, isLoading: txLoading } = useTransactions({ accountId: id, limit: 10, includeUnpaidRecurring: true });
 
   useEffect(() => {
     if (!account) return;
@@ -111,9 +113,12 @@ export function CreditCardDetailClient({ id }: Props) {
     (s: number, sr: { remainingCount: number; amount: number }) => s + sr.amount * sr.remainingCount,
     0
   );
-  // Use account.balance (paid transactions only) as the base to avoid double-counting
-  // unpaid EMI installments that also appear in statements?.currentCycle?.balance.
-  const currentBalance = Math.abs(Math.min(0, account.balance)) + emiCommitment;
+  const unbilledUsage = statementsData?.currentCycle?.unbilledUsage ?? 0;
+  const payableStatementDue = statementsData?.currentCycle?.payableStatementDue ?? 0;
+  const nextPayableStatement = (statementsData?.data ?? [])
+    .filter((statement) => (statement.remainingDue ?? 0) > 0)
+    .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0];
+  const currentBalance = unbilledUsage + payableStatementDue + emiCommitment;
 
   return (
     <div className="flex flex-col gap-5">
@@ -122,7 +127,13 @@ export function CreditCardDetailClient({ id }: Props) {
       </Link>
 
       {/* Card header / banner */}
-      <CreditCardBanner account={account} currentBalance={currentBalance} />
+      <CreditCardBanner
+        account={account}
+        currentBalance={currentBalance}
+        unbilledUsage={unbilledUsage}
+        payableStatementDue={payableStatementDue}
+        payableDueDate={nextPayableStatement?.dueDate}
+      />
 
       {/* EMI commitment summary */}
       <EmiCommitmentCard accountId={id} />

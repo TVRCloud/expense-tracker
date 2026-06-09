@@ -9,6 +9,9 @@ export interface StatementsResponse {
   data: ICreditStatement[];
   currentCycle: {
     balance: number;
+    unbilledUsage: number;
+    payableStatementDue: number;
+    totalOutstanding: number;
     minPayment: number;
     periodStart: string;
     periodEnd: string;
