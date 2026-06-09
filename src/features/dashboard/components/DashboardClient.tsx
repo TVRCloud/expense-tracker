@@ -24,16 +24,18 @@ export function DashboardClient() {
   const { data: transactions, isLoading: txnLoading } = useRecentTransactions();
   const { data: accounts, isLoading: acctLoading } = useAccounts();
 
-  const primaryAccount = accounts?.find(a => a.type !== "credit_card") ?? accounts?.[0];
+  const primaryAccount = accounts?.find(a => a.type !== "credit_card");
   const creditCardAccounts = accounts?.filter(a => a.type === "credit_card") ?? [];
-  const totalBalance = accounts?.reduce((s, a) => s + a.balance, 0) ?? 0;
+  const accountBalance = accounts
+    ?.filter((account) => account.type !== "credit_card")
+    .reduce((sum, account) => sum + account.balance, 0) ?? 0;
 
   return (
     <div>
       {/* Balance card — shown immediately, numbers fill in as queries resolve */}
       <div className="mb-5">
         <BalanceCard
-          totalBalance={totalBalance}
+          accountBalance={accountBalance}
           income={stats?.income ?? 0}
           expense={stats?.expense ?? 0}
           isLoading={statsLoading || acctLoading}
@@ -77,6 +79,12 @@ export function DashboardClient() {
               <Link href="/transactions/add" style={{ color: "var(--violet)" }}>
                 Add one
               </Link>
+            </div>
+          )}
+
+          {creditCardAccounts.length > 0 && (
+            <div className="md:hidden mt-5">
+              <CreditCardSummaryWidget />
             </div>
           )}
         </div>

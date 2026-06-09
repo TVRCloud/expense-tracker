@@ -4,7 +4,7 @@ import { ArrowDownLeft, ArrowUpRight } from "lucide-react";
 import { useCurrency } from "@/hooks/useCurrency";
 
 interface Props {
-  totalBalance: number;
+  accountBalance: number;
   income: number;
   expense: number;
   isLoading?: boolean;
@@ -19,7 +19,7 @@ function Shimmer({ w }: { w: number | string }) {
   );
 }
 
-export function BalanceCard({ totalBalance, income, expense, isLoading }: Props) {
+export function BalanceCard({ accountBalance, income, expense, isLoading }: Props) {
   const { formatCurrency } = useCurrency();
 
   return (
@@ -44,14 +44,14 @@ export function BalanceCard({ totalBalance, income, expense, isLoading }: Props)
 
       <div className="relative">
         <div className="text-[13px] font-semibold mb-3" style={{ opacity: 0.82 }}>
-          Total Balance
+          Account Balance
         </div>
 
         <div
           className="font-extrabold tnum leading-none mb-5 sm:mb-7 text-[34px] min-[390px]:text-[38px] sm:text-[44px] max-w-full overflow-hidden"
           style={{ minHeight: 44 }}
         >
-          {isLoading ? <Shimmer w={180} /> : formatCurrency(totalBalance)}
+          {isLoading ? <Shimmer w={180} /> : formatCurrency(accountBalance)}
         </div>
 
         <div

@@ -21,6 +21,10 @@ export interface CardSummary {
 
 export interface CreditSummaryResponse {
   totalDebt: number;
+  totalPayableStatementDue: number;
+  totalUnbilledUsage: number;
+  totalCreditExposure: number;
+  totalAvailableCredit: number;
   cards: CardSummary[];
 }
 
