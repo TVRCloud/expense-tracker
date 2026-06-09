@@ -3,6 +3,11 @@ import { requireAuth } from "@/lib/auth-guard";
 import { useRecoveryCode, verifyTotp, verifyTotpSetup } from "@/lib/log-security";
 import logger from "@/lib/logger";
 import { z } from "zod";
+import {
+  enforceSensitiveActionLimit,
+  getLogDeviceUnlockId,
+  getRequestUserAgent,
+} from "@/lib/log-auth-request";
 
 const schema = z.object({
   code: z.string().min(6),
@@ -25,11 +30,26 @@ export async function POST(req: NextRequest) {
     }
 
     const { code, mode } = parsed.data;
+    const limited = await enforceSensitiveActionLimit(user.id, mode, req);
+    if (limited) return limited;
+
     const result = mode === "setup"
       ? await verifyTotpSetup(user.id, code)
       : mode === "recovery"
-        ? await useRecoveryCode(user.id, user.jti, code)
-        : await verifyTotp(user.id, user.jti, code);
+        ? await useRecoveryCode(
+            user.id,
+            user.jti,
+            code,
+            getLogDeviceUnlockId(req),
+            getRequestUserAgent(req)
+          )
+        : await verifyTotp(
+            user.id,
+            user.jti,
+            code,
+            getLogDeviceUnlockId(req),
+            getRequestUserAgent(req)
+          );
 
     if (!result.ok) {
       return NextResponse.json({ error: result.reason }, { status: 400 });

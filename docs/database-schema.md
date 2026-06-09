@@ -161,7 +161,15 @@ Stores encrypted authenticator secrets and hashed recovery codes for `/logs`.
 
 ## log_unlock_sessions
 
-Short-lived TOTP unlocks tied to the active JWT session id.
+Short-lived TOTP unlocks tied to the active JWT session id and a tab-scoped device unlock id.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | ref: User |
+| `sessionJti` | String | active NextAuth JWT id |
+| `deviceHash` | String | hash of tab-scoped unlock id |
+| `userAgentHash` | String | browser user-agent hash |
+| `expiresAt` | Date | TTL; logs relock after expiry |
 
 ## pushSubscriptions
 

@@ -5,13 +5,19 @@ import { ensureLedgerBackfill, LEDGER_SCOPES } from "@/lib/ledger";
 import { isLogsUnlocked } from "@/lib/log-security";
 import logger from "@/lib/logger";
 import LedgerBlock from "@/models/LedgerBlock";
+import { getLogDeviceUnlockId, getRequestUserAgent } from "@/lib/log-auth-request";
 
 export async function GET(req: NextRequest) {
   try {
     const { user, errorResponse } = await requireAuth();
     if (errorResponse) return errorResponse;
 
-    const unlocked = await isLogsUnlocked(user.id, user.jti);
+    const unlocked = await isLogsUnlocked(
+      user.id,
+      user.jti,
+      getLogDeviceUnlockId(req),
+      getRequestUserAgent(req)
+    );
     if (!unlocked) {
       return NextResponse.json({ error: "Logs are locked" }, { status: 423 });
     }
