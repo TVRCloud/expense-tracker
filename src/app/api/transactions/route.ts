@@ -7,8 +7,8 @@ import logger from "@/lib/logger";
 import { z } from "zod";
 import { type PipelineStage, Types } from "mongoose";
 import { redis } from "@/lib/redis";
-import { addDays, addWeeks, addMonths, addYears } from "date-fns";
 import { checkBudgetAlert } from "@/lib/budget-alert";
+import { computeInstallmentDates, OPEN_ENDED_WINDOW } from "@/lib/recurrence";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { activityDateAddFields } from "@/lib/transaction-activity";
 import { getIO } from "@/lib/io";
@@ -73,28 +73,6 @@ async function invalidateStatsCacheMany(userId: string, dates: Date[]) {
   } catch {
     // Redis unavailable
   }
-}
-
-function computeInstallmentDates(
-  startDate: Date,
-  frequency: string,
-  interval: number,
-  count: number
-): Date[] {
-  const adder: (d: Date, n: number) => Date =
-    frequency === "daily" ? (d, n) => addDays(d, n) :
-    frequency === "weekly" ? (d, n) => addWeeks(d, n) :
-    frequency === "yearly" ? (d, n) => addYears(d, n) :
-    (d, n) => addMonths(d, n); // monthly default
-
-  return Array.from({ length: count }, (_, i) => adder(startDate, interval * i));
-}
-
-function defaultRecurringCount(frequency: string): number {
-  if (frequency === "daily") return 365;
-  if (frequency === "weekly") return 260;
-  if (frequency === "yearly") return 30;
-  return 120;
 }
 
 function isValidObjectId(value: string | null) {
@@ -237,8 +215,14 @@ export async function POST(req: NextRequest) {
 
     const startDate = new Date(rest.date);
     // ── Bulk-create recurring installments ──────────────────────────────────
+    // Explicit count/end-date series materialize exactly what the user asked for.
+    // Open-ended series (no count, no end date — e.g. a recurring salary) only get
+    // a small rolling window; topUpRecurringSeries() extends it as installments are consumed.
+    const isOpenEnded = Boolean(
+      rest.isRecurring && rest.recurrenceFrequency && !rest.recurrenceCount && !rest.recurrenceEndDate
+    );
     const installmentCount = rest.isRecurring && rest.recurrenceFrequency
-      ? (rest.recurrenceCount ?? defaultRecurringCount(rest.recurrenceFrequency))
+      ? (rest.recurrenceCount ?? (isOpenEnded ? OPEN_ENDED_WINDOW : 1))
       : 0;
     if (rest.isRecurring && installmentCount > 1 && rest.recurrenceFrequency) {
       const recurringId = new Types.ObjectId();
@@ -248,7 +232,8 @@ export async function POST(req: NextRequest) {
       // No balance update at creation — installments only affect balance when marked paid
       const docs = dates.map((d, i) => ({
         ...rest,
-        recurrenceCount: installmentCount,
+        recurrenceCount: isOpenEnded ? undefined : installmentCount,
+        recurrenceIsOpenEnded: isOpenEnded,
         account: accountId,
         user: user.id,
         date: d,

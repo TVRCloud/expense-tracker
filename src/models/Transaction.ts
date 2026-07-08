@@ -22,6 +22,10 @@ const TransactionSchema = new Schema(
     recurrenceCount: { type: Number },
     recurrenceEndDate: { type: Date },
     recurrenceLabel: { type: String },
+    // True when the series has no user-specified end date/count — materialized
+    // in a small rolling window (see OPEN_ENDED_WINDOW) instead of a big upfront batch.
+    recurrenceIsOpenEnded: { type: Boolean, default: false },
+    recurrenceCancelled: { type: Boolean, default: false },
     installmentIndex: { type: Number },
     installmentStatus: {
       type: String,
@@ -44,6 +48,7 @@ TransactionSchema.index({ description: "text", note: "text" });
 TransactionSchema.index({ user: 1, isDeleted: 1, recurringId: 1, installmentIndex: 1 });
 TransactionSchema.index({ user: 1, isDeleted: 1, recurringId: 1, date: 1 });
 TransactionSchema.index({ user: 1, isDeleted: 1, isRecurring: 1, installmentStatus: 1, date: 1 });
+TransactionSchema.index({ isDeleted: 1, recurrenceIsOpenEnded: 1, recurrenceCancelled: 1, recurringId: 1 });
 TransactionSchema.index({ user: 1, tags: 1 });
 
 export default models.Transaction || model("Transaction", TransactionSchema, "transactions");

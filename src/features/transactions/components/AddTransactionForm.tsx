@@ -160,10 +160,9 @@ export function AddTransactionForm() {
   const recurringSummary = useMemo(() => {
     if (!repeatEnabled) return null;
     const parts: string[] = [`${freqOption.label} from ${format(date, "MMM d, yyyy")}`];
-    if (endMode === "never" && effectiveCount) {
-      parts.push("ongoing");
-      parts.push(`${effectiveCount} upcoming payments generated`);
-      if (amountInCents > 0) parts.push(`Planned ${formatCurrency(amountInCents * effectiveCount)}`);
+    if (endMode === "never") {
+      parts.push("ongoing, no end date");
+      if (amountInCents > 0) parts.push(`${formatCurrency(amountInCents)} per ${freqOption.label.toLowerCase()}`);
     } else if (effectiveCount) {
       parts.push(`${effectiveCount} payment${effectiveCount !== 1 ? "s" : ""}`);
       if (effectiveEndDate) parts.push(`until ${format(effectiveEndDate, "MMM d, yyyy")}`);
@@ -191,7 +190,7 @@ export function AddTransactionForm() {
       isRecurring: repeatEnabled,
       recurrenceFrequency: repeatEnabled ? freqOption.frequency : undefined,
       recurrenceInterval: repeatEnabled ? freqOption.interval : undefined,
-      recurrenceCount: repeatEnabled ? effectiveCount : undefined,
+      recurrenceCount: repeatEnabled && endMode !== "never" ? effectiveCount : undefined,
       recurrenceEndDate: repeatEnabled && effectiveEndDate ? effectiveEndDate.toISOString() : undefined,
       recurrenceLabel: repeatEnabled ? recurrenceLabel || undefined : undefined,
     });
@@ -488,7 +487,7 @@ export function AddTransactionForm() {
               )}
 
               {/* Credit card total commitment */}
-              {selectedAccount?.type === "credit_card" && effectiveCount && amountInCents > 0 && (
+              {selectedAccount?.type === "credit_card" && endMode !== "never" && effectiveCount && amountInCents > 0 && (
                 <div
                   className="rounded-(--r-sm) px-3 py-2.5 text-[12px] font-medium"
                   style={{ background: "color-mix(in srgb, var(--red) 8%, transparent)", color: "var(--red)" }}

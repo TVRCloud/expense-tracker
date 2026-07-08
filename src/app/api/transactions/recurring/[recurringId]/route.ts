@@ -94,6 +94,11 @@ export async function DELETE(_req: NextRequest, { params }: { params: Params }) 
       { _id: { $in: toDelete.map(t => t._id) } },
       { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: user.id } }
     );
+    // Stop the background top-up job from regenerating this series if it was open-ended.
+    await Transaction.updateMany(
+      { user: user.id, recurringId: new Types.ObjectId(recurringId) },
+      { $set: { recurrenceCancelled: true } }
+    );
     for (const transaction of toDelete) {
       await appendLedgerBlock({
         userId: user.id,
