@@ -111,6 +111,8 @@ export interface ITransaction {
   recurrenceCount?: number;
   recurrenceEndDate?: string;
   recurrenceLabel?: string;
+  recurrenceIsOpenEnded?: boolean;
+  recurrenceCancelled?: boolean;
   installmentIndex?: number;
   installmentStatus?: "upcoming" | "paid" | "overdue" | "skipped";
   paidAt?: string;
