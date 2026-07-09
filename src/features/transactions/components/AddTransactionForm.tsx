@@ -177,7 +177,7 @@ export function AddTransactionForm() {
     const category = txType === "income" ? "income" : selectedCategory;
     const finalType = txType;
 
-    await create({
+    const result = await create({
       accountId: values.accountId,
       type: finalType,
       amount: amountInCents,
@@ -195,7 +195,11 @@ export function AddTransactionForm() {
       recurrenceLabel: repeatEnabled ? recurrenceLabel || undefined : undefined,
     });
 
-    router.push("/transactions");
+    router.push(
+      repeatEnabled && result?.recurringId
+        ? `/transactions/recurring/${result.recurringId}`
+        : "/transactions"
+    );
   });
 
   const isIncome = txType === "income";

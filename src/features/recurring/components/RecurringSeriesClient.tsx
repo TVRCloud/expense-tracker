@@ -81,6 +81,7 @@ export function RecurringSeriesClient({ recurringId }: Props) {
   }
 
   const { series, data: installments } = data;
+  const amountColor = series.type === "income" ? "var(--green)" : "var(--red)";
   const paidAmount = installments
     .filter(t => t.installmentStatus === "paid")
     .reduce((s, t) => s + t.amount, 0);
@@ -135,7 +136,7 @@ export function RecurringSeriesClient({ recurringId }: Props) {
             </div>
           </div>
           <div className="text-right flex-none">
-            <div className="text-[13px] font-bold tnum" style={{ color: "var(--red)" }}>
+            <div className="text-[13px] font-bold tnum" style={{ color: amountColor }}>
               {formatCurrency(series.amount)}<span className="font-normal text-[11px]"> /installment</span>
             </div>
             <div className="text-[11px] font-semibold mt-0.5" style={{ color: "var(--ink-3)" }}>
@@ -198,7 +199,7 @@ export function RecurringSeriesClient({ recurringId }: Props) {
               </div>
 
               {/* Amount */}
-              <div className="font-extrabold tnum text-[14px] flex-none" style={{ color: "var(--red)" }}>
+              <div className="font-extrabold tnum text-[14px] flex-none" style={{ color: amountColor }}>
                 {formatCurrency(tx.amount)}
               </div>
 

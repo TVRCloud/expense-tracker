@@ -64,6 +64,15 @@ export function TransactionsClient({ accountId }: { accountId?: string }) {
 
   return (
     <div className="flex flex-col gap-5">
+      {/* Recurring link */}
+      <Link
+        href="/transactions/recurring"
+        className="self-end inline-flex items-center gap-1.5 text-sm font-bold"
+        style={{ color: "var(--violet)" }}
+      >
+        Recurring →
+      </Link>
+
       {/* Search bar */}
       <div
         className="flex items-center gap-3 rounded-[var(--r-md)] px-4 py-3"

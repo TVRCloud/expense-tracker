@@ -47,7 +47,7 @@ export function UpcomingPaymentsWidget() {
           <RotateCcw size={15} style={{ color: "var(--violet)" }} />
           <span className="font-extrabold text-base" style={{ color: "var(--ink)" }}>Due Soon</span>
         </div>
-        <Link href="/transactions" className="text-sm font-bold" style={{ color: "var(--violet)" }}>
+        <Link href="/transactions/recurring" className="text-sm font-bold" style={{ color: "var(--violet)" }}>
           View all
         </Link>
       </div>

@@ -64,6 +64,7 @@ export async function GET(req: NextRequest) {
           _id: "$recurringId",
           label: { $first: "$recurrenceLabel" },
           amount: { $first: "$amount" },
+          type: { $first: "$type" },
           frequency: { $first: "$recurrenceFrequency" },
           interval: { $first: "$recurrenceInterval" },
           category: { $first: "$category" },
