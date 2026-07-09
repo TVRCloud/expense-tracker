@@ -1,5 +1,8 @@
 {
   "crons": [
-    { "path": "/api/cron/recurring-topup", "schedule": "0 */6 * * *" }
+    {
+      "path": "/api/cron/recurring-topup",
+      "schedule": "0 3 * * *"
+    }
   ]
 }
