@@ -4,9 +4,10 @@ import { useState } from "react";
 import { useTheme } from "next-themes";
 import { signOut } from "next-auth/react";
 import {
-  Sun, Moon, Monitor, Lock, Bell, CreditCard,
+  Sun, Moon, Monitor, Lock, Bell,
   User, LogOut, Check, ChevronRight,
 } from "lucide-react";
+import { CURRENCY_ICON } from "@/lib/icons";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -197,7 +198,7 @@ export function SettingsClient() {
 
       {/* ── Currency ────────────────────────────────────────── */}
       <Card>
-        <CardHeader icon={CreditCard} title="Currency & Preferences" />
+        <CardHeader icon={CURRENCY_ICON} title="Currency & Preferences" />
         <div className="p-5 flex flex-col gap-5">
           <div>
             <div className="text-[11px] font-bold uppercase tracking-wider mb-3" style={{ color: "var(--ink-3)" }}>

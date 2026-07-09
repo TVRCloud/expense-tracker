@@ -13,9 +13,16 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
 }
 
+export interface PushDevice {
+  endpoint: string;
+  userAgent: string | null;
+  createdAt: string;
+}
+
 export function usePushNotification() {
   const [permission, setPermission] = useState<NotificationPermission>("default");
   const [isLoading, setIsLoading] = useState(false);
+  const [myEndpoint, setMyEndpoint] = useState<string | null>(null);
 
   const isSupported =
     typeof window !== "undefined" &&
@@ -29,10 +36,17 @@ export function usePushNotification() {
     }
   }, [isSupported]);
 
+  useEffect(() => {
+    if (!isSupported || permission !== "granted") return;
+    void navigator.serviceWorker.ready
+      .then((reg) => reg.pushManager.getSubscription())
+      .then((sub) => setMyEndpoint(sub?.endpoint ?? null));
+  }, [isSupported, permission]);
+
   const { data: statusData, refetch: refetchStatus } = useQuery({
     queryKey: ["push-status"],
     queryFn: async () => {
-      const res = await apiClient.get<{ hasSubscription: boolean; count: number }>("/push/status");
+      const res = await apiClient.get<{ hasSubscription: boolean; count: number; devices: PushDevice[] }>("/push/status");
       return res.data;
     },
     enabled: isSupported && permission === "granted",
@@ -66,7 +80,9 @@ export function usePushNotification() {
       await apiClient.post("/push/subscribe", {
         endpoint: json.endpoint,
         keys: json.keys,
+        userAgent: navigator.userAgent,
       });
+      setMyEndpoint(json.endpoint);
       await refetchStatus();
     } finally {
       setIsLoading(false);
@@ -83,6 +99,7 @@ export function usePushNotification() {
         await apiClient.delete("/push/unsubscribe", { data: { endpoint: sub.endpoint } });
         await sub.unsubscribe();
       }
+      setMyEndpoint(null);
       await refetchStatus();
     } finally {
       setIsLoading(false);
@@ -90,7 +107,10 @@ export function usePushNotification() {
   }, [isSupported, refetchStatus]);
 
   const sendTestMutation = useMutation({
-    mutationFn: () => apiClient.post("/push/test"),
+    mutationFn: () => {
+      if (!myEndpoint) throw new Error("This device isn't subscribed yet");
+      return apiClient.post("/push/test", { endpoint: myEndpoint });
+    },
   });
 
   return {
@@ -98,6 +118,8 @@ export function usePushNotification() {
     isLoading: isLoading || sendTestMutation.isPending,
     subscribe,
     unsubscribe,
-    sendTest: () => sendTestMutation.mutate(),
+    sendTest: () => sendTestMutation.mutateAsync(),
+    myEndpoint,
+    devices: statusData?.devices ?? [],
   };
 }

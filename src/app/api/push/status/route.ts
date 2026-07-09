@@ -9,9 +9,20 @@ export async function GET() {
     if (errorResponse) return errorResponse;
 
     await connectDB();
-    const count = await PushSubscription.countDocuments({ user: user.id, isActive: true });
+    const subs = await PushSubscription.find({ user: user.id, isActive: true })
+      .select("endpoint userAgent createdAt")
+      .sort({ createdAt: -1 })
+      .lean();
 
-    return NextResponse.json({ hasSubscription: count > 0, count });
+    return NextResponse.json({
+      hasSubscription: subs.length > 0,
+      count: subs.length,
+      devices: subs.map((s) => ({
+        endpoint: s.endpoint,
+        userAgent: s.userAgent ?? null,
+        createdAt: s.createdAt,
+      })),
+    });
   } catch {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }

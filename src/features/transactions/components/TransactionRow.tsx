@@ -1,58 +1,28 @@
-import {
-  ChevronRight,
-  TrendingUp,
-  ShoppingCart,
-  Plane,
-  Car,
-  Repeat,
-  Heart,
-  ShoppingBag,
-  Home,
-  Dumbbell,
-  Coffee,
-  GraduationCap,
-  Wifi,
-  CreditCard,
-  ArrowLeftRight,
-  type LucideIcon,
-} from "lucide-react";
+import { ChevronRight, ArrowLeftRight, Repeat } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCurrency } from "@/hooks/useCurrency";
 import { type ITransaction } from "@/types/models";
 import { format } from "date-fns";
 import { getTransactionActivityDate, isPaidRecurringTransaction } from "../utils/activity-date";
+import { TRANSACTION_CATEGORY_ICONS } from "@/lib/icons";
 
 const CAT_COLORS: Record<string, string> = {
   income: "#4FC07E",
   groceries: "#4FC07E",
   travel: "#2D9CDB",
-  car: "#2F6BFF",
+  transport: "#2F6BFF",
   subscription: "#8B5CF6",
   health: "#2D9CDB",
   shopping: "#16A34A",
-  internet: "#3B82F6",
   rent: "#EA580C",
   gym: "#DB2777",
   other: "#6B46F5",
   coffee: "#2D6CDF",
   education: "#7C3AED",
-};
-
-const CAT_ICONS: Record<string, LucideIcon> = {
-  income: TrendingUp,
-  groceries: ShoppingCart,
-  travel: Plane,
-  car: Car,
-  subscription: Repeat,
-  health: Heart,
-  shopping: ShoppingBag,
-  rent: Home,
-  gym: Dumbbell,
-  coffee: Coffee,
-  education: GraduationCap,
-  internet: Wifi,
-  other: CreditCard,
+  entertainment: "#D6336C",
+  emi: "#7C3AED",
+  transfer: "#6B46F5",
 };
 
 function getAvatarColor(category: string) {
@@ -71,7 +41,7 @@ export function TransactionRow({ transaction }: Props) {
   const sign = isTransfer ? "" : isIncome ? "+" : "-";
   const color = isTransfer ? "var(--violet)" : isIncome ? "var(--green)" : "var(--red)";
   const catKey = transaction.category.toLowerCase();
-  const CategoryIcon = isTransfer ? ArrowLeftRight : (CAT_ICONS[catKey] ?? CreditCard);
+  const CategoryIcon = isTransfer ? ArrowLeftRight : (TRANSACTION_CATEGORY_ICONS[catKey] ?? TRANSACTION_CATEGORY_ICONS.other);
   const avatarHex = isTransfer ? null : getAvatarColor(transaction.category);
   const activityDate = getTransactionActivityDate(transaction);
   const paidRecurring = isPaidRecurringTransaction(transaction);

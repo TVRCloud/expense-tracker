@@ -11,6 +11,7 @@ const schema = z.object({
     p256dh: z.string(),
     auth: z.string(),
   }),
+  userAgent: z.string().optional(),
 });
 
 export async function POST(req: NextRequest) {

@@ -41,7 +41,7 @@ export async function checkEmiDueNotifications(userId: string): Promise<void> {
       const txId = String(tx._id);
       const dateISO = txDate.toISOString().slice(0, 10);
       const label = tx.recurrenceLabel ?? tx.description ?? tx.category;
-      const amountStr = formatCurrency(tx.amount);
+      const amountStr = formatCurrency(tx.amount, tx.currency);
       const url = tx.recurringId ? `/transactions/recurring/${String(tx.recurringId)}` : "/transactions";
 
       if (diffDays === 0) {

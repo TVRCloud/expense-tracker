@@ -4,13 +4,12 @@ import {
   User,
   Lock,
   Bell,
-  Palette,
-  CreditCard,
   LogOut,
   Shield,
   HelpCircle,
   Trash2,
 } from "lucide-react";
+import { APPEARANCE_ICON, ACCOUNTS_NAV_ICON } from "@/lib/icons";
 import { signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { BalanceBanner } from "./BalanceBanner";
@@ -82,7 +81,7 @@ export function AccountClient() {
             href="/settings/notifications"
           />
           <SettingsRow
-            icon={Palette}
+            icon={APPEARANCE_ICON}
             title="Appearance"
             subtitle="Theme and display"
             href="/settings/appearance"
@@ -92,7 +91,7 @@ export function AccountClient() {
         {/* Right column */}
         <div className="flex flex-col gap-3">
           <SettingsRow
-            icon={CreditCard}
+            icon={ACCOUNTS_NAV_ICON}
             title="Accounts"
             subtitle={`${accounts?.length ?? 0} linked accounts`}
             href="/accounts"
