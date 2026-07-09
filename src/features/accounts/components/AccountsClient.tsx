@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Archive, ChevronRight } from "lucide-react";
+import { Plus, Archive, ChevronRight, CreditCard } from "lucide-react";
 import Link from "next/link";
 import { useAccounts } from "@/features/dashboard/hooks/useDashboard";
 import { useRecurringSeriesList } from "@/features/recurring/hooks/useRecurringSeries";
@@ -14,11 +14,9 @@ import { useCurrency } from "@/hooks/useCurrency";
 import { type IAccount, type ICreditMeta } from "@/types/models";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
+import { ACCOUNT_TYPE_ICONS } from "@/lib/icons";
 
 const ACCOUNT_TYPES = ["cash", "bank", "credit_card", "savings", "investment", "wallet"] as const;
-const TYPE_ICONS: Record<string, string> = {
-  cash: "💵", bank: "🏦", credit_card: "💳", savings: "🏦", investment: "📈", wallet: "👛",
-};
 
 type FilterKey = "all" | "credit_card" | "other";
 
@@ -55,8 +53,8 @@ function CreditRow({
       className="flex items-center gap-4 rounded-[var(--r-md)] px-4 py-4 group"
       style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
     >
-      <div className="w-12 h-12 rounded-[14px] grid place-items-center text-2xl flex-none" style={{ background: "var(--card-2)" }}>
-        💳
+      <div className="w-12 h-12 rounded-[14px] grid place-items-center flex-none" style={{ background: "var(--card-2)" }}>
+        <CreditCard size={22} style={{ color: "var(--ink-2)" }} />
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
@@ -126,14 +124,15 @@ function CreditRow({
 }
 
 function RegularRow({ acc, onArchive, formatCurrency }: { acc: IAccount; onArchive: () => void; formatCurrency: (n: number) => string }) {
+  const TypeIcon = ACCOUNT_TYPE_ICONS[acc.type] ?? CreditCard;
   return (
     <Link
       href={`/accounts/${String(acc._id)}`}
       className="flex items-center gap-4 rounded-[var(--r-md)] px-4 py-4 group"
       style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
     >
-      <div className="w-12 h-12 rounded-[14px] grid place-items-center text-2xl flex-none" style={{ background: "var(--card-2)" }}>
-        {TYPE_ICONS[acc.type] ?? "💳"}
+      <div className="w-12 h-12 rounded-[14px] grid place-items-center flex-none" style={{ background: "var(--card-2)" }}>
+        <TypeIcon size={22} style={{ color: "var(--ink-2)" }} />
       </div>
       <div className="flex-1 min-w-0">
         <div className="font-bold text-sm" style={{ color: "var(--ink)" }}>{acc.name}</div>
@@ -160,14 +159,19 @@ function RegularRow({ acc, onArchive, formatCurrency }: { acc: IAccount; onArchi
 }
 
 export function AccountsClient() {
-  const { formatCurrency } = useCurrency();
+  const { formatCurrency, currency } = useCurrency();
   const qc = useQueryClient();
   const { data: accounts, isLoading } = useAccounts();
   const { data: seriesData } = useRecurringSeriesList();
   const { data: creditSummary } = useCreditSummary();
   const [filter, setFilter] = useState<FilterKey>("all");
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ name: "", type: "bank" as IAccount["type"], currency: "USD" });
+  const [form, setForm] = useState({ name: "", type: "bank" as IAccount["type"], currency });
+
+  const openAdd = () => {
+    setForm(f => ({ ...f, currency }));
+    setShowAdd(true);
+  };
   const [creditMeta, setCreditMeta] = useState<Partial<ICreditMeta>>({});
 
   // Build per-card EMI commitment map: cardId → total remaining cents
@@ -204,7 +208,7 @@ export function AccountsClient() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["accounts"] });
       setShowAdd(false);
-      setForm({ name: "", type: "bank", currency: "USD" });
+      setForm({ name: "", type: "bank", currency });
       setCreditMeta({});
       toast.success("Account created");
     },
@@ -281,7 +285,7 @@ export function AccountsClient() {
             {filter === "credit_card" ? "No credit cards yet" : filter === "other" ? "No bank accounts yet" : "No accounts yet"}
           </p>
           <button
-            onClick={() => setShowAdd(true)}
+            onClick={openAdd}
             className="text-sm font-bold px-4 py-2 rounded-full"
             style={{ background: "var(--violet)", color: "#fff" }}
           >
@@ -383,7 +387,7 @@ export function AccountsClient() {
 
       {!showAdd && (accounts ?? []).length > 0 && (
         <button
-          onClick={() => setShowAdd(true)}
+          onClick={openAdd}
           className="flex items-center justify-center gap-2 rounded-[var(--r-md)] py-3.5 text-sm font-bold"
           style={{ background: "var(--card)", color: "var(--violet)", boxShadow: "var(--shadow-sm)" }}
         >

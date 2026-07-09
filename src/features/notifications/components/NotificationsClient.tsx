@@ -7,17 +7,7 @@ import apiClient from "@/lib/api-client";
 import { type INotification } from "@/types/models";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-
-const TYPE_ICONS: Record<string, string> = {
-  budget_alert: "⚠️",
-  loan_due: "📅",
-  goal_reached: "🎯",
-  system: "📢",
-  transaction: "💳",
-  credit_due: "🗓️",
-  credit_overdue: "🚨",
-  emi_due: "📅",
-};
+import { NOTIFICATION_TYPE_ICONS, NOTIFICATION_TYPE_COLORS } from "@/lib/icons";
 
 function useNotifications() {
   return useQuery<{ data: INotification[]; unreadCount: number }>({
@@ -111,10 +101,13 @@ export function NotificationsClient() {
             >
               {/* Icon */}
               <div
-                className="w-10 h-10 rounded-full grid place-items-center text-xl flex-none mt-0.5"
+                className="w-10 h-10 rounded-full grid place-items-center flex-none mt-0.5"
                 style={{ background: "var(--card-2)" }}
               >
-                {TYPE_ICONS[n.type] ?? "🔔"}
+                {(() => {
+                  const TypeIcon = NOTIFICATION_TYPE_ICONS[n.type] ?? Bell;
+                  return <TypeIcon size={18} style={{ color: NOTIFICATION_TYPE_COLORS[n.type] ?? "var(--ink-2)" }} />;
+                })()}
               </div>
 
               {/* Content */}

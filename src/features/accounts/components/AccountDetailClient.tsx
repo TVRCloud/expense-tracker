@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Archive, Save, Wallet } from "lucide-react";
+import { ArrowLeft, Archive, Save, CreditCard } from "lucide-react";
+import { ACCOUNT_TYPE_ICONS } from "@/lib/icons";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -23,7 +24,7 @@ export function AccountDetailClient({ id }: Props) {
   const qc = useQueryClient();
   const { formatCurrency } = useCurrency();
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ name: "", color: "", icon: "" });
+  const [form, setForm] = useState({ name: "", color: "" });
 
   const { data: account, isLoading, isError } = useQuery<IAccount>({
     queryKey: ["accounts", id],
@@ -40,7 +41,6 @@ export function AccountDetailClient({ id }: Props) {
     setForm({
       name: account.name ?? "",
       color: account.color ?? "",
-      icon: account.icon ?? "",
     });
   }, [account]);
 
@@ -49,7 +49,6 @@ export function AccountDetailClient({ id }: Props) {
       apiClient.patch(`/accounts/${id}`, {
         name: form.name,
         color: form.color || undefined,
-        icon: form.icon || undefined,
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["accounts"] });
@@ -110,10 +109,13 @@ export function AccountDetailClient({ id }: Props) {
       <section className="rounded-(--r-lg) p-5" style={{ background: "var(--card)", boxShadow: "var(--shadow)" }}>
         <div className="flex items-start gap-4">
           <div
-            className="w-14 h-14 rounded-2xl grid place-items-center text-2xl flex-none"
+            className="w-14 h-14 rounded-2xl grid place-items-center flex-none"
             style={{ background: account.color || "var(--card-2)", color: account.color ? "#fff" : "var(--violet)" }}
           >
-            {account.icon || <Wallet size={26} />}
+            {(() => {
+              const TypeIcon = ACCOUNT_TYPE_ICONS[account.type] ?? CreditCard;
+              return <TypeIcon size={26} />;
+            })()}
           </div>
           <div className="min-w-0">
             <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
@@ -154,10 +156,6 @@ export function AccountDetailClient({ id }: Props) {
             <label className="flex flex-col gap-1.5">
               <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Color</span>
               <input value={form.color} onChange={(e) => setForm((f) => ({ ...f, color: e.target.value }))} placeholder="#6B46F5" className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
-            </label>
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Icon</span>
-              <input value={form.icon} onChange={(e) => setForm((f) => ({ ...f, icon: e.target.value }))} placeholder="Wallet" className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
             </label>
             <button
               onClick={() => updateAccount.mutate()}

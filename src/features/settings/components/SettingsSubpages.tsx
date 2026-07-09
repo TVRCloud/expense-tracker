@@ -4,12 +4,13 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useTheme } from "next-themes";
-import { ArrowLeft, Bell, BellOff, Check, HelpCircle, Lock, Monitor, Moon, Shield, Sun, User } from "lucide-react";
+import { ArrowLeft, Bell, BellOff, Check, HelpCircle, Lock, Monitor, Moon, Shield, Smartphone, Sun, User } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useChangePassword, useProfile, useUpdatePreferences, useUpdateProfile } from "@/features/settings/hooks/useProfile";
 import { usePushNotification, type PushStatus } from "@/features/settings/hooks/usePushNotification";
+import { parseDeviceLabel } from "@/lib/device-label";
 
 function PageShell({
   title,
@@ -201,17 +202,41 @@ export function NotificationSettingsPage() {
               )}
 
               {push.status === "enabled" && (
-                <button
-                  onClick={() => {
-                    push.sendTest();
-                    toast.info("Test notification sent");
-                  }}
-                  disabled={push.isLoading}
-                  className="self-start text-xs font-semibold px-3 py-1.5 rounded-(--r-sm) transition-opacity disabled:opacity-50"
-                  style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
-                >
-                  Send test notification
-                </button>
+                <>
+                  <button
+                    onClick={() => {
+                      toast.promise(push.sendTest(), {
+                        loading: "Sending test notification to this device...",
+                        success: "Sent — check this device for the notification",
+                        error: (err: Error) => err.message,
+                      });
+                    }}
+                    disabled={push.isLoading || !push.myEndpoint}
+                    className="self-start text-xs font-semibold px-3 py-1.5 rounded-(--r-sm) transition-opacity disabled:opacity-50"
+                    style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
+                  >
+                    Send test notification to this device
+                  </button>
+
+                  {push.devices.length > 0 && (
+                    <div className="flex flex-col gap-1.5 mt-1">
+                      <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
+                        Subscribed devices
+                      </div>
+                      {push.devices.map((d) => (
+                        <div key={d.endpoint} className="flex items-center gap-2 text-xs" style={{ color: "var(--ink-2)" }}>
+                          <Smartphone size={13} style={{ color: "var(--ink-3)" }} />
+                          {parseDeviceLabel(d.userAgent)}
+                          {d.endpoint === push.myEndpoint && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: "color-mix(in srgb, var(--violet) 15%, transparent)", color: "var(--violet)" }}>
+                              this device
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </div>
 

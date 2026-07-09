@@ -1,9 +1,9 @@
 "use client";
 
 import { format } from "date-fns";
-import { CheckCircle, AlertCircle, Clock } from "lucide-react";
 import { type ICreditStatement } from "@/types/models";
 import { useCurrency } from "@/hooks/useCurrency";
+import { STATEMENT_STATUS_ICONS } from "@/lib/icons";
 
 interface StatementRowProps {
   statement: ICreditStatement;
@@ -11,10 +11,10 @@ interface StatementRowProps {
 }
 
 const STATUS_CONFIG = {
-  paid: { icon: CheckCircle, color: "var(--green)", label: "Paid", bg: "rgba(79,192,126,.1)" },
-  overdue: { icon: AlertCircle, color: "var(--red)", label: "Overdue", bg: "rgba(235,87,87,.1)" },
-  closed: { icon: Clock, color: "#f59e0b", label: "Unpaid", bg: "rgba(245,158,11,.1)" },
-  open: { icon: Clock, color: "var(--ink-3)", label: "Open", bg: "var(--card-2)" },
+  paid: { icon: STATEMENT_STATUS_ICONS.paid, color: "var(--green)", label: "Paid", bg: "rgba(79,192,126,.1)" },
+  overdue: { icon: STATEMENT_STATUS_ICONS.overdue, color: "var(--red)", label: "Overdue", bg: "rgba(235,87,87,.1)" },
+  closed: { icon: STATEMENT_STATUS_ICONS.closed, color: "#f59e0b", label: "Unpaid", bg: "rgba(245,158,11,.1)" },
+  open: { icon: STATEMENT_STATUS_ICONS.open, color: "var(--ink-3)", label: "Open", bg: "var(--card-2)" },
 };
 
 export function StatementRow({ statement, onPayNow }: StatementRowProps) {
