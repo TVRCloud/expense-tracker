@@ -9,6 +9,7 @@ export interface RecurringSeries {
   label?: string;
   description?: string;
   amount: number;
+  type: "income" | "expense" | "transfer";
   frequency: string;
   interval: number;
   category: string;
@@ -28,6 +29,7 @@ interface SeriesDetail {
     label?: string;
     description?: string;
     category: string;
+    type: "income" | "expense" | "transfer";
     amount: number;
     frequency: string;
     interval: number;

@@ -53,6 +53,7 @@ export async function GET(_req: NextRequest, { params }: { params: Params }) {
         label: first.recurrenceLabel,
         description: first.description,
         category: first.category,
+        type: first.type,
         amount: first.amount,
         frequency: first.recurrenceFrequency,
         interval: first.recurrenceInterval,
