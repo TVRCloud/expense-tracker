@@ -57,8 +57,12 @@ export function TransactionRow({ transaction }: Props) {
       tabIndex={0}
       onClick={() => router.push(`/transactions/${transaction._id}`)}
       onKeyDown={e => e.key === "Enter" && router.push(`/transactions/${transaction._id}`)}
-      className="flex items-center gap-4 rounded-(--r-md) px-4 py-3.5 transition-all hover:-translate-y-0.5 active:scale-[0.99] cursor-pointer"
-      style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
+      className="group flex items-center gap-3.5 sm:gap-4 rounded-(--r-md) px-3.5 sm:px-4 py-3 sm:py-3.5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98] cursor-pointer"
+      style={{
+        background: "var(--card)",
+        border: "1px solid var(--glass-border)",
+        boxShadow: "var(--shadow-sm)",
+      }}
     >
       {/* Avatar — category icon with tinted bg */}
       {isTransfer ? (

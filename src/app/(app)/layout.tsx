@@ -2,6 +2,8 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { BottomNav } from "@/components/layout/BottomNav";
 import { MobileHeader } from "@/components/layout/MobileHeader";
 import { DesktopTopbar } from "@/components/layout/DesktopTopbar";
+import { PageTransition } from "@/components/shared/PageTransition";
+import { PushBannerPrompt } from "@/components/shared/PushBannerPrompt";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -22,7 +24,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           }}
         >
           <div className="min-w-0" style={{ maxWidth: "var(--maxw)", width: "100%" }}>
-            {children}
+            <PushBannerPrompt />
+            <PageTransition>{children}</PageTransition>
           </div>
         </main>
       </div>

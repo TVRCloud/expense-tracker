@@ -24,12 +24,12 @@ export function BalanceCard({ accountBalance, income, expense, isLoading }: Prop
 
   return (
     <div
-      className="relative overflow-hidden rounded-(--r-lg) text-white p-5 sm:p-7"
+      className="relative overflow-hidden rounded-(--r-lg) text-white p-4.5 min-[390px]:p-6 sm:p-7"
       style={{
         background:
           "linear-gradient(145deg, var(--hero-from) 0%, var(--hero-mid1) 30%, var(--hero-mid2) 65%, var(--hero-to) 100%)",
-        boxShadow: "0 24px 56px rgba(13,7,40,.50)",
-        minHeight: 220,
+        boxShadow: "0 20px 48px rgba(13,7,40,.45)",
+        minHeight: 200,
       }}
     >
       {/* Dot-grid mesh texture */}
@@ -54,10 +54,10 @@ export function BalanceCard({ accountBalance, income, expense, isLoading }: Prop
         aria-hidden
         className="absolute rounded-[4px]"
         style={{
-          width: 34,
-          height: 26,
-          top: 20,
-          right: 20,
+          width: 32,
+          height: 24,
+          top: 18,
+          right: 18,
           background: "linear-gradient(135deg, #d4af37 0%, #f5e08a 45%, #b8860b 100%)",
           boxShadow: "0 2px 8px rgba(0,0,0,.30)",
           opacity: 0.88,
@@ -65,13 +65,13 @@ export function BalanceCard({ accountBalance, income, expense, isLoading }: Prop
       />
 
       <div className="relative">
-        <div className="text-[10px] font-bold uppercase tracking-widest mb-1" style={{ opacity: 0.55 }}>
+        <div className="text-[10px] font-bold uppercase tracking-widest mb-1 opacity-70">
           Total Balance
         </div>
 
         <div
-          className="font-extrabold tnum leading-none mb-4 text-[34px] min-[390px]:text-[38px] sm:text-[44px] max-w-full overflow-hidden"
-          style={{ minHeight: 44 }}
+          className="font-extrabold tnum leading-none mb-4 text-[28px] min-[370px]:text-[32px] min-[410px]:text-[36px] sm:text-[44px] max-w-full overflow-hidden truncate"
+          style={{ minHeight: 40 }}
         >
           {isLoading ? <Shimmer w={180} /> : formatCurrency(accountBalance)}
         </div>

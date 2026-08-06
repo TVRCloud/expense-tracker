@@ -3,72 +3,73 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutDashboard, ArrowLeftRight, Plus, BarChart2, Wallet } from "lucide-react";
+import { motion } from "framer-motion";
 
 const ITEMS = [
   { href: "/dashboard", label: "Home", icon: LayoutDashboard },
-  { href: "/transactions", label: "Transactions", icon: ArrowLeftRight },
+  { href: "/transactions", label: "History", icon: ArrowLeftRight },
   { href: "/transactions/add", label: "Add", icon: Plus, fab: true },
   { href: "/analytics", label: "Analytics", icon: BarChart2 },
-  { href: "/accounts", label: "Accounts", icon: Wallet },
+  { href: "/accounts", label: "Wallet", icon: Wallet },
 ];
 
 export function BottomNav() {
   const pathname = usePathname();
 
   return (
-    <nav
-      className="fixed left-0 right-0 bottom-0 z-40 grid md:hidden"
-      style={{
-        gridTemplateColumns: "repeat(5,1fr)",
-        alignItems: "end",
-        padding: "10px 14px calc(14px + env(safe-area-inset-bottom))",
-        background: "var(--card)",
-        backdropFilter: "var(--glass-blur)",
-        WebkitBackdropFilter: "var(--glass-blur)",
-        borderTop: "1px solid var(--glass-border)",
-        boxShadow: "0 -8px 30px rgba(28,18,68,.10), 0 -1px 0 rgba(200,196,220,0.22)",
-      }}
-    >
-      {ITEMS.map(({ href, label, icon: Icon, fab }) => {
-        if (fab) {
+    <div className="fixed left-0 right-0 bottom-0 z-40 md:hidden pointer-events-none pb-[calc(8px+env(safe-area-inset-bottom,0px))] px-4">
+      <nav
+        className="pointer-events-auto max-w-[420px] mx-auto flex items-center justify-around rounded-[26px] p-1.5"
+        style={{
+          background: "var(--card)",
+          backdropFilter: "blur(28px) saturate(180%)",
+          WebkitBackdropFilter: "blur(28px) saturate(180%)",
+          border: "1px solid var(--glass-border)",
+          boxShadow: "0 16px 40px rgba(0,0,0,0.18), 0 2px 10px rgba(0,0,0,0.08)",
+        }}
+      >
+        {ITEMS.map(({ href, label, icon: Icon, fab }) => {
+          if (fab) {
+            return (
+              <Link
+                key={href}
+                href={href}
+                className="relative -top-5 w-13 h-13 rounded-full grid place-items-center text-white shrink-0 active:scale-95 transition-transform"
+                style={{
+                  background: "var(--fab)",
+                  color: "var(--fab-ink)",
+                  boxShadow: "0 10px 24px rgba(0,0,0,0.30), 0 0 0 4px var(--bg)",
+                }}
+                aria-label="Add transaction"
+              >
+                <Icon size={24} />
+              </Link>
+            );
+          }
+
+          const active = pathname === href || (href !== "/dashboard" && pathname.startsWith(href + "/"));
+
           return (
             <Link
               key={href}
               href={href}
-              className="w-15 h-15 rounded-full grid place-items-center mx-auto text-white"
-              style={{
-                background: "var(--fab)",
-                boxShadow: "0 12px 26px rgba(0,0,0,.45), 0 0 0 4px rgba(212,168,67,.16)",
-                border: "4px solid var(--bg)",
-                marginTop: "-34px",
-              }}
+              className="relative flex flex-col items-center justify-center py-2 px-3 min-w-[60px] text-[10.5px] font-bold transition-transform active:scale-95"
+              style={{ color: active ? "var(--ink)" : "var(--ink-3)" }}
             >
-              <Icon size={26} />
+              {active && (
+                <motion.div
+                  layoutId="mobile-floating-pill"
+                  className="absolute inset-0 rounded-[20px]"
+                  style={{ background: "color-mix(in srgb, var(--violet) 12%, transparent)" }}
+                  transition={{ type: "spring", stiffness: 420, damping: 30 }}
+                />
+              )}
+              <Icon size={20} className="relative z-10 mb-0.5" />
+              <span className="relative z-10 tracking-tight">{label}</span>
             </Link>
           );
-        }
-        const active = pathname === href || (href !== "/dashboard" && pathname.startsWith(href + "/"));
-        return (
-          <Link
-            key={href}
-            href={href}
-            className="flex flex-col items-center gap-1 text-[11px] font-semibold transition-colors"
-            style={{ color: active ? "var(--ink)" : "var(--ink-3)" }}
-          >
-            <div
-              className="w-10 h-8 rounded-[10px] grid place-items-center transition-all"
-              style={{
-                background: active
-                  ? "var(--card-2)"
-                  : "transparent",
-              }}
-            >
-              <Icon size={22} />
-            </div>
-            <span>{label}</span>
-          </Link>
-        );
-      })}
-    </nav>
+        })}
+      </nav>
+    </div>
   );
 }

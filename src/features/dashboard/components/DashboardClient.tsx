@@ -8,6 +8,7 @@ import { CreditCardSummaryWidget } from "@/features/credit-cards/components/Cred
 import { UpcomingPaymentsWidget } from "@/features/recurring/components/UpcomingPaymentsWidget";
 import { TransactionRow } from "@/features/transactions/components/TransactionRow";
 import { useCurrency } from "@/hooks/useCurrency";
+import { StaggerContainer, StaggerItem } from "@/components/shared/StaggerContainer";
 
 
 function SkeletonCard({ h = 110 }: { h?: number }) {
@@ -66,11 +67,13 @@ export function DashboardClient() {
               {[0, 1, 2, 3, 4].map((i) => <SkeletonCard key={i} h={70} />)}
             </div>
           ) : transactions?.length ? (
-            <div className="flex flex-col gap-3">
+            <StaggerContainer className="flex flex-col gap-3">
               {transactions.map((t) => (
-                <TransactionRow key={t._id} transaction={t} />
+                <StaggerItem key={t._id}>
+                  <TransactionRow transaction={t} />
+                </StaggerItem>
               ))}
-            </div>
+            </StaggerContainer>
           ) : (
             <div
               className="rounded-(--r-md) p-8 text-center font-semibold text-sm"

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { useTheme } from "next-themes";
+import { motion } from "framer-motion";
 import {
   LayoutDashboard,
   ArrowLeftRight,
@@ -116,8 +117,8 @@ export function Sidebar() {
                     key={href}
                     href={href}
                     className={cn(
-                      "relative flex items-center gap-3 px-4 py-2.5 rounded-[14px] font-semibold text-[14.5px] transition-all",
-                      active ? "text-(--ink)" : "hover:text-(--ink)"
+                      "relative flex items-center gap-3 px-4 py-2.5 rounded-[14px] font-semibold text-[14.5px] transition-all duration-200 active:scale-[0.98]",
+                      active ? "text-(--ink)" : "hover:text-(--ink) hover:bg-(--card-2)/50"
                     )}
                     style={
                       active
@@ -126,12 +127,14 @@ export function Sidebar() {
                     }
                   >
                     {active && (
-                      <span
+                      <motion.span
+                        layoutId="sidebar-active-indicator"
                         className="absolute left-0 rounded-r-full"
                         style={{ width: 3, top: 8, bottom: 8, background: "var(--amber)" }}
+                        transition={{ type: "spring", stiffness: 380, damping: 30 }}
                       />
                     )}
-                    <Icon size={20} />
+                    <Icon size={20} className="transition-transform duration-200 group-hover:scale-105" />
                     <span>{itemLabel}</span>
                   </Link>
                 );

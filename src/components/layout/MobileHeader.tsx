@@ -33,10 +33,13 @@ export function MobileHeader() {
 
   return (
     <header
-      className="md:hidden"
+      className="md:hidden sticky top-0 z-30 transition-all duration-200"
       style={{
-        background: `linear-gradient(180deg, var(--hdr-1) 0%, var(--hdr-2) 52%, var(--bg) 100%)`,
-        padding: "16px 20px 20px",
+        background: "var(--card)",
+        backdropFilter: "blur(24px) saturate(180%)",
+        WebkitBackdropFilter: "blur(24px) saturate(180%)",
+        borderBottom: "1px solid var(--glass-border)",
+        padding: "12px 18px",
       }}
     >
       <div className="flex items-center justify-between">
@@ -44,12 +47,11 @@ export function MobileHeader() {
         {isHome ? (
           <button
             onClick={() => router.push("/settings")}
-            className="w-11 h-11 rounded-full grid place-items-center text-white font-bold text-base flex-none"
+            className="w-10 h-10 rounded-full grid place-items-center text-white font-bold text-sm shrink-0 active:scale-95 transition-transform"
             style={{
               background: "var(--fab)",
               color: "var(--fab-ink)",
               boxShadow: "var(--shadow-sm)",
-              fontSize: 16,
             }}
           >
             {userInitial}
@@ -57,25 +59,25 @@ export function MobileHeader() {
         ) : (
           <button
             onClick={() => router.back()}
-            className="w-11 h-11 rounded-full grid place-items-center"
-            style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
+            className="w-10 h-10 rounded-full grid place-items-center active:scale-95 transition-transform"
+            style={{ background: "var(--card-2)", color: "var(--ink)" }}
           >
-            <ChevronLeft size={21} />
+            <ChevronLeft size={20} />
           </button>
         )}
 
         {/* Center: greeting on home, page title elsewhere */}
         {isHome ? (
-          <div className="text-left">
-            <div className="text-[12px] font-medium" style={{ color: "var(--ink-2)" }}>
+          <div className="text-left flex-1 px-3">
+            <div className="text-[11px] font-medium tracking-tight" style={{ color: "var(--ink-2)" }}>
               {greeting}
             </div>
-            <div className="font-extrabold text-[18px] leading-tight" style={{ color: "var(--ink)" }}>
+            <div className="font-extrabold text-[16.5px] leading-tight truncate" style={{ color: "var(--ink)" }}>
               {userName || "there"}
             </div>
           </div>
         ) : (
-          <span className="font-extrabold text-[22px]" style={{ color: "var(--ink)" }}>
+          <span className="font-extrabold text-[18px] tracking-tight truncate flex-1 text-center px-2" style={{ color: "var(--ink)" }}>
             {title}
           </span>
         )}
@@ -83,10 +85,10 @@ export function MobileHeader() {
         {/* Right: notifications bell */}
         <button
           onClick={() => router.push("/notifications")}
-          className="w-11 h-11 rounded-full grid place-items-center"
-          style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
+          className="w-10 h-10 rounded-full grid place-items-center shrink-0 active:scale-95 transition-transform"
+          style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
         >
-          <Bell size={21} />
+          <Bell size={19} />
         </button>
       </div>
     </header>
