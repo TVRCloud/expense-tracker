@@ -18,7 +18,7 @@ export function useDashboardStats() {
     void qc.invalidateQueries({ queryKey: ["transactions", "stats"] });
     void qc.invalidateQueries({ queryKey: ["accounts"] });
   }, [qc]);
-  useSocket("data:changed", onDataChanged);
+  useSocket("data-changed", onDataChanged);
 
   return useQuery<TransactionStats>({
     queryKey: ["transactions", "stats", month, year],
@@ -36,7 +36,7 @@ export function useRecentTransactions(limit = 6) {
   const onDataChanged = useCallback(() => {
     void qc.invalidateQueries({ queryKey: ["transactions", "recent"] });
   }, [qc]);
-  useSocket("data:changed", onDataChanged);
+  useSocket("data-changed", onDataChanged);
 
   return useQuery<ITransaction[]>({
     queryKey: ["transactions", "recent", limit],

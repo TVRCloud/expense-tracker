@@ -25,7 +25,7 @@ export function useTransactions(filters: TransactionFilters = {}) {
   const onDataChanged = useCallback(() => {
     void qc.invalidateQueries({ queryKey: ["transactions"] });
   }, [qc]);
-  useSocket("data:changed", onDataChanged);
+  useSocket("data-changed", onDataChanged);
 
   const params = new URLSearchParams();
   if (filters.type) params.set("type", filters.type);
