@@ -115,7 +115,7 @@ export function SettingsClient() {
   const [showPw, setShowPw] = useState(false);
   const [pwForm, setPwForm] = useState({ current: "", next: "", confirm: "" });
 
-  const currency = profile?.preferences?.currency ?? "USD";
+  const currency = profile?.preferences?.currency ?? "INR";
   const language = profile?.preferences?.language ?? "en";
   const weekStart = String(profile?.preferences?.weekStartsOn ?? 1);
   const pushOn = profile?.preferences?.pushNotifications ?? false;

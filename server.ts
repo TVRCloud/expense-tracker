@@ -4,8 +4,6 @@ loadEnvConfig(process.cwd(), process.env.NODE_ENV !== "production");
 import { createServer } from "http";
 import { parse } from "url";
 import next from "next";
-import { Server } from "socket.io";
-import { setIO } from "./src/lib/io";
 import { runReminderChecks } from "./src/lib/reminder-scheduler";
 import { topUpRecurringSeries } from "./src/lib/recurring-topup";
 
@@ -20,31 +18,6 @@ app.prepare().then(() => {
   const httpServer = createServer((req, res) => {
     const parsedUrl = parse(req.url ?? "", true);
     void handle(req, res, parsedUrl);
-  });
-
-  const io = new Server(httpServer, {
-    path: "/api/socket",
-    cors: {
-      origin: process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
-      credentials: true,
-    },
-  });
-
-  setIO(io);
-
-  io.on("connection", (socket) => {
-    const userId = socket.handshake.auth.userId as string | undefined;
-    if (userId) {
-      void socket.join(`user:${userId}`);
-    }
-
-    socket.on("join:admin", () => {
-      void socket.join("admin:all");
-    });
-
-    socket.on("disconnect", () => {
-      // cleanup handled automatically
-    });
   });
 
   httpServer.listen(port, () => {

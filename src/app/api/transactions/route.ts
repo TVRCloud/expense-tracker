@@ -11,13 +11,12 @@ import { checkBudgetAlert } from "@/lib/budget-alert";
 import { computeInstallmentDates, OPEN_ENDED_WINDOW } from "@/lib/recurrence";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { activityDateAddFields } from "@/lib/transaction-activity";
-import { getIO } from "@/lib/io";
 
 const createSchema = z.object({
   accountId: z.string(),
   type: z.enum(["income", "expense", "transfer"]),
   amount: z.number().int().positive(),
-  currency: z.string().default("USD"),
+  currency: z.string().default("INR"),
   category: z.string().min(1),
   subcategory: z.string().optional(),
   description: z.string().optional(),
@@ -324,7 +323,6 @@ export async function POST(req: NextRequest) {
     }
 
     logger.info({ userId: user.id, transactionId: transaction._id.toString() }, "Transaction created");
-    getIO()?.to(`user:${user.id}`).emit("data:changed", { resource: "transactions" });
     return NextResponse.json({ data: transaction }, { status: 201 });
   } catch (err) {
     logger.error({ err }, "POST /api/transactions failed");

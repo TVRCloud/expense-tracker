@@ -10,7 +10,7 @@ const AccountSchema = new Schema(
       required: true,
     },
     balance: { type: Number, default: 0 }, // stored in cents
-    currency: { type: String, default: "USD" },
+    currency: { type: String, default: "INR" },
     color: { type: String },
     icon: { type: String },
     isArchived: { type: Boolean, default: false },

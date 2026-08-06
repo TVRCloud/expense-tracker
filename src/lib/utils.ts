@@ -5,8 +5,8 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-/** Format integer cents to a display string: 484500 → "$4,845.00" */
-export function formatCurrency(cents: number, currency = "USD"): string {
+/** Format integer cents to a display string: 484500 → "₹4,845.00" */
+export function formatCurrency(cents: number, currency = "INR"): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,
@@ -15,8 +15,8 @@ export function formatCurrency(cents: number, currency = "USD"): string {
   }).format(cents / 100);
 }
 
-/** Format a compact amount for display: 484500 → "$4.8k" */
-export function formatCurrencyCompact(cents: number, currency = "USD"): string {
+/** Format a compact amount for display: 484500 → "₹4.8k" */
+export function formatCurrencyCompact(cents: number, currency = "INR"): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,

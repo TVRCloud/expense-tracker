@@ -7,7 +7,7 @@ const LoanSchema = new Schema(
     counterparty: { type: String, required: true },
     principalAmount: { type: Number, required: true }, // cents
     remainingAmount: { type: Number, required: true }, // cents
-    currency: { type: String, default: "USD" },
+    currency: { type: String, default: "INR" },
     interestRate: { type: Number },
     startDate: { type: Date, required: true },
     dueDate: { type: Date },

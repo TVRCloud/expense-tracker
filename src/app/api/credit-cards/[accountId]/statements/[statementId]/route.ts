@@ -191,7 +191,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
         account: parsed.data.sourceAccountId,
         type: "transfer",
         amount: parsed.data.paidAmount,
-        currency: cardAccount.currency ?? "USD",
+        currency: cardAccount.currency ?? "INR",
         category: "Transfer",
         description: `Payment to ${cardAccount.name}`,
         date: paymentDate,

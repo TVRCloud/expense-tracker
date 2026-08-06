@@ -6,7 +6,7 @@ const GoalSchema = new Schema(
     name: { type: String, required: true },
     targetAmount: { type: Number, required: true }, // cents
     savedAmount: { type: Number, default: 0 }, // cents
-    currency: { type: String, default: "USD" },
+    currency: { type: String, default: "INR" },
     targetDate: { type: Date },
     category: { type: String },
     icon: { type: String },

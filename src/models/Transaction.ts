@@ -6,7 +6,7 @@ const TransactionSchema = new Schema(
     account: { type: Schema.Types.ObjectId, ref: "Account", required: true },
     type: { type: String, enum: ["income", "expense", "transfer"], required: true },
     amount: { type: Number, required: true }, // cents, always positive
-    currency: { type: String, default: "USD" },
+    currency: { type: String, default: "INR" },
     category: { type: String, required: true },
     subcategory: { type: String },
     description: { type: String },

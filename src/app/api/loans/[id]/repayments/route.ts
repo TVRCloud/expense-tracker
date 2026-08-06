@@ -142,7 +142,7 @@ export async function POST(req: NextRequest, { params }: { params: Params }) {
         account: parsed.data.accountId,
         type,
         amount: parsed.data.amount,
-        currency: loan.currency ?? "USD",
+        currency: loan.currency ?? "INR",
         category: "loan_repayment",
         description: loan.direction === "given"
           ? `Repayment from ${loan.counterparty}`

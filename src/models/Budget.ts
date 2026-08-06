@@ -7,7 +7,7 @@ const BudgetSchema = new Schema(
     month: { type: Number, required: true, min: 1, max: 12 },
     year: { type: Number, required: true },
     limitAmount: { type: Number, required: true }, // cents
-    currency: { type: String, default: "USD" },
+    currency: { type: String, default: "INR" },
     alertAt: { type: Number, default: 80 }, // percent threshold
     isActive: { type: Boolean, default: true },
     isDeleted: { type: Boolean, default: false },

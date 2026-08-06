@@ -1,5 +1,5 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useProfile } from "@/features/settings/hooks/useProfile";
 import {
   formatCurrency as _fmt,
@@ -9,19 +9,25 @@ import {
 const KEY = "fos:currency";
 
 function readLocal(): string {
-  if (typeof window === "undefined") return "USD";
-  try { return localStorage.getItem(KEY) ?? "USD"; } catch { return "USD"; }
+  try { return localStorage.getItem(KEY) ?? "INR"; } catch { return "INR"; }
 }
 
 export function useCurrency() {
   const { data: profile } = useProfile();
-  // Use profile data when available; localStorage fills the gap before it loads
-  const currency = profile?.preferences?.currency ?? readLocal();
+  // Always render "INR" on server + first client pass to match hydration;
+  // swap to real value (localStorage or profile) after mount.
+  const [localCurrency, setLocalCurrency] = useState("INR");
+
+  useEffect(() => {
+    setLocalCurrency(readLocal());
+  }, []);
 
   useEffect(() => {
     const c = profile?.preferences?.currency;
     if (c) { try { localStorage.setItem(KEY, c); } catch { /* ignore */ } }
   }, [profile?.preferences?.currency]);
+
+  const currency = profile?.preferences?.currency ?? localCurrency;
 
   return {
     currency,

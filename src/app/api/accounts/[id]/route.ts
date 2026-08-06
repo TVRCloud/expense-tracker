@@ -5,7 +5,6 @@ import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
 import { appendLedgerBlock } from "@/lib/ledger";
-import { getIO } from "@/lib/io";
 
 const creditMetaSchema = z.object({
   creditLimit: z.number().int().positive().optional(),
@@ -76,7 +75,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
       after: account,
       actor: user,
     });
-    getIO()?.to(`user:${user.id}`).emit("data:changed", { resource: "accounts" });
     return NextResponse.json({ data: account });
   } catch (err) {
     logger.error({ err }, "PATCH /api/accounts/[id] failed");
@@ -109,7 +107,6 @@ export async function DELETE(_req: NextRequest, { params }: { params: Params }) 
       after: account,
       actor: user,
     });
-    getIO()?.to(`user:${user.id}`).emit("data:changed", { resource: "accounts" });
     return NextResponse.json({ data: { message: "Account archived" } });
   } catch (err) {
     logger.error({ err }, "DELETE /api/accounts/[id] failed");

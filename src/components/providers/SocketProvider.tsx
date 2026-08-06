@@ -1,44 +1,67 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
-import { type Socket } from "socket.io-client";
-import { getSocket } from "@/lib/socket-client";
+
+type EventHandler = (data: unknown) => void;
 
 interface SocketContextValue {
-  socket: Socket | null;
   connected: boolean;
+  subscribe: (event: string, handler: EventHandler) => () => void;
 }
 
-const SocketContext = createContext<SocketContextValue>({ socket: null, connected: false });
+const SocketContext = createContext<SocketContextValue>({
+  connected: false,
+  subscribe: () => () => {},
+});
 
+// Real-time updates via Server-Sent Events backed by MongoDB Change Streams
+// (src/app/api/events/route.ts). Native EventSource auto-reconnects on drop —
+// including the periodic disconnects Vercel forces once a function's
+// maxDuration is hit — so no manual reconnect logic is needed here.
 export function SocketProvider({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession();
-  const [socket, setSocket] = useState<Socket | null>(null);
   const [connected, setConnected] = useState(false);
+  const handlersRef = useRef(new Map<string, Set<EventHandler>>());
 
   useEffect(() => {
     if (!session?.user?.id) return;
 
-    const s = getSocket(session.user.id);
-    setSocket(s);
+    const es = new EventSource("/api/events");
 
-    const onConnect = () => setConnected(true);
-    const onDisconnect = () => setConnected(false);
+    es.onopen = () => setConnected(true);
+    es.onerror = () => setConnected(false);
 
-    s.on("connect", onConnect);
-    s.on("disconnect", onDisconnect);
-
-    if (!s.connected) s.connect();
+    es.addEventListener("data-changed", (e: MessageEvent) => {
+      let data: unknown = null;
+      try {
+        data = JSON.parse(e.data as string);
+      } catch {
+        return;
+      }
+      for (const handler of handlersRef.current.get("data-changed") ?? []) {
+        handler(data);
+      }
+    });
 
     return () => {
-      s.off("connect", onConnect);
-      s.off("disconnect", onDisconnect);
+      es.close();
+      setConnected(false);
     };
   }, [session?.user?.id]);
 
+  const subscribe = (event: string, handler: EventHandler) => {
+    let set = handlersRef.current.get(event);
+    if (!set) {
+      set = new Set();
+      handlersRef.current.set(event, set);
+    }
+    set.add(handler);
+    return () => set!.delete(handler);
+  };
+
   return (
-    <SocketContext.Provider value={{ socket, connected }}>
+    <SocketContext.Provider value={{ connected, subscribe }}>
       {children}
     </SocketContext.Provider>
   );

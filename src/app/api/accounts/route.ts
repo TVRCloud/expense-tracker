@@ -5,7 +5,6 @@ import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
 import { appendLedgerBlock } from "@/lib/ledger";
-import { getIO } from "@/lib/io";
 
 const creditMetaSchema = z.object({
   creditLimit: z.number().int().positive().optional(),
@@ -22,7 +21,7 @@ const createSchema = z.object({
   name: z.string().min(1).max(100),
   type: z.enum(["cash", "bank", "credit_card", "savings", "investment", "wallet"]),
   balance: z.number().int().default(0),
-  currency: z.string().default("USD"),
+  currency: z.string().default("INR"),
   color: z.string().optional(),
   icon: z.string().optional(),
   creditMeta: creditMetaSchema.optional(),
@@ -68,7 +67,6 @@ export async function POST(req: NextRequest) {
     });
 
     logger.info({ userId: user.id, accountId: account._id.toString() }, "Account created");
-    getIO()?.to(`user:${user.id}`).emit("data:changed", { resource: "accounts" });
     return NextResponse.json({ data: account }, { status: 201 });
   } catch (err) {
     logger.error({ err }, "POST /api/accounts failed");

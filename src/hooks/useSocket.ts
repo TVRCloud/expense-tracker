@@ -7,15 +7,11 @@ export function useSocket<T = unknown>(
   event: string,
   handler: (data: T) => void
 ) {
-  const { socket } = useSocketContext();
+  const { subscribe } = useSocketContext();
 
   useEffect(() => {
-    if (!socket) return;
-    socket.on(event, handler);
-    return () => {
-      socket.off(event, handler);
-    };
-  }, [socket, event, handler]);
+    return subscribe(event, handler as (data: unknown) => void);
+  }, [subscribe, event, handler]);
 
   return useSocketContext();
 }

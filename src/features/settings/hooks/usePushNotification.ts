@@ -29,22 +29,23 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 }
 
 export function usePushNotification() {
+  // Both default to the "not-yet-known" state so server render and first
+  // client render match; the real values land after mount via effect below.
+  const [isSupported, setIsSupported] = useState(false);
   const [permission, setPermission] = useState<NotificationPermission>("default");
   const [isLoading, setIsLoading] = useState(false);
   const [myEndpoint, setMyEndpoint] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const isSupported =
-    typeof window !== "undefined" &&
-    "Notification" in window &&
-    "PushManager" in window &&
-    "serviceWorker" in navigator;
-
   useEffect(() => {
-    if (isSupported) {
-      setPermission(Notification.permission);
-    }
-  }, [isSupported]);
+    const supported =
+      typeof window !== "undefined" &&
+      "Notification" in window &&
+      "PushManager" in window &&
+      "serviceWorker" in navigator;
+    setIsSupported(supported);
+    if (supported) setPermission(Notification.permission);
+  }, []);
 
   useEffect(() => {
     if (!isSupported || permission !== "granted") return;

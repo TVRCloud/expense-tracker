@@ -7,7 +7,7 @@ const UserSchema = new Schema(
     password: { type: String, required: true },
     role: { type: String, enum: ["user", "admin"], default: "user" },
     avatar: { type: String },
-    currency: { type: String, default: "USD" },
+    currency: { type: String, default: "INR" },
     isActive: { type: Boolean, default: true },
     preferences: {
       theme: { type: String, enum: ["light", "dark", "system"], default: "system" },
@@ -15,7 +15,7 @@ const UserSchema = new Schema(
       pushNotifications: { type: Boolean, default: true },
       emailNotifications: { type: Boolean, default: true },
       weekStartsOn: { type: Number, default: 0 },
-      currency: { type: String, default: "USD" },
+      currency: { type: String, default: "INR" },
     },
     passwordResetToken: { type: String },
     passwordResetExpires: { type: Date },

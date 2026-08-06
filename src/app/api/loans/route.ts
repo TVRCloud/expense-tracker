@@ -13,7 +13,7 @@ const createSchema = z.object({
   direction: z.enum(["given", "received"]),
   counterparty: z.string().min(1).max(100),
   principalAmount: z.number().int().positive(),
-  currency: z.string().default("USD"),
+  currency: z.string().default("INR"),
   interestRate: z.number().min(0).max(100).default(0),
   startDate: z.string(),
   dueDate: z.string().optional(),
