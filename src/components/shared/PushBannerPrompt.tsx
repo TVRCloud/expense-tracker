@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { Bell, X } from "lucide-react";
+import { toast } from "sonner";
 import { usePushNotification } from "@/features/settings/hooks/usePushNotification";
 
 export function PushBannerPrompt() {
@@ -50,7 +51,7 @@ export function PushBannerPrompt() {
 
       <div className="flex items-center gap-2 shrink-0">
         <button
-          onClick={() => void subscribe()}
+          onClick={() => subscribe().catch((err: Error) => toast.error(err.message))}
           disabled={isLoading}
           className="px-3.5 py-1.5 rounded-(--r-sm) text-xs font-bold transition-all active:scale-[0.97]"
           style={{ background: "var(--violet)", color: "#fff" }}

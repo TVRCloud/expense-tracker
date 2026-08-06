@@ -185,7 +185,10 @@ export function NotificationSettingsPage() {
                     <Switch
                       checked={push.status === "enabled"}
                       disabled={push.isLoading}
-                      onCheckedChange={(on) => (on ? push.subscribe() : push.unsubscribe())}
+                      onCheckedChange={(on) => {
+                        const action = on ? push.subscribe() : push.unsubscribe();
+                        action.catch((err: Error) => toast.error(err.message));
+                      }}
                     />
                   )}
                 </div>

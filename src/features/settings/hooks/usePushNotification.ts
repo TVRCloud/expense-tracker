@@ -19,10 +19,20 @@ export interface PushDevice {
   createdAt: string;
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]);
+}
+
 export function usePushNotification() {
   const [permission, setPermission] = useState<NotificationPermission>("default");
   const [isLoading, setIsLoading] = useState(false);
   const [myEndpoint, setMyEndpoint] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const isSupported =
     typeof window !== "undefined" &&
@@ -62,12 +72,17 @@ export function usePushNotification() {
   const subscribe = useCallback(async () => {
     if (!isSupported) return;
     setIsLoading(true);
+    setError(null);
     try {
       const perm = await Notification.requestPermission();
       setPermission(perm);
       if (perm !== "granted") return;
 
-      const reg = await navigator.serviceWorker.ready;
+      const reg = await withTimeout(
+        navigator.serviceWorker.ready,
+        10000,
+        "Service worker isn't ready. Try reloading the page."
+      );
       const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
       if (!vapidKey) throw new Error("VAPID public key not configured");
 
@@ -84,6 +99,9 @@ export function usePushNotification() {
       });
       setMyEndpoint(json.endpoint);
       await refetchStatus();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to enable push notifications");
+      throw err;
     } finally {
       setIsLoading(false);
     }
@@ -92,8 +110,13 @@ export function usePushNotification() {
   const unsubscribe = useCallback(async () => {
     if (!isSupported) return;
     setIsLoading(true);
+    setError(null);
     try {
-      const reg = await navigator.serviceWorker.ready;
+      const reg = await withTimeout(
+        navigator.serviceWorker.ready,
+        10000,
+        "Service worker isn't ready. Try reloading the page."
+      );
       const sub = await reg.pushManager.getSubscription();
       if (sub) {
         await apiClient.delete("/push/unsubscribe", { data: { endpoint: sub.endpoint } });
@@ -101,6 +124,9 @@ export function usePushNotification() {
       }
       setMyEndpoint(null);
       await refetchStatus();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to disable push notifications");
+      throw err;
     } finally {
       setIsLoading(false);
     }
@@ -116,6 +142,7 @@ export function usePushNotification() {
   return {
     status,
     isLoading: isLoading || sendTestMutation.isPending,
+    error,
     subscribe,
     unsubscribe,
     sendTest: () => sendTestMutation.mutateAsync(),
