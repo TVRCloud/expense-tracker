@@ -105,7 +105,7 @@ export function DashboardClient() {
               style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
             >
               <div className="font-extrabold text-base mb-5" style={{ color: "var(--ink)" }}>
-                {new Date().toLocaleString("default", { month: "long" })} breakdown
+                {new Date().toLocaleString("en-US", { month: "long" })} breakdown
               </div>
               <div className="flex flex-col gap-5">
                 <div>
