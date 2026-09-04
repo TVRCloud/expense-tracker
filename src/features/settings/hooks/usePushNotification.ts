@@ -87,10 +87,26 @@ export function usePushNotification() {
       const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
       if (!vapidKey) throw new Error("VAPID public key not configured");
 
-      const sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(vapidKey).buffer as ArrayBuffer,
-      });
+      // A stale subscription (e.g. from before a VAPID key rotation/fix) makes
+      // pushManager.subscribe() with a *different* applicationServerKey throw
+      // (or hang, in some browsers) since a device can only hold one
+      // subscription at a time. Clear it first so re-subscribing is a clean
+      // resubscribe rather than a silent, stuck failure.
+      const existing = await withTimeout(
+        reg.pushManager.getSubscription(),
+        10000,
+        "Timed out checking for an existing subscription. Try reloading the page."
+      );
+      if (existing) await existing.unsubscribe();
+
+      const sub = await withTimeout(
+        reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidKey).buffer as ArrayBuffer,
+        }),
+        10000,
+        "Timed out subscribing to push notifications. Try again."
+      );
 
       const json = sub.toJSON() as { endpoint: string; keys: { p256dh: string; auth: string } };
       await apiClient.post("/push/subscribe", {

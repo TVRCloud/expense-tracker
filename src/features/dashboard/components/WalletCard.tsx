@@ -13,7 +13,7 @@ export function WalletCard({ account }: Props) {
   return (
     <Link
       href={`/accounts/${account._id}`}
-      className="block rounded-(--r-lg) p-5 transition-all hover:-translate-y-1"
+      className="block rounded-(--r-lg) p-5 transition-transform active:scale-[0.98]"
       style={{
         background: "linear-gradient(135deg, #18181b 0%, #27272a 60%, #3f3f46 100%)",
         boxShadow: "0 20px 50px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.07)",
@@ -43,16 +43,16 @@ export function WalletCard({ account }: Props) {
 
       {/* Account name */}
       <div
-        className="text-[11px] font-bold uppercase tracking-widest mb-3"
-        style={{ color: "rgba(255,255,255,.52)" }}
+        className="mb-3"
+        style={{ font: "var(--text-micro)", color: "rgba(255,255,255,.62)" }}
       >
         {account.name}
       </div>
 
       {/* Balance */}
       <div
-        className="font-extrabold tnum leading-none mb-4"
-        style={{ fontSize: 26, color: "#fff" }}
+        className="tnum leading-none mb-4"
+        style={{ font: "var(--text-stat)", fontSize: 26, color: "#fff" }}
       >
         {formatCurrency(account.balance)}
       </div>
@@ -60,10 +60,12 @@ export function WalletCard({ account }: Props) {
       {/* Row 3: account type + masked number */}
       <div className="flex items-center justify-between">
         <span
-          className="text-[11px] font-bold uppercase tracking-wider"
-          style={{ color: "rgba(255,255,255,.46)" }}
+          style={{ font: "var(--text-micro)", color: "rgba(255,255,255,.56)" }}
         >
-          {account.type.replace("_", " ")}
+          {(() => {
+            const label = account.type.replace("_", " ");
+            return label.charAt(0).toUpperCase() + label.slice(1);
+          })()}
         </span>
         <span
           className="font-mono text-[13px] tracking-widest"

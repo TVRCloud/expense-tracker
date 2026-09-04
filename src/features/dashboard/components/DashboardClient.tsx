@@ -54,11 +54,11 @@ export function DashboardClient() {
           </div>
 
           <div className="flex items-center justify-between mb-3 mx-0.5">
-            <h2 className="font-extrabold text-[18px] tracking-tight" style={{ color: "var(--ink)" }}>
-              Recent Transactions
+            <h2 className="tracking-tight" style={{ font: "var(--text-h2)", color: "var(--ink)" }}>
+              Recent transactions
             </h2>
             <Link href="/transactions" className="font-bold text-sm" style={{ color: "var(--violet)" }}>
-              See All
+              See all
             </Link>
           </div>
 
@@ -102,29 +102,33 @@ export function DashboardClient() {
           {stats && (
             <div
               className="rounded-(--r-lg) p-6"
-              style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
+              style={{ background: "var(--card)", border: "1px solid var(--line)" }}
             >
-              <div className="font-extrabold text-base mb-5" style={{ color: "var(--ink)" }}>
+              <div className="mb-5" style={{ font: "var(--text-h2)", color: "var(--ink)" }}>
                 {new Date().toLocaleString("en-US", { month: "long" })} breakdown
               </div>
-              <div className="flex flex-col gap-5">
+              <div className="flex flex-col gap-4">
                 <div>
-                  <div className="flex justify-between font-bold text-[13.5px] mb-2">
+                  <div className="flex justify-between mb-2" style={{ font: "var(--text-label)" }}>
                     <span style={{ color: "var(--ink-2)" }}>Income</span>
-                    <span className="tnum">{formatCurrency(stats.income)}</span>
+                    <span className="tnum" style={{ font: "var(--text-figure-sm)", color: "var(--ink)" }}>
+                      {formatCurrency(stats.income)}
+                    </span>
                   </div>
-                  <div className="h-2.25 rounded-[6px]" style={{ background: "var(--card-2)" }}>
-                    <div className="h-full rounded-[6px]" style={{ width: "100%", background: "var(--violet)" }} />
+                  <div className="h-px" style={{ background: "var(--line-2)" }}>
+                    <div className="h-full" style={{ width: "100%", background: "var(--violet)" }} />
                   </div>
                 </div>
                 <div>
-                  <div className="flex justify-between font-bold text-[13.5px] mb-2">
+                  <div className="flex justify-between mb-2" style={{ font: "var(--text-label)" }}>
                     <span style={{ color: "var(--ink-2)" }}>Spending</span>
-                    <span className="tnum">{formatCurrency(stats.expense)}</span>
+                    <span className="tnum" style={{ font: "var(--text-figure-sm)", color: "var(--ink)" }}>
+                      {formatCurrency(stats.expense)}
+                    </span>
                   </div>
-                  <div className="h-2.25 rounded-[6px]" style={{ background: "var(--card-2)" }}>
+                  <div className="h-px" style={{ background: "var(--line-2)" }}>
                     <div
-                      className="h-full rounded-[6px]"
+                      className="h-full"
                       style={{
                         width:
                           stats.income > 0
@@ -139,10 +143,10 @@ export function DashboardClient() {
                   className="flex items-center justify-between pt-4"
                   style={{ borderTop: "1px solid var(--line)" }}
                 >
-                  <span className="font-semibold text-[13.5px]" style={{ color: "var(--ink-2)" }}>
+                  <span style={{ font: "var(--text-label)", color: "var(--ink-2)" }}>
                     Net saved
                   </span>
-                  <span className="font-extrabold tnum text-[18px]" style={{ color: "var(--green)" }}>
+                  <span className="tnum" style={{ font: "var(--text-stat)", fontSize: 18, color: "var(--green)" }}>
                     +{formatCurrency(Math.max(0, stats.net))}
                   </span>
                 </div>

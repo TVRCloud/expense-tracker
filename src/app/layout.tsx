@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Plus_Jakarta_Sans } from "next/font/google";
+import { Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
 import { SessionProvider } from "@/components/providers/SessionProvider";
@@ -11,6 +11,14 @@ const plusJakarta = Plus_Jakarta_Sans({
   subsets: ["latin"],
   weight: ["400", "500", "600", "700", "800"],
   variable: "--font-plus-jakarta",
+  display: "swap",
+});
+
+// Ledger-precision numerals for monetary figures — see globals.css --font-mono.
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  weight: ["500", "700"],
+  variable: "--font-jetbrains-mono",
   display: "swap",
 });
 
@@ -35,7 +43,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={plusJakarta.variable} suppressHydrationWarning>
+    <html lang="en" className={`${plusJakarta.variable} ${jetbrainsMono.variable}`} suppressHydrationWarning>
       <body suppressHydrationWarning>
         <SessionProvider>
           <ThemeProvider>

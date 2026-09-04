@@ -28,8 +28,8 @@ export function StatCard({ icon, iconBg, iconColor, label, value, delta, trend }
         {label}
       </div>
       <div
-        className="font-extrabold tnum tracking-tight"
-        style={{ fontSize: 23, color: "var(--ink)", letterSpacing: "-0.6px" }}
+        className="tnum tracking-tight"
+        style={{ font: "var(--text-stat)", color: "var(--ink)", letterSpacing: "-0.6px" }}
       >
         {value}
       </div>

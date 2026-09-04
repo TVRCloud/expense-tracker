@@ -7,26 +7,29 @@ import { format } from "date-fns";
 import { getTransactionActivityDate, isPaidRecurringTransaction } from "../utils/activity-date";
 import { TRANSACTION_CATEGORY_ICONS } from "@/lib/icons";
 
-const CAT_COLORS: Record<string, string> = {
-  income: "#4FC07E",
-  groceries: "#4FC07E",
-  travel: "#2D9CDB",
-  transport: "#2F6BFF",
-  subscription: "#8B5CF6",
-  health: "#2D9CDB",
-  shopping: "#16A34A",
-  rent: "#EA580C",
-  gym: "#DB2777",
-  other: "#6B46F5",
-  coffee: "#2D6CDF",
-  education: "#7C3AED",
-  entertainment: "#D6336C",
-  emi: "#7C3AED",
-  transfer: "#6B46F5",
-};
+// Category avatar colors live in globals.css (--cat-*) so theming/rebrand
+// only touches one place instead of every component with a copy of this map.
+const CAT_COLOR_VARS = new Set([
+  "income",
+  "groceries",
+  "travel",
+  "transport",
+  "subscription",
+  "health",
+  "shopping",
+  "rent",
+  "gym",
+  "other",
+  "coffee",
+  "education",
+  "entertainment",
+  "emi",
+  "transfer",
+]);
 
 function getAvatarColor(category: string) {
-  return CAT_COLORS[category.toLowerCase()] ?? "#6B46F5";
+  const key = category.toLowerCase();
+  return `var(--cat-${CAT_COLOR_VARS.has(key) ? key : "other"})`;
 }
 
 interface Props {
@@ -57,11 +60,10 @@ export function TransactionRow({ transaction }: Props) {
       tabIndex={0}
       onClick={() => router.push(`/transactions/${transaction._id}`)}
       onKeyDown={e => e.key === "Enter" && router.push(`/transactions/${transaction._id}`)}
-      className="group flex items-center gap-3.5 sm:gap-4 rounded-(--r-md) px-3.5 sm:px-4 py-3 sm:py-3.5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98] cursor-pointer"
+      className="group flex items-center gap-3.5 sm:gap-4 rounded-(--r-md) px-3.5 sm:px-4 py-3 sm:py-3.5 transition-transform duration-150 active:scale-[0.98] cursor-pointer"
       style={{
         background: "var(--card)",
-        border: "1px solid var(--glass-border)",
-        boxShadow: "var(--shadow-sm)",
+        border: "1px solid var(--line)",
       }}
     >
       {/* Avatar — category icon with tinted bg */}
@@ -79,11 +81,11 @@ export function TransactionRow({ transaction }: Props) {
         <div
           className="w-12 h-12 rounded-full grid place-items-center flex-none"
           style={{
-            background: `${avatarHex}22`,
-            border: `1.5px solid ${avatarHex}44`,
+            background: `color-mix(in srgb, ${avatarHex} 14%, transparent)`,
+            border: `1.5px solid color-mix(in srgb, ${avatarHex} 28%, transparent)`,
           }}
         >
-          <CategoryIcon size={20} color={avatarHex!} />
+          <CategoryIcon size={20} style={{ color: avatarHex! }} />
         </div>
       )}
 
@@ -115,8 +117,9 @@ export function TransactionRow({ transaction }: Props) {
 
       {/* Amount — tinted chip */}
       <div
-        className="ml-auto font-extrabold text-[14px] tnum whitespace-nowrap px-2.5 py-1 rounded-xl"
+        className="ml-auto tnum whitespace-nowrap px-2.5 py-1 rounded-xl"
         style={{
+          font: "var(--text-figure-sm)",
           color,
           background: isTransfer
             ? "color-mix(in srgb, var(--violet) 10%, transparent)"

@@ -9,6 +9,19 @@
 
 :root {
   --font: "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), "JetBrains Mono", ui-monospace, monospace;
+
+  /* type scale — money figures render in --font-mono (ledger precision,
+     ties to the "Finance OS" identity); everything else stays --font.
+     Labels are sentence case by convention: weight/size carry hierarchy,
+     not uppercase+tracking. */
+  --text-display: 800 clamp(28px, 8vw, 44px)/1 var(--font-mono);
+  --text-h2: 800 18px/1.2 var(--font);
+  --text-stat: 800 23px/1.1 var(--font-mono);
+  --text-figure-sm: 700 14px/1.2 var(--font-mono); /* inline money figures below stat scale */
+  --text-body: 700 15px/1.3 var(--font);
+  --text-label: 600 13px/1.3 var(--font);
+  --text-micro: 600 11px/1.3 var(--font);
 
   /* backgrounds — clean neutral white */
   --bg: #f5f5f7;
@@ -18,7 +31,7 @@
   /* text — neutral charcoal */
   --ink: #18181b;
   --ink-2: #52525b;
-  --ink-3: #a1a1aa;
+  --ink-3: #71717a;
 
   /* borders — neutral silver */
   --line: rgba(161, 161, 170, 0.30);
@@ -94,6 +107,24 @@
   --chart-3: #f59e0b;
   --chart-4: #2d9cdb;
   --chart-5: var(--red);
+
+  /* transaction category avatar colors — single source of truth,
+     consumed via getAvatarColor() in TransactionRow.tsx */
+  --cat-income: var(--green);
+  --cat-groceries: var(--green);
+  --cat-travel: #2d9cdb;
+  --cat-transport: #2f6bff;
+  --cat-subscription: #8b5cf6;
+  --cat-health: #2d9cdb;
+  --cat-shopping: #16a34a;
+  --cat-rent: #ea580c;
+  --cat-gym: #db2777;
+  --cat-other: #6b46f5;
+  --cat-coffee: #2d6cdf;
+  --cat-education: #7c3aed;
+  --cat-entertainment: #d6336c;
+  --cat-emi: #7c3aed;
+  --cat-transfer: #6b46f5;
 }
 
 .dark {
@@ -105,7 +136,7 @@
   /* clean silver-white text hierarchy */
   --ink: #fafafa;
   --ink-2: #a1a1aa;
-  --ink-3: #52525b;
+  --ink-3: #8a8a92;
 
   /* silver-toned borders */
   --line: rgba(63, 63, 70, 0.60);
@@ -211,11 +242,16 @@ body {
    via Tailwind arbitrary-value classes used in the codebase
    ============================================================ */
 
-/* Auto glass blur — old bracket syntax and Tailwind v4 shorthand */
+/* Auto glass blur — old bracket syntax, Tailwind v4 shorthand, and the
+   standard rounded-md/rounded-lg utilities (now aliased to --r-sm/--r-md
+   above) so shadcn Dialog/Sheet/Popover/Select content inherits the same
+   glass treatment as hand-built cards with zero extra classes. */
 .rounded-\[var\(--r-lg\)\],
 .rounded-\[var\(--r-md\)\],
 .rounded-\(--r-lg\),
-.rounded-\(--r-md\) {
+.rounded-\(--r-md\),
+.rounded-md,
+.rounded-lg {
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
 }
@@ -274,8 +310,8 @@ body {
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card-bg);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-sm);
+  --radius-lg: var(--r-md);
+  --radius-xl: var(--r-lg);
 }

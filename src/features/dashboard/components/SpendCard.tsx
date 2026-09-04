@@ -65,13 +65,13 @@ export function BalanceCard({ accountBalance, income, expense, isLoading }: Prop
       />
 
       <div className="relative">
-        <div className="text-[10px] font-bold uppercase tracking-widest mb-1 opacity-70">
-          Total Balance
+        <div className="mb-1 opacity-70" style={{ font: "var(--text-label)" }}>
+          Total balance
         </div>
 
         <div
-          className="font-extrabold tnum leading-none mb-4 text-[28px] min-[370px]:text-[32px] min-[410px]:text-[36px] sm:text-[44px] max-w-full overflow-hidden truncate"
-          style={{ minHeight: 40 }}
+          className="tnum leading-none mb-4 max-w-full overflow-hidden truncate"
+          style={{ font: "var(--text-display)", minHeight: 40 }}
         >
           {isLoading ? <Shimmer w={180} /> : formatCurrency(accountBalance)}
         </div>
@@ -89,15 +89,18 @@ export function BalanceCard({ accountBalance, income, expense, isLoading }: Prop
           >
             <div
               className="w-9 h-9 rounded-full grid place-items-center flex-none"
-              style={{ background: "rgba(79,192,126,.22)", border: "1px solid rgba(79,192,126,.35)" }}
+              style={{
+                background: "color-mix(in srgb, var(--green) 22%, transparent)",
+                border: "1px solid color-mix(in srgb, var(--green) 35%, transparent)",
+              }}
             >
-              <TrendingUp size={16} color="#4fc07e" />
+              <TrendingUp size={16} style={{ color: "var(--green)" }} />
             </div>
             <div className="min-w-0">
-              <div className="text-[10.5px] font-bold uppercase tracking-wider" style={{ opacity: 0.65 }}>
+              <div style={{ font: "var(--text-micro)", opacity: 0.65 }}>
                 Income
               </div>
-              <div className="font-bold tnum text-[13px] min-[390px]:text-[14px] sm:text-[16px] mt-0.5 max-w-full overflow-hidden">
+              <div className="tnum mt-0.5 max-w-full overflow-hidden" style={{ font: "var(--text-figure-sm)" }}>
                 {isLoading ? <Shimmer w={70} /> : formatCurrency(income)}
               </div>
             </div>
@@ -106,15 +109,18 @@ export function BalanceCard({ accountBalance, income, expense, isLoading }: Prop
           <div className="flex-1 flex items-center gap-2 sm:gap-3 py-4 sm:py-5 pl-5 sm:pl-7 min-w-0">
             <div
               className="w-9 h-9 rounded-full grid place-items-center flex-none"
-              style={{ background: "rgba(235,87,87,.22)", border: "1px solid rgba(235,87,87,.35)" }}
+              style={{
+                background: "color-mix(in srgb, var(--red) 22%, transparent)",
+                border: "1px solid color-mix(in srgb, var(--red) 35%, transparent)",
+              }}
             >
-              <TrendingDown size={16} color="#eb5757" />
+              <TrendingDown size={16} style={{ color: "var(--red)" }} />
             </div>
             <div className="min-w-0">
-              <div className="text-[10.5px] font-bold uppercase tracking-wider" style={{ opacity: 0.65 }}>
+              <div style={{ font: "var(--text-micro)", opacity: 0.65 }}>
                 Expenses
               </div>
-              <div className="font-bold tnum text-[13px] min-[390px]:text-[14px] sm:text-[16px] mt-0.5 max-w-full overflow-hidden">
+              <div className="tnum mt-0.5 max-w-full overflow-hidden" style={{ font: "var(--text-figure-sm)" }}>
                 {isLoading ? <Shimmer w={70} /> : formatCurrency(expense)}
               </div>
             </div>
