@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import connectDB from "@/lib/mongodb";
 import Budget from "@/models/Budget";
-import Transaction from "@/models/Transaction";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
-import { Types } from "mongoose";
 import { appendLedgerBlock } from "@/lib/ledger";
+import { listBudgetsWithSpend } from "@/lib/budget-service";
 
 const createSchema = z.object({
   category: z.string().min(1),
@@ -26,35 +25,7 @@ export async function GET(req: NextRequest) {
     const month = parseInt(searchParams.get("month") ?? String(now.getMonth() + 1), 10);
     const year = parseInt(searchParams.get("year") ?? String(now.getFullYear()), 10);
 
-    await connectDB();
-    const userObjectId = new Types.ObjectId(user.id);
-    const budgets = await Budget.find({ user: user.id, month, year, isDeleted: { $ne: true } }).lean();
-
-    // Enrich with spent amounts
-    const enriched = await Promise.all(
-      budgets.map(async (b) => {
-        const spent = await Transaction.aggregate([
-          {
-            $match: {
-              user: userObjectId,
-              isDeleted: { $ne: true },
-              category: b.category,
-              type: "expense",
-              date: {
-                $gte: new Date(year, month - 1, 1),
-                $lt: new Date(year, month, 1),
-              },
-              $nor: [{
-                recurringId: { $exists: true },
-                installmentStatus: { $nin: ["paid"] },
-              }],
-            },
-          },
-          { $group: { _id: null, total: { $sum: "$amount" } } },
-        ]);
-        return { ...b, spent: spent[0]?.total ?? 0 };
-      })
-    );
+    const enriched = await listBudgetsWithSpend(user.id, year, month);
 
     return NextResponse.json({ data: enriched });
   } catch (err) {
