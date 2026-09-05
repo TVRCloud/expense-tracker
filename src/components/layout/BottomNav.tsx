@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutDashboard, ArrowLeftRight, Plus, BarChart2, Wallet } from "lucide-react";
-import { motion } from "framer-motion";
+import { motion } from "motion/react";
 
 const ITEMS = [
   { href: "/dashboard", label: "Home", icon: LayoutDashboard },
