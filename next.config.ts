@@ -1,8 +1,5 @@
 import type { NextConfig } from "next";
-// @ts-expect-error — no types for next-pwa
-import withPWA from "next-pwa";
-// @ts-expect-error — no types for next-pwa/cache
-import defaultCache from "next-pwa/cache";
+import withSerwistInit from "@serwist/next";
 import { withSentryConfig } from "@sentry/nextjs";
 
 const nextConfig: NextConfig = {
@@ -15,31 +12,19 @@ const nextConfig: NextConfig = {
   },
 };
 
-const pwaConfig = withPWA({
-  dest: "public",
+const withSerwist = withSerwistInit({
+  swSrc: "worker/index.ts",
+  swDest: "public/sw.js",
   register: true,
-  skipWaiting: true,
   disable: process.env.NODE_ENV === "development",
-  buildExcludes: [/middleware-manifest\.json$/],
-  fallbacks: {
-    document: "/offline",
-  },
-  runtimeCaching: [
-    // Must come before next-pwa's default "apis" rule (matches all /api/*
-    // with NetworkFirst + caching), which was intercepting this long-lived
-    // SSE stream and buffering it for cache.put() — breaking real-time
-    // delivery entirely. This route needs to hit the network directly, every
-    // time, with no service-worker involvement.
-    {
-      urlPattern: /\/api\/events(\?.*)?$/,
-      handler: "NetworkOnly",
-      options: {},
-    },
-    ...defaultCache,
-  ],
+  exclude: [/middleware-manifest\.json$/],
+  // The 9005 chunk's sourcemap is ~2.13MB, just over Serwist/workbox's
+  // default 2MB precache limit — bump it instead of dropping the file
+  // (dropping sourcemaps from precache would break offline error traces).
+  maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
 });
 
-export default withSentryConfig(pwaConfig(nextConfig), {
+export default withSentryConfig(withSerwist(nextConfig), {
   org: process.env.SENTRY_ORG,
   project: process.env.SENTRY_PROJECT,
   authToken: process.env.SENTRY_AUTH_TOKEN,
