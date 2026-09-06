@@ -26,7 +26,6 @@ export function DashboardClient() {
   const { data: transactions, isLoading: txnLoading } = useRecentTransactions();
   const { data: accounts, isLoading: acctLoading } = useAccounts();
 
-  const primaryAccount = accounts?.find(a => a.type !== "credit_card");
   const creditCardAccounts = accounts?.filter(a => a.type === "credit_card") ?? [];
   const accountBalance = accounts
     ?.filter((account) => account.type !== "credit_card")
@@ -42,6 +41,49 @@ export function DashboardClient() {
           expense={stats?.expense ?? 0}
           isLoading={statsLoading || acctLoading}
         />
+      </div>
+
+      {/* Accounts — every account, not just one, so a wallet with several
+          banks/cards is fully visible at a glance instead of guessing. */}
+      <div className="mb-5">
+        <div className="flex items-center justify-between mb-3 mx-0.5">
+          <h2 className="tracking-tight" style={{ font: "var(--text-h2)", color: "var(--ink)" }}>
+            Accounts{accounts?.length ? ` · ${accounts.length}` : ""}
+          </h2>
+          <Link href="/accounts" className="font-bold text-sm" style={{ color: "var(--violet)" }}>
+            See all
+          </Link>
+        </div>
+
+        {acctLoading ? (
+          <div className="flex gap-3 overflow-hidden">
+            {[0, 1].map((i) => <SkeletonCard key={i} h={164} />)}
+          </div>
+        ) : accounts?.length ? (
+          <div
+            className="flex gap-3 overflow-x-auto pb-1 -mx-0.5 px-0.5"
+            style={{ scrollSnapType: "x mandatory", scrollbarWidth: "none" }}
+          >
+            {accounts.map((account) => (
+              <WalletCard
+                key={account._id}
+                account={account}
+                className="flex-none w-62.5"
+                style={{ scrollSnapAlign: "start" }}
+              />
+            ))}
+          </div>
+        ) : (
+          <div
+            className="rounded-(--r-md) p-8 text-center font-semibold text-sm"
+            style={{ background: "var(--card)", color: "var(--ink-2)" }}
+          >
+            No accounts yet.{" "}
+            <Link href="/accounts" style={{ color: "var(--violet)" }}>
+              Add one
+            </Link>
+          </div>
+        )}
       </div>
 
       {/* Desktop two-column layout */}
@@ -95,7 +137,6 @@ export function DashboardClient() {
 
         {/* Desktop right column */}
         <div className="hidden md:flex flex-col gap-5">
-          {primaryAccount && <WalletCard account={primaryAccount} />}
           {creditCardAccounts.length > 0 && <CreditCardSummaryWidget />}
           <UpcomingPaymentsWidget />
 
