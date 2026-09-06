@@ -10,11 +10,15 @@ import { integrationError } from "@/lib/integrations/response";
 // ID, n8n auth, per-route rate limiting, and safe error logging. Keeps each
 // route handler focused on its own business logic (parsing/validation/calling
 // the shared service) rather than repeating this plumbing five times.
-export function withIntegrationRoute(
+//
+// `routeCtx` forwards whatever Next.js passes as the handler's second
+// argument (e.g. `{ params }` for dynamic routes like `[id]`) straight
+// through — required so per-route handlers can read path params.
+export function withIntegrationRoute<RouteCtx = unknown>(
   routeName: string,
-  handler: (ctx: { req: NextRequest; user: AuthUser; requestId: string }) => Promise<Response>
+  handler: (ctx: { req: NextRequest; user: AuthUser; requestId: string }, routeCtx: RouteCtx) => Promise<Response>
 ) {
-  return async function routeHandler(req: NextRequest): Promise<Response> {
+  return async function routeHandler(req: NextRequest, routeCtx?: RouteCtx): Promise<Response> {
     const requestId = resolveRequestId(req);
     const start = Date.now();
 
@@ -30,7 +34,7 @@ export function withIntegrationRoute(
     }
 
     try {
-      const res = await handler({ req, user: auth.user, requestId });
+      const res = await handler({ req, user: auth.user, requestId }, routeCtx as RouteCtx);
       logger.info(
         { requestId, route: routeName, method: req.method, status: res.status, durationMs: Date.now() - start },
         "n8n integration request handled"

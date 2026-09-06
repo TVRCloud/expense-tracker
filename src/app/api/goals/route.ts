@@ -3,18 +3,7 @@ import connectDB from "@/lib/mongodb";
 import Goal from "@/models/Goal";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
-import { z } from "zod";
-import { appendLedgerBlock } from "@/lib/ledger";
-
-const createSchema = z.object({
-  name: z.string().min(1).max(100),
-  targetAmount: z.number().int().positive(),
-  savedAmount: z.number().int().min(0).default(0),
-  targetDate: z.string().optional(),
-  linkedAccount: z.string().optional(),
-  icon: z.string().optional(),
-  color: z.string().optional(),
-});
+import { createGoal, goalCreateSchema } from "@/lib/goal-service";
 
 export async function GET() {
   try {
@@ -36,26 +25,12 @@ export async function POST(req: NextRequest) {
     if (errorResponse) return errorResponse;
 
     const body = await req.json();
-    const parsed = createSchema.safeParse(body);
+    const parsed = goalCreateSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json({ error: "Validation failed", details: parsed.error.flatten() }, { status: 400 });
     }
 
-    await connectDB();
-    const goal = await Goal.create({
-      ...parsed.data,
-      user: user.id,
-      targetDate: parsed.data.targetDate ? new Date(parsed.data.targetDate) : undefined,
-    });
-    await appendLedgerBlock({
-      userId: user.id,
-      scope: "goal",
-      entityId: goal._id.toString(),
-      action: "create",
-      after: goal,
-      actor: user,
-    });
-
+    const goal = await createGoal({ ...parsed.data, userId: user.id, actor: user });
     return NextResponse.json({ data: goal }, { status: 201 });
   } catch (err) {
     logger.error({ err }, "POST /api/goals failed");

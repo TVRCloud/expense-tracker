@@ -3,6 +3,7 @@ import { z } from "zod";
 import connectDB from "@/lib/mongodb";
 import Transaction from "@/models/Transaction";
 import Account from "@/models/Account";
+import CreditStatement from "@/models/CreditStatement";
 import type { AuthUser } from "@/lib/auth-guard";
 import { redis } from "@/lib/redis";
 import { checkBudgetAlert } from "@/lib/budget-alert";
@@ -72,14 +73,51 @@ export type CreateTransactionResult =
   | { kind: "single"; transaction: unknown }
   | { kind: "series"; transaction: unknown; seriesId: string; count: number };
 
-export class TransactionServiceError extends Error {
-  code: "ACCOUNT_NOT_FOUND" | "TRANSFER_ACCOUNT_NOT_FOUND";
+export type TransactionServiceErrorCode =
+  | "ACCOUNT_NOT_FOUND"
+  | "TRANSFER_ACCOUNT_NOT_FOUND"
+  | "TRANSACTION_NOT_FOUND"
+  | "TRANSACTION_LOCKED"
+  | "INSTALLMENT_NOT_FOUND";
 
-  constructor(code: "ACCOUNT_NOT_FOUND" | "TRANSFER_ACCOUNT_NOT_FOUND", message: string) {
+export class TransactionServiceError extends Error {
+  code: TransactionServiceErrorCode;
+
+  constructor(code: TransactionServiceErrorCode, message: string) {
     super(message);
     this.code = code;
     this.name = "TransactionServiceError";
   }
+}
+
+export const transactionUpdateSchema = z.object({
+  description: z.string().optional(),
+  note: z.string().optional(),
+  category: z.string().optional(),
+  subcategory: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  date: z.string().optional(),
+});
+
+export type UpdateTransactionInput = z.infer<typeof transactionUpdateSchema> & {
+  userId: string;
+  transactionId: string;
+  actor: AuthUser;
+};
+
+function hasRepaymentTag(tags?: unknown[]) {
+  return (tags ?? []).some((tag) => typeof tag === "string" && tag.startsWith("repayment:"));
+}
+
+async function getLinkedTransactionBlocker(userId: string, transactionId: string, tags?: unknown[]) {
+  const linkedStatement = await CreditStatement.findOne({
+    user: userId,
+    paymentTransactionId: transactionId,
+    isDeleted: { $ne: true },
+  }).select("_id").lean();
+  if (linkedStatement) return "This transaction is linked to a credit statement payment.";
+  if (hasRepaymentTag(tags)) return "This transaction is linked to a loan repayment.";
+  return null;
 }
 
 async function invalidateStatsCache(userId: string, date: Date) {
@@ -231,4 +269,261 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
 
   logger.info({ userId, transactionId: transaction._id.toString() }, "Transaction created");
   return { kind: "single", transaction };
+}
+
+async function invalidateStatsCacheSingle(userId: string, date: Date) {
+  await invalidateStatsCache(userId, date);
+}
+
+// Shared with PATCH /api/transactions/[id] (browser) and the integration
+// route — same field set, same linked-record guard.
+export async function updateTransaction(input: UpdateTransactionInput) {
+  const { userId, transactionId, actor, ...rest } = input;
+  await connectDB();
+
+  const existing = await Transaction.findOne({
+    _id: transactionId,
+    user: userId,
+    isDeleted: { $ne: true },
+  }).lean<{ date: Date; tags?: unknown[] }>();
+  if (!existing) {
+    throw new TransactionServiceError("TRANSACTION_NOT_FOUND", "Transaction not found");
+  }
+  const blocker = await getLinkedTransactionBlocker(userId, transactionId, existing.tags);
+  if (blocker) {
+    throw new TransactionServiceError("TRANSACTION_LOCKED", `${blocker} Use the linked record flow to change it.`);
+  }
+
+  const update: Record<string, unknown> = { ...rest };
+  if (rest.date) update.date = new Date(rest.date);
+
+  const transaction = await Transaction.findOneAndUpdate(
+    { _id: transactionId, user: userId, isDeleted: { $ne: true } },
+    { $set: update },
+    { new: true }
+  ).lean();
+  if (!transaction) {
+    throw new TransactionServiceError("TRANSACTION_NOT_FOUND", "Transaction not found");
+  }
+
+  await appendLedgerBlock({
+    userId,
+    scope: "transaction",
+    entityId: transactionId,
+    action: "update",
+    before: existing,
+    after: transaction,
+    actor,
+  });
+  if (existing.date) await invalidateStatsCacheSingle(userId, new Date(existing.date));
+  if (rest.date) await invalidateStatsCacheSingle(userId, new Date(rest.date));
+
+  return transaction;
+}
+
+// Shared with DELETE /api/transactions/[id] (browser) and the integration
+// route — same balance-reversal logic (transfer-aware), same linked-record guard.
+export async function deleteTransaction(userId: string, transactionId: string, actor: AuthUser) {
+  await connectDB();
+
+  const txn = await Transaction.findOne({ _id: transactionId, user: userId, isDeleted: { $ne: true } }).lean<{
+    account: { toString(): string };
+    transferTo?: { toString(): string };
+    type: string;
+    amount: number;
+    date: Date;
+    tags?: unknown[];
+    recurringId?: unknown;
+    installmentStatus?: string;
+  }>();
+  if (!txn) {
+    throw new TransactionServiceError("TRANSACTION_NOT_FOUND", "Transaction not found");
+  }
+  const blocker = await getLinkedTransactionBlocker(userId, transactionId, txn.tags);
+  if (blocker) {
+    throw new TransactionServiceError("TRANSACTION_LOCKED", `${blocker} Use the linked record flow to reverse it.`);
+  }
+
+  // Reverse account balance only for transactions that previously affected it.
+  const affectsBalance = !txn.recurringId || txn.installmentStatus === "paid";
+  if (affectsBalance) {
+    if (txn.type === "transfer") {
+      const accountBefore = await Account.findOne({ _id: txn.account, user: userId });
+      const accountAfter = await Account.findOneAndUpdate(
+        { _id: txn.account, user: userId },
+        { $inc: { balance: txn.amount } },
+        { new: true }
+      );
+      if (accountBefore && accountAfter) {
+        await appendLedgerBlock({
+          userId,
+          scope: "account",
+          entityId: accountAfter._id.toString(),
+          action: "update",
+          before: accountBefore,
+          after: accountAfter,
+          actor,
+        });
+      }
+      if (txn.transferTo) {
+        const transferBefore = await Account.findOne({ _id: txn.transferTo, user: userId });
+        const transferAfter = await Account.findOneAndUpdate(
+          { _id: txn.transferTo, user: userId },
+          { $inc: { balance: -txn.amount } },
+          { new: true }
+        );
+        if (transferBefore && transferAfter) {
+          await appendLedgerBlock({
+            userId,
+            scope: "account",
+            entityId: transferAfter._id.toString(),
+            action: "update",
+            before: transferBefore,
+            after: transferAfter,
+            actor,
+          });
+        }
+      }
+    } else {
+      const balanceDelta = txn.type === "income" ? -txn.amount : txn.amount;
+      const accountBefore = await Account.findOne({ _id: txn.account, user: userId });
+      const accountAfter = await Account.findOneAndUpdate(
+        { _id: txn.account, user: userId },
+        { $inc: { balance: balanceDelta } },
+        { new: true }
+      );
+      if (accountBefore && accountAfter) {
+        await appendLedgerBlock({
+          userId,
+          scope: "account",
+          entityId: accountAfter._id.toString(),
+          action: "update",
+          before: accountBefore,
+          after: accountAfter,
+          actor,
+        });
+      }
+    }
+  }
+
+  const deleted = await Transaction.findOneAndUpdate(
+    { _id: transactionId, user: userId, isDeleted: { $ne: true } },
+    { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: userId } },
+    { new: true }
+  ).lean();
+  await appendLedgerBlock({
+    userId,
+    scope: "transaction",
+    entityId: transactionId,
+    action: "delete",
+    before: txn,
+    after: deleted,
+    actor,
+  });
+  await invalidateStatsCacheSingle(userId, new Date(txn.date));
+
+  return deleted;
+}
+
+const installmentStatusSchema = z.enum(["paid", "skipped", "upcoming", "overdue"]);
+export type InstallmentStatus = z.infer<typeof installmentStatusSchema>;
+
+// Shared with PATCH /api/transactions/recurring/[recurringId]/installments/[id]
+// (browser) and the integration route.
+export async function setInstallmentStatus(
+  userId: string,
+  recurringId: string,
+  installmentId: string,
+  status: InstallmentStatus,
+  actor: AuthUser
+) {
+  await connectDB();
+
+  const installment = await Transaction.findOne({
+    _id: installmentId,
+    user: userId,
+    isDeleted: { $ne: true },
+    recurringId: new Types.ObjectId(recurringId),
+  });
+  if (!installment) {
+    throw new TransactionServiceError("INSTALLMENT_NOT_FOUND", "Installment not found");
+  }
+
+  const installmentBefore = installment.toObject();
+  const prevStatus = installment.installmentStatus;
+  const previousPaidAt = installment.paidAt ? new Date(installment.paidAt) : undefined;
+  const now = new Date();
+  const installmentDate = new Date(installment.date);
+
+  // Apply balance delta when marking paid — all installments, regardless of date
+  if (status === "paid" && prevStatus !== "paid") {
+    const delta = installment.type === "income" ? installment.amount : -installment.amount;
+    const accountBefore = await Account.findOne({ _id: installment.account, user: userId });
+    const accountAfter = await Account.findOneAndUpdate(
+      { _id: installment.account, user: userId },
+      { $inc: { balance: delta } },
+      { new: true }
+    );
+    if (accountBefore && accountAfter) {
+      await appendLedgerBlock({
+        userId,
+        scope: "account",
+        entityId: accountAfter._id.toString(),
+        action: "update",
+        before: accountBefore,
+        after: accountAfter,
+        actor,
+      });
+    }
+  }
+
+  // Reverse balance if un-paying
+  if (prevStatus === "paid" && status !== "paid") {
+    const delta = installment.type === "income" ? -installment.amount : installment.amount;
+    const accountBefore = await Account.findOne({ _id: installment.account, user: userId });
+    const accountAfter = await Account.findOneAndUpdate(
+      { _id: installment.account, user: userId },
+      { $inc: { balance: delta } },
+      { new: true }
+    );
+    if (accountBefore && accountAfter) {
+      await appendLedgerBlock({
+        userId,
+        scope: "account",
+        entityId: accountAfter._id.toString(),
+        action: "update",
+        before: accountBefore,
+        after: accountAfter,
+        actor,
+      });
+    }
+  }
+
+  installment.installmentStatus = status;
+  installment.paidAt = status === "paid" ? now : undefined;
+  await installment.save();
+  await appendLedgerBlock({
+    userId,
+    scope: "transaction",
+    entityId: installment._id.toString(),
+    action: "update",
+    before: installmentBefore,
+    after: installment,
+    actor,
+  });
+
+  if (status === "paid" && prevStatus !== "paid" && installment.type === "expense") {
+    void checkBudgetAlert(userId, installment.category, installment.amount, now);
+  }
+
+  try {
+    const cacheDates = [installmentDate, now, previousPaidAt].filter((item): item is Date => Boolean(item));
+    await Promise.all(
+      cacheDates.map((date) => invalidateStatsCacheSingle(userId, date))
+    );
+  } catch {
+    // ignore
+  }
+
+  return installment;
 }
