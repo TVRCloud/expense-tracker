@@ -18,7 +18,7 @@ export function withIntegrationRoute<RouteCtx = unknown>(
   routeName: string,
   handler: (ctx: { req: NextRequest; user: AuthUser; requestId: string }, routeCtx: RouteCtx) => Promise<Response>
 ) {
-  return async function routeHandler(req: NextRequest, routeCtx?: RouteCtx): Promise<Response> {
+  return async function routeHandler(req: NextRequest, routeCtx: RouteCtx): Promise<Response> {
     const requestId = resolveRequestId(req);
     const start = Date.now();
 
