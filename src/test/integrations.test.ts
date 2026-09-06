@@ -372,7 +372,7 @@ describe("POST /api/integrations/transactions", () => {
 
   it("creates a transaction and returns 201", async () => {
     const { POST } = await import("@/app/api/integrations/transactions/route");
-    const res = await POST(makeReq(validBody()));
+    const res = await POST(makeReq(validBody()), {});
     const json = await res.json();
     expect(res.status).toBe(201);
     expect(json.success).toBe(true);
@@ -387,7 +387,7 @@ describe("POST /api/integrations/transactions", () => {
       headers: { authorization: `Bearer ${TEST_KEY}`, "content-type": "application/json" },
       body: JSON.stringify(validBody()),
     });
-    const res = await POST(req);
+    const res = await POST(req, {});
     const json = await res.json();
     expect(res.status).toBe(400);
     expect(json.error.code).toBe("VALIDATION_ERROR");
@@ -395,14 +395,15 @@ describe("POST /api/integrations/transactions", () => {
 
   it("rejects an invalid API key with 401", async () => {
     const { POST } = await import("@/app/api/integrations/transactions/route");
-    const res = await POST(makeReq(validBody(), { authorization: "Bearer wrong" }));
+    const res = await POST(makeReq(validBody(), { authorization: "Bearer wrong" }), {});
     expect(res.status).toBe(401);
   });
 
   it("rejects an invalid body with 400", async () => {
     const { POST } = await import("@/app/api/integrations/transactions/route");
     const res = await POST(
-      makeReq({ accountId, type: "expense", amount: -5, category: "Food", date: "not-a-date" })
+      makeReq({ accountId, type: "expense", amount: -5, category: "Food", date: "not-a-date" }),
+      {}
     );
     const json = await res.json();
     expect(res.status).toBe(400);
@@ -411,7 +412,7 @@ describe("POST /api/integrations/transactions", () => {
 
   it("returns 404 for a nonexistent account", async () => {
     const { POST } = await import("@/app/api/integrations/transactions/route");
-    const res = await POST(makeReq({ ...validBody(), accountId: "64f000000000000000000000" }));
+    const res = await POST(makeReq({ ...validBody(), accountId: "64f000000000000000000000" }), {});
     expect(res.status).toBe(404);
   });
 
@@ -422,9 +423,9 @@ describe("POST /api/integrations/transactions", () => {
     // Same literal body on both requests — a real retry resends the exact
     // bytes it sent before, it doesn't recompute a fresh timestamp.
     const body = validBody();
-    const first = await POST(makeReq(body));
+    const first = await POST(makeReq(body), {});
     const firstJson = await first.json();
-    const second = await POST(makeReq(body));
+    const second = await POST(makeReq(body), {});
     const secondJson = await second.json();
 
     expect(secondJson.data.id).toBe(firstJson.data.id);
@@ -435,8 +436,8 @@ describe("POST /api/integrations/transactions", () => {
 
   it("rejects the same Idempotency-Key reused with a different body (409)", async () => {
     const { POST } = await import("@/app/api/integrations/transactions/route");
-    await POST(makeReq(validBody()));
-    const res = await POST(makeReq({ ...validBody(), amount: 9999 }));
+    await POST(makeReq(validBody()), {});
+    const res = await POST(makeReq({ ...validBody(), amount: 9999 }), {});
     const json = await res.json();
     expect(res.status).toBe(409);
     expect(json.error.code).toBe("IDEMPOTENCY_CONFLICT");
