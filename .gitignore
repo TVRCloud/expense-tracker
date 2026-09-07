@@ -51,3 +51,4 @@ public/workbox-*.js.map
 
 # uploads
 public/uploads/
+/.playwright-mcp
