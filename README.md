@@ -15,6 +15,40 @@ A production-quality full-stack expense tracker built with Next.js 15 App Router
 - **Role-based access** — user and admin roles with guarded routes
 - **Dark/light mode** — system-aware theme with smooth toggle
 
+## Pages & screens
+
+One doc per page — what it does, the user story behind it, key elements, and edge cases
+to design for. This is what the UI/UX designer should read first. Every authenticated
+page also sits inside one shared app shell (sidebar/bottom nav/header) — see
+[docs/pages/](docs/pages/) for that too.
+
+| # | Page | Route | Doc |
+|---|---|---|---|
+| 1 | Dashboard | `/dashboard` | [docs/pages/01-dashboard.md](docs/pages/01-dashboard.md) |
+| 2 | Transactions | `/transactions`, `/transactions/add`, `/transactions/[id]`, `/transactions/recurring` | [docs/pages/02-transactions.md](docs/pages/02-transactions.md) |
+| 3 | Accounts | `/accounts`, `/accounts/[id]` | [docs/pages/03-accounts.md](docs/pages/03-accounts.md) |
+| 4 | Budgets | `/budgets` | [docs/pages/04-budgets.md](docs/pages/04-budgets.md) |
+| 5 | Goals | `/goals` | [docs/pages/05-goals.md](docs/pages/05-goals.md) |
+| 6 | Loans | `/loans` | [docs/pages/06-loans.md](docs/pages/06-loans.md) |
+| 7 | Analytics | `/analytics` | [docs/pages/07-analytics.md](docs/pages/07-analytics.md) |
+| 8 | Notifications | `/notifications` | [docs/pages/08-notifications.md](docs/pages/08-notifications.md) |
+| 9 | Logs | `/logs` | [docs/pages/09-logs.md](docs/pages/09-logs.md) |
+| 10 | Settings | `/settings` + 6 subpages | [docs/pages/10-settings.md](docs/pages/10-settings.md) |
+| 11 | Account | `/account` | [docs/pages/11-account.md](docs/pages/11-account.md) |
+| 12 | Admin Users | `/admin/users` (admin only) | [docs/pages/12-admin-users.md](docs/pages/12-admin-users.md) |
+| 13 | Credit Cards *(embedded, no own route)* | inside Accounts, Transactions, Dashboard | [docs/pages/13-credit-cards.md](docs/pages/13-credit-cards.md) |
+| 14 | Login | `/login` | [docs/pages/14-login.md](docs/pages/14-login.md) |
+| 15 | Register | `/register` | [docs/pages/15-register.md](docs/pages/15-register.md) |
+| 16 | Forgot Password | `/forgot-password` | [docs/pages/16-forgot-password.md](docs/pages/16-forgot-password.md) |
+| 17 | Reset Password | `/reset-password/[token]` | [docs/pages/17-reset-password.md](docs/pages/17-reset-password.md) |
+| 18 | Offline | `/offline` | [docs/pages/18-offline.md](docs/pages/18-offline.md) |
+
+Also API-only, no UI: **n8n integration** (`/api/integrations/*`) — see [docs/n8n-integration.md](docs/n8n-integration.md).
+
+> Budgets, Goals, and Loans aren't linked from the Sidebar, BottomNav, or Dashboard today
+> — only reachable via the command palette (⌘K/Ctrl+K) or a notification deep-link.
+> Worth deciding whether that changes in the redesign.
+
 ## Stack
 
 | Layer | Technology |
@@ -95,3 +129,5 @@ See [docs/architecture.md](docs/architecture.md) for full details.
 - [PWA](docs/pwa.md)
 - [Deployment](docs/deployment.md)
 - [Contributing](docs/contributing.md)
+- [n8n Integration](docs/n8n-integration.md)
+- [Pages & screens](docs/pages/) — one doc per page, user story + design notes
