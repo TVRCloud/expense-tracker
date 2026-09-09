@@ -46,6 +46,7 @@ const TransactionSchema = new Schema(
 
 TransactionSchema.index({ user: 1, isDeleted: 1, date: -1 });
 TransactionSchema.index({ user: 1, isDeleted: 1, account: 1, date: -1 });
+TransactionSchema.index({ user: 1, isDeleted: 1, transferTo: 1, date: -1 });
 TransactionSchema.index({ user: 1, isDeleted: 1, type: 1, date: -1 });
 TransactionSchema.index({ user: 1, isDeleted: 1, category: 1, date: -1 });
 TransactionSchema.index({ description: "text", note: "text" });
