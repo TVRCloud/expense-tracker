@@ -1,5 +1,7 @@
 "use client";
 
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
 interface Chip {
   label: string;
   value: string;
@@ -11,34 +13,28 @@ interface Props {
   onChange: (value: string) => void;
 }
 
+// Used as a segmented filter control, not paired with TabsContent — Tabs
+// still buys real keyboard arrow-key nav and role="tablist"/"tab" semantics
+// over the previous plain <button> row.
 export function FilterChips({ chips, active, onChange }: Props) {
   return (
-    <div className="flex gap-2.5 overflow-x-auto pb-1 scrollbar-none">
-      {chips.map((chip) => {
-        const isActive = chip.value === active;
-        return (
-          <button
+    <Tabs value={active} onValueChange={onChange}>
+      <TabsList className="h-auto w-max max-w-full justify-start gap-2.5 overflow-x-auto bg-transparent p-0 scrollbar-none">
+        {chips.map((chip) => (
+          <TabsTrigger
             key={chip.value}
-            onClick={() => onChange(chip.value)}
-            className="whitespace-nowrap rounded-full px-4 py-2 text-[13px] font-semibold transition-all flex-none"
-            style={
-              isActive
-                ? {
-                    background: "var(--violet)",
-                    color: "#fff",
-                    boxShadow: "0 4px 14px rgba(0,0,0,.30)",
-                  }
-                : {
-                    background: "var(--card)",
-                    color: "var(--ink-2)",
-                    boxShadow: "var(--shadow-sm)",
-                  }
-            }
+            value={chip.value}
+            className="flex-none whitespace-nowrap rounded-full px-4 py-2 text-[13px] font-semibold"
+            style={{
+              background: chip.value === active ? "var(--violet)" : "var(--card)",
+              color: chip.value === active ? "var(--violet-fg)" : "var(--ink-2)",
+              boxShadow: chip.value === active ? "0 4px 14px rgba(0,0,0,.30)" : "var(--shadow-sm)",
+            }}
           >
             {chip.label}
-          </button>
-        );
-      })}
-    </div>
+          </TabsTrigger>
+        ))}
+      </TabsList>
+    </Tabs>
   );
 }

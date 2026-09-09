@@ -2,6 +2,7 @@
 
 import { TrendingDown, TrendingUp } from "lucide-react";
 import { useCurrency } from "@/hooks/useCurrency";
+import { Skeleton } from "@/components/_ui/Skeleton";
 
 interface Props {
   accountBalance: number;
@@ -11,12 +12,7 @@ interface Props {
 }
 
 function Shimmer({ w }: { w: number | string }) {
-  return (
-    <span
-      className="inline-block rounded-lg animate-pulse"
-      style={{ width: w, height: 20, background: "rgba(255,255,255,0.22)", verticalAlign: "middle" }}
-    />
-  );
+  return <Skeleton inverse className="inline-block align-middle rounded-lg" style={{ width: w, height: 20 }} />;
 }
 
 export function BalanceCard({ accountBalance, income, expense, isLoading }: Props) {

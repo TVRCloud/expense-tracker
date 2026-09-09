@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, RotateCcw, Trash2 } from "lucide-react";
@@ -12,7 +11,11 @@ import {
   useMarkInstallment,
   useCancelSeries,
 } from "../hooks/useRecurringSeries";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/_ui/Skeleton";
+import { Card } from "@/components/_ui/Card";
+import { Button } from "@/components/_ui/Button";
+import { Progress } from "@/components/_ui/Progress";
+import { useConfirm } from "@/components/_ui/ConfirmDialog";
 import { type ITransaction } from "@/types/models";
 
 const FREQ_LABEL: Record<string, string> = {
@@ -55,7 +58,7 @@ export function RecurringSeriesClient({ recurringId }: Props) {
   const { data, isLoading, isError } = useRecurringSeriesDetail(recurringId);
   const markInstallment = useMarkInstallment(recurringId);
   const cancelSeries = useCancelSeries(recurringId);
-  const [confirmCancel, setConfirmCancel] = useState(false);
+  const { confirm, dialog } = useConfirm();
 
   if (isLoading) {
     return (
@@ -73,9 +76,9 @@ export function RecurringSeriesClient({ recurringId }: Props) {
         <Link href="/transactions" className="inline-flex items-center gap-2 text-sm font-bold" style={{ color: "var(--violet)" }}>
           <ArrowLeft size={16} /> Back to Transactions
         </Link>
-        <div className="rounded-(--r-lg) p-8 text-center" style={{ background: "var(--card)" }}>
+        <Card radius="lg" className="p-8 text-center">
           <div className="font-bold" style={{ color: "var(--ink)" }}>Series not found</div>
-        </div>
+        </Card>
       </div>
     );
   }
@@ -102,7 +105,14 @@ export function RecurringSeriesClient({ recurringId }: Props) {
     );
   }
 
-  function handleCancel() {
+  async function handleCancel() {
+    const ok = await confirm({
+      title: `Cancel ${remainingCount} remaining installment${remainingCount !== 1 ? "s" : ""}?`,
+      description: "Already-paid installments stay as-is. This can't be undone.",
+      confirmLabel: "Cancel installments",
+      destructive: true,
+    });
+    if (!ok) return;
     cancelSeries.mutate(undefined, {
       onSuccess: () => {
         toast.success("Remaining installments cancelled");
@@ -119,7 +129,7 @@ export function RecurringSeriesClient({ recurringId }: Props) {
       </Link>
 
       {/* Series header */}
-      <div className="rounded-(--r-lg) p-5 flex flex-col gap-4" style={{ background: "var(--card)", boxShadow: "var(--shadow)" }}>
+      <Card radius="lg" elevation="floating" className="p-5 flex flex-col gap-4">
         <div className="flex items-start gap-3">
           <div
             className="w-11 h-11 rounded-full grid place-items-center flex-none"
@@ -151,20 +161,15 @@ export function RecurringSeriesClient({ recurringId }: Props) {
             <span>{series.paidCount} of {series.count} paid · {formatCurrency(paidAmount)}</span>
             <span style={{ color: "var(--ink-3)" }}>{formatCurrency(series.remainingAmount)} remaining</span>
           </div>
-          <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--line)" }}>
-            <div
-              className="h-full rounded-full transition-all"
-              style={{ width: `${progressPct}%`, background: "var(--green)" }}
-            />
-          </div>
+          <Progress value={progressPct} color="var(--green)" trackColor="var(--line)" height={8} />
           <div className="text-[11px] font-medium" style={{ color: "var(--ink-3)" }}>
             {remainingCount > 0 ? `${remainingCount} installment${remainingCount !== 1 ? "s" : ""} remaining` : "All installments paid"}
           </div>
         </div>
-      </div>
+      </Card>
 
       {/* Installment list */}
-      <div className="rounded-(--r-lg) overflow-hidden" style={{ background: "var(--card)", boxShadow: "var(--shadow)" }}>
+      <Card radius="lg" elevation="floating" className="overflow-hidden">
         <div className="px-5 py-4 border-b" style={{ borderColor: "var(--line)" }}>
           <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
             Installments
@@ -206,64 +211,51 @@ export function RecurringSeriesClient({ recurringId }: Props) {
               {/* Action */}
               <div className="flex-none">
                 {tx.installmentStatus === "paid" ? (
-                  <button
+                  <Button
+                    type="button"
+                    variant="ghost"
                     onClick={() => handleMarkUnpaid(tx)}
                     disabled={markInstallment.isPending}
-                    className="text-[11px] font-bold px-2.5 py-1 rounded-(--r-sm) disabled:opacity-40"
+                    className="h-auto text-[11px] font-bold px-2.5 py-1 rounded-(--r-sm)"
                     style={{ background: "var(--card-2)", color: "var(--ink-3)" }}
                   >
                     Undo
-                  </button>
+                  </Button>
                 ) : tx.installmentStatus !== "skipped" ? (
-                  <button
+                  <Button
+                    type="button"
+                    variant="ghost"
                     onClick={() => handleMarkPaid(tx)}
                     disabled={markInstallment.isPending}
-                    className="text-[11px] font-bold px-2.5 py-1 rounded-(--r-sm) disabled:opacity-40"
+                    className="h-auto text-[11px] font-bold px-2.5 py-1 rounded-(--r-sm)"
                     style={{ background: "color-mix(in srgb, var(--green) 12%, transparent)", color: "var(--green)" }}
                   >
                     Mark Paid
-                  </button>
+                  </Button>
                 ) : null}
               </div>
             </div>
           ))}
         </div>
-      </div>
+      </Card>
 
       {/* Cancel series */}
       {remainingCount > 0 && (
         <div className="flex justify-end">
-          {confirmCancel ? (
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium" style={{ color: "var(--ink-2)" }}>Cancel {remainingCount} remaining?</span>
-              <button
-                onClick={() => setConfirmCancel(false)}
-                className="px-3 py-1.5 rounded-(--r-sm) text-sm font-bold"
-                style={{ background: "var(--card)", color: "var(--ink-3)" }}
-              >
-                No
-              </button>
-              <button
-                onClick={handleCancel}
-                disabled={cancelSeries.isPending}
-                className="px-3 py-1.5 rounded-(--r-sm) text-sm font-bold disabled:opacity-50"
-                style={{ background: "rgba(235,87,87,.12)", color: "var(--red)" }}
-              >
-                {cancelSeries.isPending ? "Cancelling..." : "Yes, Cancel"}
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => setConfirmCancel(true)}
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-(--r-sm) text-sm font-bold"
-              style={{ background: "rgba(235,87,87,.08)", color: "var(--red)" }}
-            >
-              <Trash2 size={14} />
-              Cancel remaining installments
-            </button>
-          )}
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={handleCancel}
+            disabled={cancelSeries.isPending}
+            className="h-auto inline-flex items-center gap-2 px-3 py-1.5 rounded-(--r-sm) text-sm font-bold"
+            style={{ background: "rgba(235,87,87,.08)", color: "var(--red)" }}
+          >
+            <Trash2 size={14} />
+            {cancelSeries.isPending ? "Cancelling..." : "Cancel remaining installments"}
+          </Button>
         </div>
       )}
+      {dialog}
     </div>
   );
 }

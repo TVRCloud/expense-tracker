@@ -16,7 +16,12 @@ import { CreditCardForm } from "./CreditCardForm";
 import { useRecurringSeriesList } from "@/features/recurring/hooks/useRecurringSeries";
 import { useCreditStatements } from "@/features/credit-cards/hooks/useCreditStatements";
 import { type IAccount, type ICreditMeta } from "@/types/models";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/_ui/Skeleton";
+import { Card } from "@/components/_ui/Card";
+import { Button } from "@/components/_ui/Button";
+import { useConfirm } from "@/components/_ui/ConfirmDialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 interface Props {
   id: string;
@@ -25,6 +30,7 @@ interface Props {
 export function CreditCardDetailClient({ id }: Props) {
   const router = useRouter();
   const qc = useQueryClient();
+  const { confirm, dialog } = useConfirm();
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ name: "", color: "", icon: "" });
   const [creditMeta, setCreditMeta] = useState<Partial<ICreditMeta>>({});
@@ -102,9 +108,9 @@ export function CreditCardDetailClient({ id }: Props) {
         <Link href="/accounts" className="inline-flex items-center gap-2 text-sm font-bold" style={{ color: "var(--violet)" }}>
           <ArrowLeft size={16} /> Back to accounts
         </Link>
-        <div className="rounded-(--r-lg) p-8 text-center" style={{ background: "var(--card)" }}>
+        <Card radius="lg" className="p-8 text-center">
           <div className="font-bold" style={{ color: "var(--ink)" }}>Card not found</div>
-        </div>
+        </Card>
       </div>
     );
   }
@@ -140,55 +146,63 @@ export function CreditCardDetailClient({ id }: Props) {
 
       {/* Edit section */}
       <div className="flex gap-2 justify-end">
-        <button
+        <Button
+          type="button"
+          variant="secondary"
           onClick={() => setEditing(v => !v)}
-          className="px-4 py-2 rounded-(--r-sm) text-sm font-bold"
-          style={{ background: "var(--card)", color: "var(--ink-2)", boxShadow: "var(--shadow-sm)" }}
+          className="h-auto px-4 py-2 rounded-(--r-sm) font-bold"
         >
           {editing ? "Cancel" : "Edit Card"}
-        </button>
-        <button
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          size="icon"
           onClick={() => recalculateBalance.mutate()}
           disabled={recalculateBalance.isPending}
-          title="Recalculate balance from transactions"
-          className="px-3 py-2 rounded-(--r-sm) text-sm font-bold flex items-center gap-1.5 disabled:opacity-50"
-          style={{ background: "var(--card)", color: "var(--ink-2)", boxShadow: "var(--shadow-sm)" }}
+          aria-label="Recalculate balance from transactions"
         >
           <RefreshCw size={14} className={recalculateBalance.isPending ? "animate-spin" : ""} />
-        </button>
-        <button
-          onClick={() => { if (confirm(`Archive "${account.name}"?`)) archiveAccount.mutate(); }}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label={`Archive ${account.name}`}
+          onClick={async () => {
+            const ok = await confirm({
+              title: `Archive "${account.name}"?`,
+              description: "You can restore it later. Statement and repayment history stay intact.",
+              confirmLabel: "Archive",
+              destructive: true,
+            });
+            if (ok) archiveAccount.mutate();
+          }}
           disabled={archiveAccount.isPending}
-          className="px-4 py-2 rounded-(--r-sm) text-sm font-bold"
+          className="px-4 py-2 rounded-(--r-sm)"
           style={{ background: "rgba(235,87,87,.1)", color: "var(--red)" }}
         >
           <Archive size={14} />
-        </button>
+        </Button>
       </div>
 
       {editing && (
-        <div className="rounded-(--r-lg) p-5 flex flex-col gap-4" style={{ background: "var(--card)", boxShadow: "var(--shadow)" }}>
+        <Card radius="lg" elevation="floating" className="p-5 flex flex-col gap-4">
           <div className="text-sm font-bold" style={{ color: "var(--ink)" }}>Edit Card</div>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Name</span>
-            <input
-              value={form.name}
-              onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-              className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none"
-              style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }}
-            />
-          </label>
+          <div className="flex flex-col gap-1.5">
+            <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Name</Label>
+            <Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+          </div>
           <CreditCardForm value={creditMeta} onChange={setCreditMeta} />
-          <button
+          <Button
             onClick={() => updateAccount.mutate()}
             disabled={updateAccount.isPending || !form.name}
-            className="inline-flex items-center justify-center gap-2 py-2.5 rounded-(--r-sm) text-sm font-bold disabled:opacity-50"
-            style={{ background: "var(--violet)", color: "#fff" }}
+            className="h-auto py-2.5 rounded-(--r-sm) font-bold"
           >
             <Save size={15} />
             {updateAccount.isPending ? "Saving..." : "Save Changes"}
-          </button>
-        </div>
+          </Button>
+        </Card>
       )}
 
       {/* Statements */}
@@ -208,15 +222,16 @@ export function CreditCardDetailClient({ id }: Props) {
             {[0, 1, 2].map(i => <Skeleton key={i} className="h-16 rounded-(--r-md)" />)}
           </div>
         ) : (transactions?.data ?? []).length === 0 ? (
-          <div className="rounded-(--r-lg) p-8 text-center" style={{ background: "var(--card)" }}>
+          <Card radius="lg" className="p-8 text-center">
             <div className="font-bold" style={{ color: "var(--ink)" }}>No transactions yet</div>
-          </div>
+          </Card>
         ) : (
           <div className="flex flex-col gap-2">
             {(transactions?.data ?? []).map(tx => <TransactionRow key={String(tx._id)} transaction={tx} />)}
           </div>
         )}
       </section>
+      {dialog}
     </div>
   );
 }

@@ -21,6 +21,9 @@ import {
   KeyRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/_ui/Button";
+import { Avatar } from "@/components/_ui/Avatar";
 
 const NAV_GROUPS = [
   {
@@ -157,25 +160,20 @@ export function Sidebar() {
       {/* Footer */}
       <div className="mt-4 flex flex-col gap-3">
         {/* Theme toggle */}
-        <button
-          onClick={() => setTheme(isDark ? "light" : "dark")}
-          className="flex items-center justify-between px-4 py-3 rounded-[14px] font-semibold text-sm transition-all"
+        <label
+          className="flex items-center justify-between px-4 py-3 rounded-[14px] font-semibold text-sm cursor-pointer"
           style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
         >
           <span className="flex items-center gap-3">
             {isDark ? <Sun size={18} /> : <Moon size={18} />}
             <span>{isDark ? "Light mode" : "Dark mode"}</span>
           </span>
-          <span
-            className="relative w-10.5 h-6 rounded-full flex-none transition-colors duration-200"
-            style={{ background: isDark ? "var(--violet)" : "var(--line-2)" }}
-          >
-            <span
-              className="absolute top-0.75 w-4.5 h-4.5 rounded-full bg-white transition-transform duration-200 shadow"
-              style={{ left: 3, transform: isDark ? "translateX(18px)" : "translateX(0)" }}
-            />
-          </span>
-        </button>
+          <Switch
+            checked={isDark}
+            onCheckedChange={(checked) => setTheme(checked ? "dark" : "light")}
+            aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+          />
+        </label>
 
         {/* Profile card */}
         <div
@@ -185,12 +183,7 @@ export function Sidebar() {
             borderTop: "1px solid var(--line)",
           }}
         >
-          <div
-            className="w-9 h-9 rounded-[10px] grid place-items-center text-white font-bold text-base flex-none"
-            style={{ background: "var(--card-2)", color: "var(--ink)", flexShrink: 0 }}
-          >
-            {session?.user?.name?.[0]?.toUpperCase() ?? "U"}
-          </div>
+          <Avatar name={session?.user?.name ?? "User"} size={36} />
           <div className="min-w-0 flex-1">
             <div className="font-bold text-[13px] truncate" style={{ color: "var(--ink)" }}>
               {session?.user?.name ?? "User"}
@@ -199,14 +192,17 @@ export function Sidebar() {
               {session?.user?.email ?? ""}
             </div>
           </div>
-          <button
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
             onClick={() => signOut({ callbackUrl: "/login" })}
-            className="p-1.5 rounded-xl transition-opacity hover:opacity-70 flex-none"
+            className="p-1.5 rounded-xl h-auto w-auto"
             style={{ color: "var(--ink-3)", background: "var(--card)" }}
-            title="Sign out"
+            aria-label="Sign out"
           >
             <LogOut size={16} />
-          </button>
+          </Button>
         </div>
       </div>
     </aside>

@@ -10,6 +10,7 @@ const updateSchema = z.object({
   limitAmount: z.number().int().positive().optional(),
   alertAt: z.number().min(1).max(100).optional(),
   isActive: z.boolean().optional(),
+  rollover: z.boolean().optional(),
 });
 
 type Params = Promise<{ id: string }>;

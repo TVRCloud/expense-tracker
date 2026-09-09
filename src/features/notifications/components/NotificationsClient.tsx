@@ -1,13 +1,39 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, Check, CheckCheck, Trash2 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import apiClient from "@/lib/api-client";
 import { type INotification } from "@/types/models";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/_ui/Skeleton";
+import { Card } from "@/components/_ui/Card";
+import { Button } from "@/components/_ui/Button";
 import { toast } from "sonner";
 import { NOTIFICATION_TYPE_ICONS, NOTIFICATION_TYPE_COLORS } from "@/lib/icons";
+
+// Every notification producer (budget-alert.ts, emi-notifications.ts,
+// credit-notifications.ts) already writes a routable id into `meta` — this
+// maps notification type to where tapping it should land.
+function notificationHref(n: INotification): string | null {
+  const meta = n.meta ?? {};
+  switch (n.type) {
+    case "transaction":
+    case "emi_due":
+      return meta.transactionId ? `/transactions/${meta.transactionId}` : null;
+    case "credit_due":
+    case "credit_overdue":
+      return meta.accountId ? `/accounts/${meta.accountId}` : null;
+    case "budget_alert":
+      return "/budgets";
+    case "loan_due":
+      return "/loans";
+    case "goal_reached":
+      return "/goals";
+    default:
+      return null;
+  }
+}
 
 function useNotifications() {
   return useQuery<{ data: INotification[]; unreadCount: number }>({
@@ -21,6 +47,7 @@ function useNotifications() {
 
 export function NotificationsClient() {
   const qc = useQueryClient();
+  const router = useRouter();
   const { data, isLoading } = useNotifications();
 
   const markRead = useMutation({
@@ -57,28 +84,27 @@ export function NotificationsClient() {
           </span>
         </div>
         {unreadCount > 0 && (
-          <button
+          <Button
+            type="button"
+            variant="secondary"
             onClick={() => markAllRead.mutate()}
             disabled={markAllRead.isPending}
-            className="flex items-center gap-1.5 text-sm font-semibold px-3 py-1.5 rounded-full"
-            style={{ background: "var(--card)", color: "var(--violet)", boxShadow: "var(--shadow-sm)" }}
+            className="h-auto flex items-center gap-1.5 text-sm font-semibold px-3 py-1.5 rounded-full"
+            style={{ color: "var(--violet)" }}
           >
             <CheckCheck size={15} />
             Mark all read
-          </button>
+          </Button>
         )}
       </div>
 
       {/* List */}
       {isLoading ? (
         <div className="flex flex-col gap-3">
-          {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-20 rounded-[var(--r-md)]" />)}
+          {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-20 rounded-(--r-md)" />)}
         </div>
       ) : notifications.length === 0 ? (
-        <div
-          className="flex flex-col items-center justify-center gap-3 rounded-[var(--r-lg)] py-20"
-          style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
-        >
+        <Card radius="lg" className="flex flex-col items-center justify-center gap-3 py-20">
           <div
             className="w-16 h-16 rounded-full grid place-items-center text-3xl"
             style={{ background: "var(--card-2)" }}
@@ -86,18 +112,21 @@ export function NotificationsClient() {
             <Bell size={28} style={{ color: "var(--ink-3)" }} />
           </div>
           <p className="text-sm font-medium" style={{ color: "var(--ink-2)" }}>No notifications</p>
-        </div>
+        </Card>
       ) : (
         <div className="flex flex-col gap-2.5">
-          {notifications.map((n) => (
-            <div
+          {notifications.map((n) => {
+            const href = notificationHref(n);
+            return (
+            <Card
               key={String(n._id)}
-              className="flex items-start gap-4 rounded-[var(--r-md)] px-4 py-4 transition-all"
-              style={{
-                background: "var(--card)",
-                boxShadow: "var(--shadow-sm)",
-                borderLeft: n.isRead ? "3px solid transparent" : "3px solid var(--violet)",
-              }}
+              radius="md"
+              className={`flex items-start gap-4 px-4 py-4${href ? " cursor-pointer transition-colors hover:bg-(--card-2)" : ""}`}
+              style={{ borderLeft: n.isRead ? "3px solid transparent" : "3px solid var(--violet)" }}
+              onClick={href ? () => {
+                if (!n.isRead) markRead.mutate(String(n._id));
+                router.push(href);
+              } : undefined}
             >
               {/* Icon */}
               <div
@@ -126,24 +155,33 @@ export function NotificationsClient() {
               {/* Actions */}
               <div className="flex items-center gap-2 flex-none">
                 {!n.isRead && (
-                  <button
-                    onClick={() => markRead.mutate(String(n._id))}
-                    className="w-8 h-8 rounded-full grid place-items-center"
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Mark as read"
+                    onClick={(e) => { e.stopPropagation(); markRead.mutate(String(n._id)); }}
+                    className="w-8 h-8 rounded-full"
                     style={{ background: "var(--card-2)" }}
                   >
                     <Check size={15} style={{ color: "var(--green)" }} />
-                  </button>
+                  </Button>
                 )}
-                <button
-                  onClick={() => deleteNotif.mutate(String(n._id))}
-                  className="w-8 h-8 rounded-full grid place-items-center"
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Delete notification"
+                  onClick={(e) => { e.stopPropagation(); deleteNotif.mutate(String(n._id)); }}
+                  className="w-8 h-8 rounded-full"
                   style={{ background: "var(--card-2)" }}
                 >
                   <Trash2 size={14} style={{ color: "var(--red)" }} />
-                </button>
+                </Button>
               </div>
-            </div>
-          ))}
+            </Card>
+            );
+          })}
         </div>
       )}
     </div>

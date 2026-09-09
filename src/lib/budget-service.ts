@@ -1,14 +1,42 @@
 import { Types } from "mongoose";
-import { z } from "zod";
 import connectDB from "@/lib/mongodb";
 import Budget from "@/models/Budget";
 import Transaction from "@/models/Transaction";
 import type { AuthUser } from "@/lib/auth-guard";
 import { appendLedgerBlock } from "@/lib/ledger";
+import { budgetCreateSchema } from "@/features/budgets/schemas/budget.schema";
+import { z } from "zod";
+
+export { budgetCreateSchema };
 
 // Shared budget-listing + spend calculation, used by GET /api/budgets
 // (browser) and GET /api/integrations/budgets (n8n) so both report the same
 // numbers from one aggregation pipeline.
+async function categorySpend(userObjectId: Types.ObjectId, category: string, year: number, month: number) {
+  const spent = await Transaction.aggregate([
+    {
+      $match: {
+        user: userObjectId,
+        isDeleted: { $ne: true },
+        category,
+        type: "expense",
+        date: {
+          $gte: new Date(year, month - 1, 1),
+          $lt: new Date(year, month, 1),
+        },
+        $nor: [
+          {
+            recurringId: { $exists: true },
+            installmentStatus: { $nin: ["paid"] },
+          },
+        ],
+      },
+    },
+    { $group: { _id: null, total: { $sum: "$amount" } } },
+  ]);
+  return spent[0]?.total ?? 0;
+}
+
 export async function listBudgetsWithSpend(userId: string, year: number, month: number) {
   await connectDB();
   const userObjectId = new Types.ObjectId(userId);
@@ -16,39 +44,32 @@ export async function listBudgetsWithSpend(userId: string, year: number, month: 
 
   return Promise.all(
     budgets.map(async (b) => {
-      const spent = await Transaction.aggregate([
-        {
-          $match: {
-            user: userObjectId,
-            isDeleted: { $ne: true },
-            category: b.category,
-            type: "expense",
-            date: {
-              $gte: new Date(year, month - 1, 1),
-              $lt: new Date(year, month, 1),
-            },
-            $nor: [
-              {
-                recurringId: { $exists: true },
-                installmentStatus: { $nin: ["paid"] },
-              },
-            ],
-          },
-        },
-        { $group: { _id: null, total: { $sum: "$amount" } } },
-      ]);
-      return { ...b, spent: spent[0]?.total ?? 0 };
+      const spent = await categorySpend(userObjectId, b.category, year, month);
+
+      // `limitAmount` stays exactly what the user set — the source of
+      // truth. Rollover computes a separate `effectiveLimit` that adds the
+      // previous month's unspent amount for the same category, so a
+      // rollover-enabled budget's carried-forward headroom is always
+      // derived, never baked into the stored limit.
+      let effectiveLimit = b.limitAmount;
+      if (b.rollover) {
+        const prevDate = new Date(year, month - 2, 1);
+        const prevMonth = prevDate.getMonth() + 1;
+        const prevYear = prevDate.getFullYear();
+        const prevBudget = await Budget.findOne({
+          user: userId, category: b.category, month: prevMonth, year: prevYear, isDeleted: { $ne: true },
+        }).lean();
+        if (prevBudget) {
+          const prevSpent = await categorySpend(userObjectId, b.category, prevYear, prevMonth);
+          const unspent = Math.max(prevBudget.limitAmount - prevSpent, 0);
+          effectiveLimit = b.limitAmount + unspent;
+        }
+      }
+
+      return { ...b, spent, effectiveLimit };
     })
   );
 }
-
-export const budgetCreateSchema = z.object({
-  category: z.string().min(1),
-  month: z.number().int().min(1).max(12),
-  year: z.number().int().min(2020),
-  limitAmount: z.number().int().positive(),
-  alertAt: z.number().min(1).max(100).default(80),
-});
 
 export type CreateBudgetInput = z.infer<typeof budgetCreateSchema> & { userId: string; actor: AuthUser };
 

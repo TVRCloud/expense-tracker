@@ -14,7 +14,8 @@ const updateSchema = z.object({
   counterparty: z.string().min(1).max(100).optional(),
   dueDate: z.string().optional(),
   isSettled: z.boolean().optional(),
-  note: z.string().optional(),
+  description: z.string().optional(),
+  interestRate: z.number().min(0).max(100).optional(),
 });
 
 type Params = Promise<{ id: string }>;

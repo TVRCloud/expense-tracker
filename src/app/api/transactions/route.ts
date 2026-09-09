@@ -3,6 +3,9 @@ import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { isValidObjectId, listTransactions } from "@/lib/transaction-query";
 import { createTransaction, transactionCreateSchema, TransactionServiceError } from "@/lib/transaction-service";
+import { toCsv, csvResponse } from "@/lib/csv";
+import connectDB from "@/lib/mongodb";
+import Transaction from "@/models/Transaction";
 
 export async function GET(req: NextRequest) {
   try {
@@ -20,9 +23,55 @@ export async function GET(req: NextRequest) {
     const dateTo = searchParams.get("dateTo");
     const hideFuture = searchParams.get("hideFuture") === "true";
     const includeUnpaidRecurring = searchParams.get("includeUnpaidRecurring") === "true";
+    const splitGroupId = searchParams.get("splitGroupId");
 
     if (!isValidObjectId(accountId)) {
       return NextResponse.json({ error: "Invalid account" }, { status: 400 });
+    }
+
+    if (splitGroupId) {
+      if (!isValidObjectId(splitGroupId)) {
+        return NextResponse.json({ error: "Invalid split group" }, { status: 400 });
+      }
+      await connectDB();
+      const siblings = await Transaction.find({ user: user.id, splitGroupId, isDeleted: { $ne: true } })
+        .sort({ category: 1 })
+        .lean();
+      return NextResponse.json({ data: siblings });
+    }
+
+    if (searchParams.get("format") === "csv") {
+      await connectDB();
+      const query: Record<string, unknown> = { user: user.id, isDeleted: { $ne: true } };
+      if (type) query.type = type;
+      if (category) query.category = category;
+      if (accountId) query.account = accountId;
+      if (dateFrom || dateTo) {
+        query.date = {};
+        if (dateFrom) (query.date as Record<string, unknown>).$gte = new Date(dateFrom);
+        if (dateTo) (query.date as Record<string, unknown>).$lte = new Date(dateTo);
+      }
+      const rows = await Transaction.find(query)
+        .populate("account", "name")
+        .sort({ date: -1 })
+        .lean<{ date: Date; type: string; category: string; subcategory?: string; description?: string; note?: string; amount: number; currency: string; account?: { name?: string }; tags?: string[] }[]>();
+
+      const csv = toCsv(
+        rows.map((t) => ({
+          date: new Date(t.date).toISOString().slice(0, 10),
+          type: t.type,
+          category: t.category,
+          subcategory: t.subcategory ?? "",
+          description: t.description ?? "",
+          note: t.note ?? "",
+          amount: (t.amount / 100).toFixed(2),
+          currency: t.currency,
+          account: t.account?.name ?? "",
+          tags: (t.tags ?? []).join(";"),
+        })),
+        ["date", "type", "category", "subcategory", "description", "note", "amount", "currency", "account", "tags"]
+      );
+      return csvResponse(csv, `transactions-${new Date().toISOString().slice(0, 10)}.csv`);
     }
 
     const result = await listTransactions({
@@ -62,6 +111,12 @@ export async function POST(req: NextRequest) {
     if (result.kind === "series") {
       return NextResponse.json(
         { data: result.transaction, seriesId: result.seriesId, count: result.count },
+        { status: 201 }
+      );
+    }
+    if (result.kind === "split") {
+      return NextResponse.json(
+        { data: result.transaction, splitGroupId: result.splitGroupId, count: result.count },
         { status: 201 }
       );
     }

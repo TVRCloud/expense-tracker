@@ -12,6 +12,9 @@ import {
 import { APPEARANCE_ICON, ACCOUNTS_NAV_ICON } from "@/lib/icons";
 import { signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import apiClient from "@/lib/api-client";
+import { useConfirm } from "@/components/_ui/ConfirmDialog";
 import { BalanceBanner } from "./BalanceBanner";
 import { ProfileCard } from "./ProfileCard";
 import { SettingsRow } from "./SettingsRow";
@@ -21,6 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 export function AccountClient() {
   const router = useRouter();
+  const { confirm, dialog } = useConfirm();
   const { data: profile, isLoading: profileLoading } = useProfile();
   const { data: accounts, isLoading: accountsLoading } = useAccounts();
 
@@ -45,6 +49,23 @@ export function AccountClient() {
   const handleSignOut = async () => {
     await signOut({ redirect: false });
     router.push("/login");
+  };
+
+  const handleDeleteAccount = async () => {
+    const ok = await confirm({
+      title: "Delete your account?",
+      description: "This signs you out everywhere and blocks future logins. This can't be undone from here.",
+      confirmLabel: "Delete account",
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await apiClient.delete("/me");
+      toast.success("Account deleted");
+      await signOut({ callbackUrl: "/login" });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete account");
+    }
   };
 
   return (
@@ -125,12 +146,11 @@ export function AccountClient() {
           icon={Trash2}
           title="Delete Account"
           subtitle="Permanently remove your data"
-          onClick={() => {
-            /* TODO: confirm dialog */
-          }}
+          onClick={() => void handleDeleteAccount()}
           danger
         />
       </div>
+      {dialog}
     </div>
   );
 }

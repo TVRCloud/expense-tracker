@@ -9,6 +9,7 @@ const BudgetSchema = new Schema(
     limitAmount: { type: Number, required: true }, // cents
     currency: { type: String, default: "INR" },
     alertAt: { type: Number, default: 80 }, // percent threshold
+    rollover: { type: Boolean, default: false }, // carry previous month's unspent into this month's effective limit
     isActive: { type: Boolean, default: true },
     isDeleted: { type: Boolean, default: false },
     deletedAt: { type: Date },

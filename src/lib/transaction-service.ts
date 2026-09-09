@@ -7,6 +7,7 @@ import CreditStatement from "@/models/CreditStatement";
 import type { AuthUser } from "@/lib/auth-guard";
 import { redis } from "@/lib/redis";
 import { checkBudgetAlert } from "@/lib/budget-alert";
+import { applyRoundUp } from "@/lib/goal-service";
 import { computeInstallmentDates, OPEN_ENDED_WINDOW } from "@/lib/recurrence";
 import { appendLedgerBlock } from "@/lib/ledger";
 import logger from "@/lib/logger";
@@ -25,7 +26,7 @@ export const transactionCreateSchema = z
     type: z.enum(["income", "expense", "transfer"]),
     amount: z.number().int().positive(),
     currency: z.string().default("INR"),
-    category: z.string().min(1),
+    category: z.string().min(1).optional(),
     subcategory: z.string().optional(),
     description: z.string().optional(),
     note: z.string().optional(),
@@ -38,10 +39,32 @@ export const transactionCreateSchema = z
     recurrenceCount: z.number().int().min(1).max(3650).optional(),
     recurrenceEndDate: z.string().optional(),
     recurrenceLabel: z.string().max(100).optional(),
+    // Split-purchase lines — when present, `category` above is ignored and
+    // one sibling Transaction document is created per split line instead
+    // (see splitGroupId on the model). Sum of split amounts must equal `amount`.
+    splits: z.array(z.object({
+      category: z.string().min(1),
+      amount: z.number().int().positive(),
+      description: z.string().optional(),
+    })).min(2).optional(),
   })
   .superRefine((data, ctx) => {
     if (!Types.ObjectId.isValid(data.accountId)) {
       ctx.addIssue({ code: "custom", path: ["accountId"], message: "Invalid account" });
+    }
+    if (data.splits) {
+      if (data.type !== "expense") {
+        ctx.addIssue({ code: "custom", path: ["splits"], message: "Only expenses can be split" });
+      }
+      if (data.isRecurring) {
+        ctx.addIssue({ code: "custom", path: ["splits"], message: "Split transactions can't be recurring" });
+      }
+      const splitTotal = data.splits.reduce((sum, s) => sum + s.amount, 0);
+      if (splitTotal !== data.amount) {
+        ctx.addIssue({ code: "custom", path: ["splits"], message: "Split amounts must add up to the total" });
+      }
+    } else if (!data.category) {
+      ctx.addIssue({ code: "custom", path: ["category"], message: "Category is required" });
     }
     if (data.transferToId && !Types.ObjectId.isValid(data.transferToId)) {
       ctx.addIssue({ code: "custom", path: ["transferToId"], message: "Invalid transfer account" });
@@ -71,7 +94,8 @@ export type CreateTransactionInput = z.infer<typeof transactionCreateSchema> & {
 
 export type CreateTransactionResult =
   | { kind: "single"; transaction: unknown }
-  | { kind: "series"; transaction: unknown; seriesId: string; count: number };
+  | { kind: "series"; transaction: unknown; seriesId: string; count: number }
+  | { kind: "split"; transaction: unknown; splitGroupId: string; count: number };
 
 export type TransactionServiceErrorCode =
   | "ACCOUNT_NOT_FOUND"
@@ -159,6 +183,58 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   }
 
   const startDate = new Date(rest.date);
+
+  // ── Split purchase — N sibling documents sharing a splitGroupId ─────────
+  // (schema refine above already guarantees rest.type === "expense",
+  // !rest.isRecurring, and splits summing to rest.amount when this is set)
+  if (rest.splits) {
+    const splitGroupId = new Types.ObjectId();
+    const accountBefore = account.toObject();
+    account.balance -= rest.amount;
+    await account.save();
+    await appendLedgerBlock({
+      userId,
+      scope: "account",
+      entityId: account._id.toString(),
+      action: "update",
+      before: accountBefore,
+      after: account,
+      actor,
+    });
+
+    const { splits, category: _unusedCategory, ...sharedRest } = rest;
+    const docs = splits.map((s) => ({
+      ...sharedRest,
+      category: s.category,
+      amount: s.amount,
+      description: s.description ?? sharedRest.description,
+      account: accountId,
+      user: userId,
+      date: startDate,
+      splitGroupId,
+    }));
+    const inserted = await Transaction.insertMany(docs);
+    for (const transaction of inserted) {
+      await appendLedgerBlock({
+        userId,
+        scope: "transaction",
+        entityId: transaction._id.toString(),
+        action: "create",
+        after: transaction,
+        actor,
+      });
+    }
+    await invalidateStatsCache(userId, startDate);
+    for (const s of splits) {
+      void checkBudgetAlert(userId, s.category, s.amount, startDate);
+    }
+    void applyRoundUp(userId, rest.amount, actor).catch((err) =>
+      logger.error({ err, userId }, "applyRoundUp failed")
+    );
+
+    logger.info({ userId, splitGroupId: splitGroupId.toString(), count: docs.length }, "Split transaction created");
+    return { kind: "split", transaction: inserted[0], splitGroupId: splitGroupId.toString(), count: docs.length };
+  }
 
   // ── Bulk-create recurring installments ──────────────────────────────────
   // Explicit count/end-date series materialize exactly what the user asked for.
@@ -264,7 +340,11 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   await invalidateStatsCache(userId, startDate);
 
   if (rest.type === "expense") {
-    void checkBudgetAlert(userId, rest.category, rest.amount, startDate);
+    // schema refine guarantees category is set for any non-split expense
+    void checkBudgetAlert(userId, rest.category as string, rest.amount, startDate);
+    void applyRoundUp(userId, rest.amount, actor).catch((err) =>
+      logger.error({ err, userId }, "applyRoundUp failed")
+    );
   }
 
   logger.info({ userId, transactionId: transaction._id.toString() }, "Transaction created");

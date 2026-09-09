@@ -3,6 +3,7 @@
 import { computeUtilization, utilizationColor } from "@/lib/credit-card";
 import { useCurrency } from "@/hooks/useCurrency";
 import { cn } from "@/lib/utils";
+import { Progress } from "@/components/_ui/Progress";
 
 interface CreditUtilizationBarProps {
   balance: number;
@@ -27,12 +28,13 @@ export function CreditUtilizationBar({ balance, creditLimit, className, compact 
           <span style={{ color }}>{pct.toFixed(0)}% used</span>
         </div>
       )}
-      <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--line-2)" }}>
-        <div
-          className="h-full rounded-full transition-all duration-300"
-          style={{ width: `${Math.min(100, pct)}%`, background: color }}
-        />
-      </div>
+      <Progress
+        value={pct}
+        color={color}
+        trackColor="var(--line-2)"
+        height={8}
+        aria-label={compact ? `${pct.toFixed(0)}% of credit limit used` : undefined}
+      />
       {!compact && (
         <div className="text-[10px] font-medium" style={{ color: "var(--ink-3)" }}>
           Limit {formatCurrency(creditLimit)}

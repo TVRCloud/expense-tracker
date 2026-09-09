@@ -9,6 +9,10 @@ import Link from "next/link";
 import { Eye, EyeOff, Wallet } from "lucide-react";
 import { registerSchema, type RegisterInput } from "@/features/auth/schemas/auth.schema";
 import apiClient from "@/lib/api-client";
+import { Card } from "@/components/_ui/Card";
+import { Button } from "@/components/_ui/Button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 export function RegisterForm() {
   const router = useRouter();
@@ -38,11 +42,11 @@ export function RegisterForm() {
     }
   };
 
+  const fieldClass = "rounded-[14px] py-3 px-4 h-auto font-semibold";
+  const fieldStyle = { background: "var(--card-2)", border: "1.5px solid var(--line-2)" };
+
   return (
-    <div
-      className="rounded-[var(--r-lg)] p-8 shadow-[var(--shadow)]"
-      style={{ background: "var(--card)" }}
-    >
+    <Card radius="lg" elevation="floating" className="p-8">
       <div className="flex items-center gap-3 mb-8">
         <div
           className="w-10 h-10 rounded-[12px] grid place-items-center text-white shadow-[0_8px_18px_rgba(0,0,0,.34)]"
@@ -64,15 +68,15 @@ export function RegisterForm() {
 
       <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
         <div>
-          <label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
+          <Label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
             Full name
-          </label>
-          <input
+          </Label>
+          <Input
             type="text"
             autoComplete="name"
             placeholder="Alex Rivera"
-            className="w-full px-4 py-3 rounded-[14px] text-sm font-semibold outline-none"
-            style={{ background: "var(--card-2)", border: "1.5px solid var(--line-2)", color: "var(--ink)" }}
+            className={fieldClass}
+            style={fieldStyle}
             {...register("name")}
           />
           {errors.name && (
@@ -83,15 +87,15 @@ export function RegisterForm() {
         </div>
 
         <div>
-          <label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
+          <Label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
             Email
-          </label>
-          <input
+          </Label>
+          <Input
             type="email"
             autoComplete="email"
             placeholder="you@example.com"
-            className="w-full px-4 py-3 rounded-[14px] text-sm font-semibold outline-none"
-            style={{ background: "var(--card-2)", border: "1.5px solid var(--line-2)", color: "var(--ink)" }}
+            className={fieldClass}
+            style={fieldStyle}
             {...register("email")}
           />
           {errors.email && (
@@ -102,26 +106,29 @@ export function RegisterForm() {
         </div>
 
         <div>
-          <label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
+          <Label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
             Password
-          </label>
+          </Label>
           <div className="relative">
-            <input
+            <Input
               type={showPw ? "text" : "password"}
               autoComplete="new-password"
               placeholder="Min. 8 characters"
-              className="w-full px-4 py-3 pr-12 rounded-[14px] text-sm font-semibold outline-none"
-              style={{ background: "var(--card-2)", border: "1.5px solid var(--line-2)", color: "var(--ink)" }}
+              className={`${fieldClass} pr-12`}
+              style={fieldStyle}
               {...register("password")}
             />
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               onClick={() => setShowPw((v) => !v)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 p-1"
+              aria-label={showPw ? "Hide password" : "Show password"}
+              className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8"
               style={{ color: "var(--ink-3)" }}
             >
               {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
-            </button>
+            </Button>
           </div>
           {errors.password && (
             <p className="mt-1 text-xs font-semibold" style={{ color: "var(--red)" }}>
@@ -131,15 +138,15 @@ export function RegisterForm() {
         </div>
 
         <div>
-          <label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
+          <Label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
             Confirm password
-          </label>
-          <input
+          </Label>
+          <Input
             type={showPw ? "text" : "password"}
             autoComplete="new-password"
             placeholder="Repeat password"
-            className="w-full px-4 py-3 rounded-[14px] text-sm font-semibold outline-none"
-            style={{ background: "var(--card-2)", border: "1.5px solid var(--line-2)", color: "var(--ink)" }}
+            className={fieldClass}
+            style={fieldStyle}
             {...register("confirmPassword")}
           />
           {errors.confirmPassword && (
@@ -149,14 +156,14 @@ export function RegisterForm() {
           )}
         </div>
 
-        <button
+        <Button
           type="submit"
           disabled={loading}
-          className="w-full py-4 rounded-[15px] font-bold text-base mt-1 transition-all disabled:opacity-60"
+          className="w-full h-auto py-4 rounded-[15px] font-bold text-base mt-1"
           style={{ background: "var(--fab)", color: "var(--fab-ink)" }}
         >
           {loading ? "Creating account…" : "Create account"}
-        </button>
+        </Button>
       </form>
 
       <p className="text-center mt-6 text-sm font-semibold" style={{ color: "var(--ink-2)" }}>
@@ -165,6 +172,6 @@ export function RegisterForm() {
           Sign in
         </Link>
       </p>
-    </div>
+    </Card>
   );
 }

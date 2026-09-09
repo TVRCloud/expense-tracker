@@ -10,8 +10,8 @@ const GoalSchema = new Schema(
     targetDate: { type: Date },
     category: { type: String },
     icon: { type: String },
-    color: { type: String },
-    linkedAccount: { type: Schema.Types.ObjectId, ref: "Account" },
+    roundUpEnabled: { type: Boolean, default: false },
+    roundUpTo: { type: Number, default: 100 }, // cents — round expenses up to the nearest this amount
     isCompleted: { type: Boolean, default: false },
     completedAt: { type: Date },
     isDeleted: { type: Boolean, default: false },

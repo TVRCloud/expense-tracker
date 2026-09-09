@@ -4,31 +4,18 @@ import { usePathname, useRouter } from "next/navigation";
 import { Bell, ChevronLeft } from "lucide-react";
 import { useSession } from "next-auth/react";
 import { getGreeting } from "@/lib/utils";
-
-const TITLES: Record<string, string> = {
-  "/dashboard": "Home",
-  "/transactions": "Transactions",
-  "/transactions/add": "Add Transaction",
-  "/analytics": "Analytics",
-  "/accounts": "Accounts",
-  "/notifications": "Notifications",
-  "/logs": "Logs",
-  "/settings": "Settings",
-  "/budgets": "Budgets",
-  "/goals": "Goals",
-  "/loans": "Loans",
-  "/admin/users": "User Management",
-};
+import { ROUTE_TITLES } from "@/lib/route-titles";
+import { Button } from "@/components/_ui/Button";
+import { Avatar } from "@/components/_ui/Avatar";
 
 export function MobileHeader() {
   const pathname = usePathname();
   const router = useRouter();
   const { data: session } = useSession();
 
-  const title = TITLES[pathname] ?? "Finance OS";
+  const title = ROUTE_TITLES[pathname] ?? "Finance OS";
   const isHome = pathname === "/dashboard";
   const userName = session?.user?.name ?? "";
-  const userInitial = userName[0]?.toUpperCase() ?? "U";
   const greeting = getGreeting();
 
   return (
@@ -45,25 +32,27 @@ export function MobileHeader() {
       <div className="flex items-center justify-between">
         {/* Left: avatar on home, back button elsewhere */}
         {isHome ? (
-          <button
+          <Button
+            type="button"
+            variant="ghost"
             onClick={() => router.push("/settings")}
-            className="w-10 h-10 rounded-full grid place-items-center text-white font-bold text-sm shrink-0 active:scale-95 transition-transform"
-            style={{
-              background: "var(--fab)",
-              color: "var(--fab-ink)",
-              boxShadow: "var(--shadow-sm)",
-            }}
+            aria-label="Open settings"
+            className="w-10 h-10 rounded-full p-0 shrink-0 active:scale-95"
           >
-            {userInitial}
-          </button>
+            <Avatar name={userName || "User"} size={40} />
+          </Button>
         ) : (
-          <button
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
             onClick={() => router.back()}
-            className="w-10 h-10 rounded-full grid place-items-center active:scale-95 transition-transform"
+            aria-label="Go back"
+            className="w-10 h-10 rounded-full active:scale-95"
             style={{ background: "var(--card-2)", color: "var(--ink)" }}
           >
             <ChevronLeft size={20} />
-          </button>
+          </Button>
         )}
 
         {/* Center: greeting on home, page title elsewhere */}
@@ -83,13 +72,17 @@ export function MobileHeader() {
         )}
 
         {/* Right: notifications bell */}
-        <button
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
           onClick={() => router.push("/notifications")}
-          className="w-10 h-10 rounded-full grid place-items-center shrink-0 active:scale-95 transition-transform"
+          aria-label="Notifications"
+          className="w-10 h-10 rounded-full shrink-0 active:scale-95"
           style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
         >
           <Bell size={19} />
-        </button>
+        </Button>
       </div>
     </header>
   );

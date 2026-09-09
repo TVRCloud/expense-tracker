@@ -9,16 +9,9 @@ import { UpcomingPaymentsWidget } from "@/features/recurring/components/Upcoming
 import { TransactionRow } from "@/features/transactions/components/TransactionRow";
 import { useCurrency } from "@/hooks/useCurrency";
 import { StaggerContainer, StaggerItem } from "@/components/shared/StaggerContainer";
-
-
-function SkeletonCard({ h = 110 }: { h?: number }) {
-  return (
-    <div
-      className="rounded-(--r-lg) animate-pulse"
-      style={{ height: h, background: "var(--card-2)" }}
-    />
-  );
-}
+import { Card } from "@/components/_ui/Card";
+import { Progress } from "@/components/_ui/Progress";
+import { Skeleton } from "@/components/_ui/Skeleton";
 
 export function DashboardClient() {
   const { formatCurrency } = useCurrency();
@@ -57,32 +50,28 @@ export function DashboardClient() {
 
         {acctLoading ? (
           <div className="flex gap-3 overflow-hidden">
-            {[0, 1].map((i) => <SkeletonCard key={i} h={164} />)}
+            {[0, 1].map((i) => (
+              <Skeleton key={i} className="rounded-(--r-lg) flex-none w-62.5" style={{ height: 164 }} />
+            ))}
           </div>
         ) : accounts?.length ? (
-          <div
+          <StaggerContainer
             className="flex gap-3 overflow-x-auto pb-1 -mx-0.5 px-0.5"
             style={{ scrollSnapType: "x mandatory", scrollbarWidth: "none" }}
           >
             {accounts.map((account) => (
-              <WalletCard
-                key={account._id}
-                account={account}
-                className="flex-none w-62.5"
-                style={{ scrollSnapAlign: "start" }}
-              />
+              <StaggerItem key={account._id} className="flex-none w-62.5">
+                <WalletCard account={account} style={{ scrollSnapAlign: "start" }} />
+              </StaggerItem>
             ))}
-          </div>
+          </StaggerContainer>
         ) : (
-          <div
-            className="rounded-(--r-md) p-8 text-center font-semibold text-sm"
-            style={{ background: "var(--card)", color: "var(--ink-2)" }}
-          >
+          <Card radius="md" className="p-8 text-center font-semibold text-sm" style={{ color: "var(--ink-2)" }}>
             No accounts yet.{" "}
             <Link href="/accounts" style={{ color: "var(--violet)" }}>
               Add one
             </Link>
-          </div>
+          </Card>
         )}
       </div>
 
@@ -106,7 +95,9 @@ export function DashboardClient() {
 
           {txnLoading ? (
             <div className="flex flex-col gap-3">
-              {[0, 1, 2, 3, 4].map((i) => <SkeletonCard key={i} h={70} />)}
+              {[0, 1, 2, 3, 4].map((i) => (
+                <Skeleton key={i} className="rounded-(--r-lg)" style={{ height: 70 }} />
+              ))}
             </div>
           ) : transactions?.length ? (
             <StaggerContainer className="flex flex-col gap-3">
@@ -117,15 +108,12 @@ export function DashboardClient() {
               ))}
             </StaggerContainer>
           ) : (
-            <div
-              className="rounded-(--r-md) p-8 text-center font-semibold text-sm"
-              style={{ background: "var(--card)", color: "var(--ink-2)" }}
-            >
+            <Card radius="md" className="p-8 text-center font-semibold text-sm" style={{ color: "var(--ink-2)" }}>
               No transactions yet.{" "}
               <Link href="/transactions/add" style={{ color: "var(--violet)" }}>
                 Add one
               </Link>
-            </div>
+            </Card>
           )}
 
           {creditCardAccounts.length > 0 && (
@@ -141,10 +129,7 @@ export function DashboardClient() {
           <UpcomingPaymentsWidget />
 
           {stats && (
-            <div
-              className="rounded-(--r-lg) p-6"
-              style={{ background: "var(--card)", border: "1px solid var(--line)" }}
-            >
+            <Card radius="lg" className="p-6" style={{ border: "1px solid var(--line)" }}>
               <div className="mb-5" style={{ font: "var(--text-h2)", color: "var(--ink)" }}>
                 {new Date().toLocaleString("en-US", { month: "long" })} breakdown
               </div>
@@ -156,9 +141,7 @@ export function DashboardClient() {
                       {formatCurrency(stats.income)}
                     </span>
                   </div>
-                  <div className="h-px" style={{ background: "var(--line-2)" }}>
-                    <div className="h-full" style={{ width: "100%", background: "var(--violet)" }} />
-                  </div>
+                  <Progress value={100} color="var(--violet)" height={3} />
                 </div>
                 <div>
                   <div className="flex justify-between mb-2" style={{ font: "var(--text-label)" }}>
@@ -167,18 +150,11 @@ export function DashboardClient() {
                       {formatCurrency(stats.expense)}
                     </span>
                   </div>
-                  <div className="h-px" style={{ background: "var(--line-2)" }}>
-                    <div
-                      className="h-full"
-                      style={{
-                        width:
-                          stats.income > 0
-                            ? `${Math.min(100, (stats.expense / stats.income) * 100)}%`
-                            : "0%",
-                        background: "var(--green)",
-                      }}
-                    />
-                  </div>
+                  <Progress
+                    value={stats.income > 0 ? (stats.expense / stats.income) * 100 : 0}
+                    color="var(--green)"
+                    height={3}
+                  />
                 </div>
                 <div
                   className="flex items-center justify-between pt-4"
@@ -192,7 +168,7 @@ export function DashboardClient() {
                   </span>
                 </div>
               </div>
-            </div>
+            </Card>
           )}
         </div>
       </div>

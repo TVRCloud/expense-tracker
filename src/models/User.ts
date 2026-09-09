@@ -9,6 +9,7 @@ const UserSchema = new Schema(
     avatar: { type: String },
     currency: { type: String, default: "INR" },
     isActive: { type: Boolean, default: true },
+    deletedAt: { type: Date },
     preferences: {
       theme: { type: String, enum: ["light", "dark", "system"], default: "system" },
       language: { type: String, default: "en" },

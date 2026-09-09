@@ -44,7 +44,34 @@ export function usePushNotification() {
       "PushManager" in window &&
       "serviceWorker" in navigator;
     setIsSupported(supported);
-    if (supported) setPermission(Notification.permission);
+    if (!supported) return;
+    setPermission(Notification.permission);
+
+    // Notification.permission is only read once above; if the user grants/revokes
+    // via the browser's own site-settings UI (not through requestPermission() in
+    // this hook), or a *different* mounted instance of this hook updates it, our
+    // local state goes stale until a hard reload. Re-sync on focus/visibility and,
+    // where supported, on the Permissions API's live change event.
+    const resync = () => setPermission(Notification.permission);
+    document.addEventListener("visibilitychange", resync);
+    window.addEventListener("focus", resync);
+
+    let permStatus: PermissionStatus | null = null;
+    if (navigator.permissions?.query) {
+      navigator.permissions
+        .query({ name: "notifications" as PermissionName })
+        .then((status) => {
+          permStatus = status;
+          status.onchange = resync;
+        })
+        .catch(() => {});
+    }
+
+    return () => {
+      document.removeEventListener("visibilitychange", resync);
+      window.removeEventListener("focus", resync);
+      if (permStatus) permStatus.onchange = null;
+    };
   }, []);
 
   useEffect(() => {
@@ -61,6 +88,7 @@ export function usePushNotification() {
       return res.data;
     },
     enabled: isSupported && permission === "granted",
+    refetchOnWindowFocus: true,
   });
 
   const status: PushStatus = (() => {

@@ -2,13 +2,16 @@
 
 import { useState, useMemo } from "react";
 import { startOfDay } from "date-fns";
-import { Search, X } from "lucide-react";
+import { Search, X, Download } from "lucide-react";
 import Link from "next/link";
 import { FilterChips } from "./FilterChips";
 import { DayGroup } from "./DayGroup";
 import { useTransactions } from "../hooks/useTransactions";
 import { type ITransaction } from "@/types/models";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/_ui/Skeleton";
+import { Card } from "@/components/_ui/Card";
+import { Button } from "@/components/_ui/Button";
+import { Input } from "@/components/ui/input";
 import { getTransactionActivityDate } from "../utils/activity-date";
 
 const TYPE_CHIPS = [
@@ -62,25 +65,41 @@ export function TransactionsClient({ accountId }: { accountId?: string }) {
     return Array.from(grouped.values()).sort((a, b) => b.date.getTime() - a.date.getTime());
   }, [data?.data]);
 
+  const exportHref = useMemo(() => {
+    const params = new URLSearchParams({ format: "csv" });
+    if (typeFilter) params.set("type", typeFilter);
+    if (catFilter) params.set("category", catFilter);
+    if (accountId) params.set("accountId", accountId);
+    if (search) params.set("search", search);
+    return `/api/transactions?${params.toString()}`;
+  }, [typeFilter, catFilter, accountId, search]);
+
   return (
     <div className="flex flex-col gap-5">
-      {/* Recurring link */}
-      <Link
-        href="/transactions/recurring"
-        className="self-end inline-flex items-center gap-1.5 text-sm font-bold"
-        style={{ color: "var(--violet)" }}
-      >
-        Recurring →
-      </Link>
+      {/* Recurring + export */}
+      <div className="flex items-center justify-end gap-4">
+        <a
+          href={exportHref}
+          className="inline-flex items-center gap-1.5 text-sm font-bold"
+          style={{ color: "var(--ink-2)" }}
+        >
+          <Download size={14} />
+          Export CSV
+        </a>
+        <Link
+          href="/transactions/recurring"
+          className="inline-flex items-center gap-1.5 text-sm font-bold"
+          style={{ color: "var(--violet)" }}
+        >
+          Recurring →
+        </Link>
+      </div>
 
       {/* Search bar */}
-      <div
-        className="flex items-center gap-3 rounded-[var(--r-md)] px-4 py-3"
-        style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
-      >
+      <Card radius="md" className="flex items-center gap-3 px-4 py-3">
         <Search size={18} style={{ color: "var(--ink-3)", flexShrink: 0 }} />
-        <input
-          className="flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--ink-3)] text-[var(--ink)]"
+        <Input
+          className="flex-1 h-auto border-0 bg-transparent p-0 text-sm shadow-none placeholder:text-(--ink-3) text-(--ink) focus-visible:ring-0 focus-visible:ring-offset-0"
           placeholder="Search transactions..."
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
@@ -93,16 +112,21 @@ export function TransactionsClient({ accountId }: { accountId?: string }) {
           }}
         />
         {searchInput && (
-          <button
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            aria-label="Clear search"
             onClick={() => {
               setSearchInput("");
               setSearch("");
             }}
           >
             <X size={16} style={{ color: "var(--ink-3)" }} />
-          </button>
+          </Button>
         )}
-      </div>
+      </Card>
 
       {/* Type filter chips */}
       <FilterChips chips={TYPE_CHIPS} active={typeFilter} onChange={setTypeFilter} />
@@ -128,10 +152,7 @@ export function TransactionsClient({ accountId }: { accountId?: string }) {
           ))}
         </div>
       ) : groups.length === 0 ? (
-        <div
-          className="flex flex-col items-center justify-center gap-3 rounded-[var(--r-lg)] py-16"
-          style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
-        >
+        <Card radius="lg" className="flex flex-col items-center justify-center gap-3 py-16">
           <div
             className="w-14 h-14 rounded-full grid place-items-center"
             style={{ background: "var(--card-2)" }}
@@ -141,20 +162,21 @@ export function TransactionsClient({ accountId }: { accountId?: string }) {
           <p className="text-sm font-medium" style={{ color: "var(--ink-2)" }}>
             No transactions found
           </p>
-        </div>
+        </Card>
       ) : (
         <div className="flex flex-col gap-6">
           {groups.map((group) => (
             <DayGroup key={group.date.toISOString()} date={group.date} transactions={group.items} />
           ))}
           {data && data.total > (data.data?.length ?? 0) && (
-            <button
+            <Button
+              variant="secondary"
               onClick={() => setLimit((current) => current + 50)}
-              className="text-sm font-semibold py-3 rounded-[var(--r-md)] w-full transition-all"
-              style={{ background: "var(--card)", color: "var(--violet)", boxShadow: "var(--shadow-sm)" }}
+              className="w-full h-auto py-3 rounded-(--r-md) font-semibold"
+              style={{ color: "var(--violet)" }}
             >
               Load more ({data.total - (data.data?.length ?? 0)} remaining)
-            </button>
+            </Button>
           )}
         </div>
       )}

@@ -12,9 +12,18 @@ import { computeUtilization, utilizationColor } from "@/lib/credit-card";
 import apiClient from "@/lib/api-client";
 import { useCurrency } from "@/hooks/useCurrency";
 import { type IAccount, type ICreditMeta } from "@/types/models";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/_ui/Skeleton";
+import { Card } from "@/components/_ui/Card";
+import { Button } from "@/components/_ui/Button";
+import { useConfirm } from "@/components/_ui/ConfirmDialog";
+import { Progress } from "@/components/_ui/Progress";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { ACCOUNT_TYPE_ICONS } from "@/lib/icons";
+import { accountCreateSchema } from "@/features/accounts/schemas/account.schema";
 
 const ACCOUNT_TYPES = ["cash", "bank", "credit_card", "savings", "investment", "wallet"] as const;
 
@@ -48,11 +57,7 @@ function CreditRow({
   const available = Math.max(0, limit - displayBalance);
 
   return (
-    <Link
-      href={`/accounts/${String(acc._id)}`}
-      className="flex items-center gap-4 rounded-[var(--r-md)] px-4 py-4 group"
-      style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
-    >
+    <Card as={Link} href={`/accounts/${String(acc._id)}`} elevation="raised" radius="md" className="flex items-center gap-4 px-4 py-4 group">
       <div className="w-12 h-12 rounded-[14px] grid place-items-center flex-none" style={{ background: "var(--card-2)" }}>
         <CreditCard size={22} style={{ color: "var(--ink-2)" }} />
       </div>
@@ -78,12 +83,7 @@ function CreditRow({
                 {utilPct.toFixed(0)}%
               </span>
             </div>
-            <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--line-2)" }}>
-              <div
-                className="h-full rounded-full transition-all"
-                style={{ width: `${Math.min(100, utilPct)}%`, background: utilCol }}
-              />
-            </div>
+            <Progress value={utilPct} color={utilCol} height={6} />
             <div className="text-[10px] font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>
               Limit {formatCurrency(limit)}
             </div>
@@ -111,26 +111,25 @@ function CreditRow({
         )}
       </div>
       <ChevronRight size={16} className="flex-none opacity-40 group-hover:opacity-70 transition-opacity" style={{ color: "var(--ink-2)" }} />
-      <button
+      <Button
         type="button"
-        onClick={e => { e.preventDefault(); onArchive(); }}
-        className="w-8 h-8 rounded-full grid place-items-center flex-none"
+        variant="ghost"
+        size="icon"
+        aria-label={`Archive ${acc.name}`}
+        onClick={(e) => { e.preventDefault(); onArchive(); }}
+        className="w-8 h-8 rounded-full flex-none"
         style={{ background: "var(--card-2)" }}
       >
         <Archive size={14} style={{ color: "var(--ink-3)" }} />
-      </button>
-    </Link>
+      </Button>
+    </Card>
   );
 }
 
 function RegularRow({ acc, onArchive, formatCurrency }: { acc: IAccount; onArchive: () => void; formatCurrency: (n: number) => string }) {
   const TypeIcon = ACCOUNT_TYPE_ICONS[acc.type] ?? CreditCard;
   return (
-    <Link
-      href={`/accounts/${String(acc._id)}`}
-      className="flex items-center gap-4 rounded-[var(--r-md)] px-4 py-4 group"
-      style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
-    >
+    <Card as={Link} href={`/accounts/${String(acc._id)}`} elevation="raised" radius="md" className="flex items-center gap-4 px-4 py-4 group">
       <div className="w-12 h-12 rounded-[14px] grid place-items-center flex-none" style={{ background: "var(--card-2)" }}>
         <TypeIcon size={22} style={{ color: "var(--ink-2)" }} />
       </div>
@@ -146,15 +145,18 @@ function RegularRow({ acc, onArchive, formatCurrency }: { acc: IAccount; onArchi
         </div>
       </div>
       <ChevronRight size={16} className="flex-none opacity-40 group-hover:opacity-70 transition-opacity" style={{ color: "var(--ink-2)" }} />
-      <button
+      <Button
         type="button"
-        onClick={e => { e.preventDefault(); onArchive(); }}
-        className="w-8 h-8 rounded-full grid place-items-center flex-none"
+        variant="ghost"
+        size="icon"
+        aria-label={`Archive ${acc.name}`}
+        onClick={(e) => { e.preventDefault(); onArchive(); }}
+        className="w-8 h-8 rounded-full flex-none"
         style={{ background: "var(--card-2)" }}
       >
         <Archive size={14} style={{ color: "var(--ink-3)" }} />
-      </button>
-    </Link>
+      </Button>
+    </Card>
   );
 }
 
@@ -164,6 +166,7 @@ export function AccountsClient() {
   const { data: accounts, isLoading } = useAccounts();
   const { data: seriesData } = useRecurringSeriesList();
   const { data: creditSummary } = useCreditSummary();
+  const { confirm, dialog } = useConfirm();
   const [filter, setFilter] = useState<FilterKey>("all");
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ name: "", type: "bank" as IAccount["type"], currency });
@@ -203,7 +206,12 @@ export function AccountsClient() {
       if (form.type === "credit_card" && Object.keys(creditMeta).length > 0) {
         payload.creditMeta = creditMeta;
       }
-      return apiClient.post("/accounts", payload);
+      // Same zod schema the server validates with — one shared source of truth.
+      const parsed = accountCreateSchema.safeParse(payload);
+      if (!parsed.success) {
+        throw new Error(parsed.error.issues[0]?.message ?? "Invalid account");
+      }
+      return apiClient.post("/accounts", parsed.data);
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["accounts"] });
@@ -223,6 +231,16 @@ export function AccountsClient() {
     },
   });
 
+  const requestArchive = async (acc: IAccount) => {
+    const ok = await confirm({
+      title: `Archive "${acc.name}"?`,
+      description: "You can restore it later. Its transaction history stays intact.",
+      confirmLabel: "Archive",
+      destructive: true,
+    });
+    if (ok) archiveAccount.mutate(String(acc._id));
+  };
+
   const nonCreditBalance = (accounts ?? [])
     .filter(a => a.type !== "credit_card")
     .reduce((s, a) => s + a.balance, 0);
@@ -232,66 +250,60 @@ export function AccountsClient() {
       {/* Summary cards */}
       {!isLoading && (accounts ?? []).length > 0 && (
         <div className="grid grid-cols-2 gap-3">
-          <div className="rounded-[var(--r-lg)] p-4" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
+          <Card radius="lg" className="p-4">
             <div className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: "var(--ink-3)" }}>Net Assets</div>
             <div className="text-[22px] font-extrabold tnum" style={{ color: "var(--ink)" }}>
               {formatCurrency(nonCreditBalance)}
             </div>
-          </div>
+          </Card>
           {creditCards.length > 0 && (
-            <div className="rounded-[var(--r-lg)] p-4" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
+            <Card radius="lg" className="p-4">
               <div className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: "var(--ink-3)" }}>Credit Exposure</div>
               <div className="text-[22px] font-extrabold tnum" style={{ color: totalCreditDebt > 0 ? "var(--red)" : "var(--green)" }}>
                 {formatCurrency(totalCreditDebt)}
               </div>
-            </div>
+            </Card>
           )}
         </div>
       )}
 
       {/* Filter tabs */}
       {!isLoading && (accounts ?? []).length > 0 && (
-        <div className="flex gap-2">
-          {FILTERS.map(f => (
-            <button
-              key={f.key}
-              type="button"
-              onClick={() => setFilter(f.key)}
-              className="px-3.5 py-1.5 rounded-full text-[12px] font-bold transition-all"
-              style={{
-                background: filter === f.key ? "var(--violet)" : "var(--card)",
-                color: filter === f.key ? "#fff" : "var(--ink-2)",
-                boxShadow: filter === f.key ? "none" : "var(--shadow-sm)",
-              }}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
+        <Tabs value={filter} onValueChange={(v) => setFilter(v as FilterKey)}>
+          <TabsList className="h-auto w-max bg-transparent p-0 gap-2">
+            {FILTERS.map(f => (
+              <TabsTrigger
+                key={f.key}
+                value={f.key}
+                className="h-auto px-3.5 py-1.5 rounded-full text-[12px] font-bold"
+                style={{
+                  background: filter === f.key ? "var(--violet)" : "var(--card)",
+                  color: filter === f.key ? "var(--violet-fg)" : "var(--ink-2)",
+                  boxShadow: filter === f.key ? "none" : "var(--shadow-sm)",
+                }}
+              >
+                {f.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
       )}
 
       {/* Account list */}
       {isLoading ? (
         <div className="flex flex-col gap-3">
-          {[0, 1, 2].map(i => <Skeleton key={i} className="h-20 rounded-[var(--r-md)]" />)}
+          {[0, 1, 2].map(i => <Skeleton key={i} className="h-20 rounded-(--r-md)" />)}
         </div>
       ) : filteredAccounts.length === 0 && !showAdd ? (
-        <div
-          className="flex flex-col items-center justify-center gap-3 rounded-[var(--r-lg)] py-16"
-          style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
-        >
+        <Card radius="lg" className="flex flex-col items-center justify-center gap-3 py-16">
           <div className="text-4xl">🏦</div>
           <p className="text-sm font-medium" style={{ color: "var(--ink-2)" }}>
             {filter === "credit_card" ? "No credit cards yet" : filter === "other" ? "No bank accounts yet" : "No accounts yet"}
           </p>
-          <button
-            onClick={openAdd}
-            className="text-sm font-bold px-4 py-2 rounded-full"
-            style={{ background: "var(--violet)", color: "#fff" }}
-          >
+          <Button onClick={openAdd} className="h-auto text-sm px-4 py-2 rounded-full">
             Add account
-          </button>
-        </div>
+          </Button>
+        </Card>
       ) : (
         <div className="flex flex-col gap-3">
           {filteredAccounts.map(acc =>
@@ -302,14 +314,14 @@ export function AccountsClient() {
                 formatCurrency={formatCurrency}
                 emiCommitment={emiByCard[String(acc._id)] ?? 0}
                 summary={creditSummaryByAccount[String(acc._id)]}
-                onArchive={() => { if (confirm(`Archive "${acc.name}"?`)) archiveAccount.mutate(String(acc._id)); }}
+                onArchive={() => requestArchive(acc)}
               />
             ) : (
               <RegularRow
                 key={String(acc._id)}
                 acc={acc}
                 formatCurrency={formatCurrency}
-                onArchive={() => { if (confirm(`Archive "${acc.name}"?`)) archiveAccount.mutate(String(acc._id)); }}
+                onArchive={() => requestArchive(acc)}
               />
             )
           )}
@@ -318,47 +330,49 @@ export function AccountsClient() {
 
       {/* Add account form */}
       {showAdd && (
-        <div
-          className="rounded-[var(--r-lg)] p-5 flex flex-col gap-4"
-          style={{ background: "var(--card)", boxShadow: "var(--shadow)" }}
-        >
+        <Card radius="lg" elevation="floating" className="p-5 flex flex-col gap-4">
           <div className="text-sm font-bold" style={{ color: "var(--ink)" }}>New Account</div>
           <div className="grid grid-cols-2 gap-3">
-            <label className="flex flex-col gap-1.5 col-span-2">
-              <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Account name</span>
-              <input
+            <div className="flex flex-col gap-1.5 col-span-2">
+              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Account name</Label>
+              <Input
                 value={form.name}
                 onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                 placeholder="e.g. Chase Sapphire"
-                className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none"
-                style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }}
               />
-            </label>
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Type</span>
-              <select
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Type</Label>
+              <Select
                 value={form.type}
-                onChange={e => {
-                  setForm(f => ({ ...f, type: e.target.value as IAccount["type"] }));
-                  if (e.target.value !== "credit_card") setCreditMeta({});
+                onValueChange={(value) => {
+                  setForm(f => ({ ...f, type: value as IAccount["type"] }));
+                  if (value !== "credit_card") setCreditMeta({});
                 }}
-                className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none capitalize"
-                style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }}
               >
-                {ACCOUNT_TYPES.map(t => <option key={t} value={t}>{t.replace("_", " ")}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Currency</span>
-              <select
-                value={form.currency}
-                onChange={e => setForm(f => ({ ...f, currency: e.target.value }))}
-                className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none"
-                style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }}
-              >
-                {["USD", "EUR", "GBP", "INR", "JPY", "CAD", "AUD"].map(c => <option key={c}>{c}</option>)}
-              </select>
-            </label>
+                <SelectTrigger className="capitalize">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ACCOUNT_TYPES.map(t => (
+                    <SelectItem key={t} value={t} className="capitalize">{t.replace("_", " ")}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Currency</Label>
+              <Select value={form.currency} onValueChange={(value) => setForm(f => ({ ...f, currency: value }))}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {["USD", "EUR", "GBP", "INR", "JPY", "CAD", "AUD"].map(c => (
+                    <SelectItem key={c} value={c}>{c}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           {form.type === "credit_card" && (
@@ -366,35 +380,38 @@ export function AccountsClient() {
           )}
 
           <div className="flex gap-3">
-            <button
+            <Button
               onClick={() => createAccount.mutate()}
               disabled={createAccount.isPending || !form.name}
-              className="flex-1 py-2.5 rounded-(--r-sm) text-sm font-bold disabled:opacity-50"
-              style={{ background: "var(--violet)", color: "#fff" }}
+              className="flex-1 h-auto py-2.5 rounded-(--r-sm) font-bold"
             >
               {createAccount.isPending ? "Saving..." : "Create Account"}
-            </button>
-            <button
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
               onClick={() => { setShowAdd(false); setCreditMeta({}); }}
-              className="px-5 py-2.5 rounded-(--r-sm) text-sm font-bold"
-              style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
+              className="h-auto px-5 py-2.5 rounded-(--r-sm) font-bold"
             >
               Cancel
-            </button>
+            </Button>
           </div>
-        </div>
+        </Card>
       )}
 
       {!showAdd && (accounts ?? []).length > 0 && (
-        <button
+        <Button
+          type="button"
+          variant="secondary"
           onClick={openAdd}
-          className="flex items-center justify-center gap-2 rounded-[var(--r-md)] py-3.5 text-sm font-bold"
-          style={{ background: "var(--card)", color: "var(--violet)", boxShadow: "var(--shadow-sm)" }}
+          className="h-auto flex items-center justify-center gap-2 rounded-(--r-md) py-3.5 font-bold"
+          style={{ color: "var(--violet)" }}
         >
           <Plus size={17} />
           Add Account
-        </button>
+        </Button>
       )}
+      {dialog}
     </div>
   );
 }

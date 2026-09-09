@@ -116,6 +116,7 @@ export interface ITransaction {
   installmentIndex?: number;
   installmentStatus?: "upcoming" | "paid" | "overdue" | "skipped";
   paidAt?: string;
+  splitGroupId?: string;
   isDeleted?: boolean;
   deletedAt?: string;
   deletedBy?: string;
@@ -188,8 +189,8 @@ export interface IGoal {
   targetDate?: string;
   category?: string;
   icon?: string;
-  color?: string;
-  linkedAccount?: string | IAccount;
+  roundUpEnabled?: boolean;
+  roundUpTo?: number; // cents
   isCompleted: boolean;
   completedAt?: string;
   isDeleted?: boolean;

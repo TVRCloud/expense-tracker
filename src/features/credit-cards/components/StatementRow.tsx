@@ -4,6 +4,8 @@ import { format } from "date-fns";
 import { type ICreditStatement } from "@/types/models";
 import { useCurrency } from "@/hooks/useCurrency";
 import { STATEMENT_STATUS_ICONS } from "@/lib/icons";
+import { Card } from "@/components/_ui/Card";
+import { Button } from "@/components/_ui/Button";
 
 interface StatementRowProps {
   statement: ICreditStatement;
@@ -29,10 +31,7 @@ export function StatementRow({ statement, onPayNow }: StatementRowProps) {
   const dueLabel = format(new Date(statement.dueDate), "MMM d, yyyy");
 
   return (
-    <div
-      className="flex items-center gap-4 rounded-[var(--r-md)] px-4 py-3.5"
-      style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
-    >
+    <Card radius="md" className="flex items-center gap-4 px-4 py-3.5">
       <div
         className="w-9 h-9 rounded-[10px] grid place-items-center flex-none"
         style={{ background: cfg.bg }}
@@ -71,15 +70,14 @@ export function StatementRow({ statement, onPayNow }: StatementRowProps) {
       </div>
 
       {remainingDue > 0 && status !== "open" && (
-        <button
+        <Button
           type="button"
           onClick={() => onPayNow(statement)}
-          className="flex-none px-3 py-1.5 rounded-[var(--r-sm)] text-[12px] font-bold"
-          style={{ background: "var(--violet)", color: "#fff" }}
+          className="flex-none h-auto px-3 py-1.5 rounded-(--r-sm) text-[12px] font-bold"
         >
           Pay
-        </button>
+        </Button>
       )}
-    </div>
+    </Card>
   );
 }

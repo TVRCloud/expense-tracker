@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { budgetCreateSchema, BudgetServiceError, createBudget, listBudgetsWithSpend } from "@/lib/budget-service";
+import { toCsv, csvResponse } from "@/lib/csv";
 
 export async function GET(req: NextRequest) {
   try {
@@ -14,6 +15,25 @@ export async function GET(req: NextRequest) {
     const year = parseInt(searchParams.get("year") ?? String(now.getFullYear()), 10);
 
     const enriched = await listBudgetsWithSpend(user.id, year, month);
+
+    if (searchParams.get("format") === "csv") {
+      const csv = toCsv(
+        enriched.map((b) => ({
+          category: b.category,
+          month,
+          year,
+          limitAmount: (b.limitAmount / 100).toFixed(2),
+          effectiveLimit: (b.effectiveLimit / 100).toFixed(2),
+          spent: (b.spent / 100).toFixed(2),
+          remaining: ((b.effectiveLimit - b.spent) / 100).toFixed(2),
+          currency: b.currency,
+          alertAt: b.alertAt,
+          rollover: b.rollover ?? false,
+        })),
+        ["category", "month", "year", "limitAmount", "effectiveLimit", "spent", "remaining", "currency", "alertAt", "rollover"]
+      );
+      return csvResponse(csv, `budgets-${year}-${String(month).padStart(2, "0")}.csv`);
+    }
 
     return NextResponse.json({ data: enriched });
   } catch (err) {

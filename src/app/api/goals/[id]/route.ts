@@ -1,18 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import connectDB from "@/lib/mongodb";
 import Goal from "@/models/Goal";
-import Notification from "@/models/Notification";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
 import { appendLedgerBlock } from "@/lib/ledger";
+import { checkGoalCompletion } from "@/lib/goal-service";
 
 const updateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   targetAmount: z.number().int().positive().optional(),
   savedAmount: z.number().int().min(0).optional(),
   targetDate: z.string().optional(),
+  icon: z.string().optional(),
   isCompleted: z.boolean().optional(),
+  roundUpEnabled: z.boolean().optional(),
+  roundUpTo: z.number().int().positive().optional(),
 });
 
 type Params = Promise<{ id: string }>;
@@ -51,11 +54,18 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     await connectDB();
     const before = await Goal.findOne({ _id: id, user: user.id, isDeleted: { $ne: true } }).lean();
     if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    // Only one goal can have round-up active at a time — enabling it here
+    // disables it everywhere else for this user first.
+    if (parsed.data.roundUpEnabled === true) {
+      await Goal.updateMany({ user: user.id, _id: { $ne: id } }, { $set: { roundUpEnabled: false } });
+    }
+
     const goal = await Goal.findOneAndUpdate(
       { _id: id, user: user.id, isDeleted: { $ne: true } },
       { $set: update },
       { new: true }
-    ).lean<{ savedAmount: number; targetAmount: number; name: string; isCompleted: boolean }>();
+    ).lean<{ _id: unknown; savedAmount: number; targetAmount: number; name: string; isCompleted: boolean }>();
 
     if (!goal) return NextResponse.json({ error: "Not found" }, { status: 404 });
     await appendLedgerBlock({
@@ -68,30 +78,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
       actor: user,
     });
 
-    // Fire goal_reached notification
-    if (!goal.isCompleted && goal.savedAmount >= goal.targetAmount) {
-      const completedGoal = await Goal.findByIdAndUpdate(
-        id,
-        { $set: { isCompleted: true, completedAt: new Date() } },
-        { new: true }
-      ).lean();
-      await appendLedgerBlock({
-        userId: user.id,
-        scope: "goal",
-        entityId: id,
-        action: "update",
-        before: goal,
-        after: completedGoal,
-        actor: user,
-      });
-      await Notification.create({
-        user: user.id,
-        type: "goal_reached",
-        title: "Goal reached! 🎉",
-        body: `Congratulations! You've reached your "${goal.name}" goal.`,
-        meta: { goalId: id },
-      });
-    }
+    await checkGoalCompletion(user.id, goal, user);
 
     return NextResponse.json({ data: goal });
   } catch (err) {

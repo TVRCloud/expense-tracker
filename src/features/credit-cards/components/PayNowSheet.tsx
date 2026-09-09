@@ -1,8 +1,7 @@
 "use client";
 
 import * as React from "react";
-import * as Dialog from "@radix-ui/react-dialog";
-import { X, CreditCard } from "lucide-react";
+import { CreditCard } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { format } from "date-fns";
@@ -13,6 +12,12 @@ import { computeMinPayment } from "@/lib/credit-card";
 import { dollarsToCents } from "@/lib/utils";
 import apiClient from "@/lib/api-client";
 import { DatePickerField } from "@/components/shared/DatePickerField";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
+import { Card } from "@/components/_ui/Card";
+import { Button } from "@/components/_ui/Button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface PayNowSheetProps {
   statement: ICreditStatement;
@@ -81,140 +86,126 @@ export function PayNowSheet({ statement, account, open, onOpenChange }: PayNowSh
   });
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/45 data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
-        <Dialog.Content
-          className="fixed inset-x-0 bottom-0 z-50 max-h-[90dvh] overflow-y-auto rounded-t-[var(--r-lg)] border-x border-t p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl outline-none data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom md:inset-x-auto md:inset-y-auto md:left-1/2 md:top-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:w-[400px] md:rounded-[var(--r-lg)] md:border"
-          style={{ background: "var(--card)", backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)", borderColor: "var(--line)", color: "var(--ink)" }}
-        >
-          {/* Header */}
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <div>
-              <Dialog.Title className="text-sm font-extrabold" style={{ color: "var(--ink)" }}>Pay Statement</Dialog.Title>
-              <Dialog.Description className="text-[11px] font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>
-                {format(new Date(statement.periodEnd), "MMMM yyyy")} · {account.name}
-              </Dialog.Description>
-            </div>
-            <Dialog.Close
-              className="grid size-9 place-items-center rounded-full"
-              style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
-            >
-              <X size={16} />
-            </Dialog.Close>
-          </div>
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="bottom"
+        className="max-h-[90dvh] overflow-y-auto rounded-t-(--r-lg) p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] md:inset-x-auto md:inset-y-auto md:left-1/2 md:top-1/2 md:bottom-auto md:-translate-x-1/2 md:-translate-y-1/2 md:w-100 md:rounded-(--r-lg) md:border"
+        style={{ background: "var(--card)", backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)", borderColor: "var(--line)", color: "var(--ink)" }}
+      >
+        <SheetHeader className="text-left space-y-0.5">
+          <SheetTitle className="text-sm font-extrabold" style={{ color: "var(--ink)" }}>Pay Statement</SheetTitle>
+          <SheetDescription className="text-[11px] font-medium" style={{ color: "var(--ink-3)" }}>
+            {format(new Date(statement.periodEnd), "MMMM yyyy")} · {account.name}
+          </SheetDescription>
+        </SheetHeader>
 
-          {/* Balance summary */}
-          <div className="rounded-[var(--r-md)] p-3.5 mb-4" style={{ background: "var(--card-2)" }}>
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Remaining Balance</span>
-              <span className="text-[18px] font-extrabold tnum" style={{ color: "var(--red)" }}>{formatCurrency(balance)}</span>
-            </div>
-            {statement.paidAmount > 0 && (
-              <div className="flex items-center justify-between mt-1">
-                <span className="text-[11px] font-medium" style={{ color: "var(--ink-3)" }}>Already paid</span>
-                <span className="text-[13px] font-bold tnum" style={{ color: "var(--green)" }}>{formatCurrency(statement.paidAmount)}</span>
-              </div>
-            )}
+        {/* Balance summary */}
+        <Card surface="card-2" radius="md" className="p-3.5 mt-4 mb-4">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Remaining Balance</span>
+            <span className="text-[18px] font-extrabold tnum" style={{ color: "var(--red)" }}>{formatCurrency(balance)}</span>
+          </div>
+          {statement.paidAmount > 0 && (
             <div className="flex items-center justify-between mt-1">
-              <span className="text-[11px] font-medium" style={{ color: "var(--ink-3)" }}>Minimum payment</span>
-              <span className="text-[13px] font-bold tnum" style={{ color: "var(--ink-2)" }}>{formatCurrency(minPayment)}</span>
+              <span className="text-[11px] font-medium" style={{ color: "var(--ink-3)" }}>Already paid</span>
+              <span className="text-[13px] font-bold tnum" style={{ color: "var(--green)" }}>{formatCurrency(statement.paidAmount)}</span>
             </div>
+          )}
+          <div className="flex items-center justify-between mt-1">
+            <span className="text-[11px] font-medium" style={{ color: "var(--ink-3)" }}>Minimum payment</span>
+            <span className="text-[13px] font-bold tnum" style={{ color: "var(--ink-2)" }}>{formatCurrency(minPayment)}</span>
+          </div>
+        </Card>
+
+        {/* Amount mode */}
+        <div className="flex flex-col gap-2 mb-4">
+          <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Amount</div>
+          <div className="grid grid-cols-3 gap-2">
+            {([
+              { key: "full" as AmountMode, label: "Full Balance", value: balance },
+              { key: "minimum" as AmountMode, label: "Minimum", value: minPayment },
+              { key: "custom" as AmountMode, label: "Custom", value: null },
+            ] as const).map(opt => (
+              <Button
+                key={opt.key}
+                type="button"
+                variant="ghost"
+                onClick={() => setMode(opt.key)}
+                className="h-auto flex-col items-start gap-0.5 rounded-(--r-sm) px-3 py-2.5 text-left"
+                style={{
+                  background: mode === opt.key ? "var(--violet)" : "var(--card-2)",
+                  color: mode === opt.key ? "var(--violet-fg)" : "var(--ink)",
+                }}
+              >
+                <span className="text-[10px] font-bold opacity-70">{opt.label}</span>
+                {opt.value !== null && (
+                  <span className="text-[13px] font-extrabold tnum">{formatCurrency(opt.value)}</span>
+                )}
+                {opt.value === null && <span className="text-[13px] font-extrabold">—</span>}
+              </Button>
+            ))}
           </div>
 
-          {/* Amount mode */}
-          <div className="flex flex-col gap-2 mb-4">
-            <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Amount</div>
-            <div className="grid grid-cols-3 gap-2">
-              {([
-                { key: "full" as AmountMode, label: "Full Balance", value: balance },
-                { key: "minimum" as AmountMode, label: "Minimum", value: minPayment },
-                { key: "custom" as AmountMode, label: "Custom", value: null },
-              ] as const).map(opt => (
-                <button
-                  key={opt.key}
-                  type="button"
-                  onClick={() => setMode(opt.key)}
-                  className="flex flex-col gap-0.5 rounded-[var(--r-sm)] px-3 py-2.5 text-left transition-all"
-                  style={{
-                    background: mode === opt.key ? "var(--violet)" : "var(--card-2)",
-                    color: mode === opt.key ? "#fff" : "var(--ink)",
-                  }}
-                >
-                  <span className="text-[10px] font-bold opacity-70">{opt.label}</span>
-                  {opt.value !== null && (
-                    <span className="text-[13px] font-extrabold tnum">{formatCurrency(opt.value)}</span>
-                  )}
-                  {opt.value === null && <span className="text-[13px] font-extrabold">—</span>}
-                </button>
-              ))}
-            </div>
-
-            {mode === "custom" && (
-              <input
-                type="number"
-                min="0.01"
-                step="0.01"
-                placeholder="Enter amount"
-                value={customAmount}
-                onChange={e => setCustomAmount(e.target.value)}
-                className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none"
-                style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }}
-                autoFocus
-              />
-            )}
-          </div>
-
-          {/* Source account */}
-          <div className="flex flex-col gap-1.5 mb-4">
-            <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Pay From</div>
-            <select
-              value={sourceAccountId}
-              onChange={e => setSourceAccountId(e.target.value)}
-              className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none"
-              style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }}
-            >
-              {sourceAccounts.length === 0 && <option value="">No eligible accounts</option>}
-              {sourceAccounts.map(a => (
-                <option key={String(a._id)} value={String(a._id)}>
-                  {a.name} — {a.currency}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Date */}
-          <div className="mb-5">
-            <DatePickerField
-              label="Payment Date"
-              value={payDate}
-              onChange={setPayDate}
+          {mode === "custom" && (
+            <Input
+              type="number"
+              min="0.01"
+              step="0.01"
+              placeholder="Enter amount"
+              value={customAmount}
+              onChange={e => setCustomAmount(e.target.value)}
+              autoFocus
             />
-          </div>
+          )}
+        </div>
 
-          {/* Actions */}
-          <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={() => createTransactionAndPay.mutate()}
-              disabled={createTransactionAndPay.isPending || !sourceAccountId || payAmount <= 0}
-              className="flex-1 flex items-center justify-center gap-2 py-3 rounded-[var(--r-sm)] text-sm font-bold disabled:opacity-50"
-              style={{ background: "var(--violet)", color: "#fff" }}
-            >
-              <CreditCard size={15} />
-              {createTransactionAndPay.isPending ? "Processing..." : `Pay ${formatCurrency(payAmount)}`}
-            </button>
-            <button
-              type="button"
-              onClick={() => onOpenChange(false)}
-              className="px-5 py-3 rounded-[var(--r-sm)] text-sm font-bold"
-              style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
-            >
-              Cancel
-            </button>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+        {/* Source account */}
+        <div className="flex flex-col gap-1.5 mb-4">
+          <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Pay From</Label>
+          <Select value={sourceAccountId} onValueChange={setSourceAccountId} disabled={sourceAccounts.length === 0}>
+            <SelectTrigger>
+              <SelectValue placeholder="No eligible accounts" />
+            </SelectTrigger>
+            <SelectContent>
+              {sourceAccounts.map(a => (
+                <SelectItem key={String(a._id)} value={String(a._id)}>
+                  {a.name} — {a.currency}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* Date */}
+        <div className="mb-5">
+          <DatePickerField
+            label="Payment Date"
+            value={payDate}
+            onChange={setPayDate}
+          />
+        </div>
+
+        {/* Actions */}
+        <div className="flex gap-3">
+          <Button
+            type="button"
+            onClick={() => createTransactionAndPay.mutate()}
+            disabled={createTransactionAndPay.isPending || !sourceAccountId || payAmount <= 0}
+            className="flex-1 h-auto py-3 rounded-(--r-sm) font-bold"
+          >
+            <CreditCard size={15} />
+            {createTransactionAndPay.isPending ? "Processing..." : `Pay ${formatCurrency(payAmount)}`}
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => onOpenChange(false)}
+            className="h-auto px-5 py-3 rounded-(--r-sm) font-bold"
+          >
+            Cancel
+          </Button>
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }

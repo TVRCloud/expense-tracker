@@ -2,26 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell } from "lucide-react";
-
-const TITLES: Record<string, string> = {
-  "/dashboard": "Dashboard",
-  "/transactions": "Transactions",
-  "/transactions/add": "Add Transaction",
-  "/analytics": "Analytics",
-  "/accounts": "Accounts",
-  "/notifications": "Notifications",
-  "/logs": "Logs",
-  "/settings": "Settings",
-  "/budgets": "Budgets",
-  "/goals": "Goals",
-  "/loans": "Loans",
-  "/admin/users": "User Management",
-};
+import { Bell, Search } from "lucide-react";
+import { ROUTE_TITLES } from "@/lib/route-titles";
+import { Button } from "@/components/_ui/Button";
 
 export function DesktopTopbar() {
   const pathname = usePathname();
-  const title = TITLES[pathname] ?? "Finance OS";
+  const title = ROUTE_TITLES[pathname] ?? "Finance OS";
 
   return (
     <header
@@ -44,13 +31,29 @@ export function DesktopTopbar() {
         {title}
       </h1>
 
-      <Link
-        href="/notifications"
-        className="w-10 h-10 rounded-full grid place-items-center transition-opacity hover:opacity-75"
-        style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
-      >
-        <Bell size={19} />
-      </Link>
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => document.dispatchEvent(new CustomEvent("open-command-palette"))}
+          className="h-9 px-3 rounded-full text-sm font-medium gap-2"
+          style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
+        >
+          <Search size={15} />
+          Search
+          <kbd className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: "var(--card)", color: "var(--ink-3)" }}>
+            ⌘K
+          </kbd>
+        </Button>
+        <Link
+          href="/notifications"
+          aria-label="Notifications"
+          className="w-10 h-10 rounded-full grid place-items-center transition-opacity hover:opacity-75"
+          style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
+        >
+          <Bell size={19} />
+        </Link>
+      </div>
     </header>
   );
 }
