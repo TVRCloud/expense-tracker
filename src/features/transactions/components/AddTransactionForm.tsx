@@ -2,8 +2,8 @@
 
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Delete, ChevronDown, Repeat2 } from "lucide-react";
-import { useForm } from "react-hook-form";
+import { Delete, Repeat2, SplitSquareHorizontal, Plus, X } from "lucide-react";
+import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import {
@@ -16,6 +16,13 @@ import { useAccounts } from "@/features/dashboard/hooks/useDashboard";
 import { useCurrency } from "@/hooks/useCurrency";
 import { DatePickerField } from "@/components/shared/DatePickerField";
 import { BillingCycleHint } from "@/features/credit-cards/components/BillingCycleHint";
+import { Card } from "@/components/_ui/Card";
+import { Button } from "@/components/_ui/Button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 // Each option maps to an API {frequency, interval} pair
 const FREQ_OPTIONS = [
@@ -76,6 +83,18 @@ const CATEGORIES: { icon: string; label: string; value: string }[] = [
 
 const NUMPAD_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "⌫"];
 
+interface SplitLine {
+  category: string;
+  amount: string; // dollar string, like displayAmount
+}
+
+function emptySplitLines(): SplitLine[] {
+  return [
+    { category: "groceries", amount: "" },
+    { category: "shopping", amount: "" },
+  ];
+}
+
 const schema = z.object({
   accountId: z.string().min(1, "Select an account"),
   description: z.string().optional(),
@@ -96,13 +115,15 @@ export function AddTransactionForm() {
   const [selectedCategory, setSelectedCategory] = useState("groceries");
   const [date, setDate] = useState<Date>(new Date());
   const [repeatEnabled, setRepeatEnabled] = useState(false);
+  const [splitEnabled, setSplitEnabled] = useState(false);
+  const [splitLines, setSplitLines] = useState<SplitLine[]>(emptySplitLines);
   const [freqKey, setFreqKey] = useState<FreqKey>("monthly");
   const [endMode, setEndMode] = useState<EndMode>("never");
   const [recurrenceCount, setRecurrenceCount] = useState("");
   const [recurrenceEndDate, setRecurrenceEndDate] = useState<Date | undefined>();
   const [recurrenceLabel, setRecurrenceLabel] = useState("");
 
-  const { register, watch, handleSubmit, setValue, formState: { errors } } = useForm<FormValues>({
+  const { register, watch, handleSubmit, setValue, control, formState: { errors } } = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: { accountId: "" },
   });
@@ -141,6 +162,13 @@ export function AddTransactionForm() {
 
   const amountInCents = Math.round(parseFloat(displayAmount || "0") * 100);
 
+  const splitAllocatedCents = splitLines.reduce((sum, l) => sum + Math.round((parseFloat(l.amount) || 0) * 100), 0);
+  const splitRemainingCents = amountInCents - splitAllocatedCents;
+  const splitValid = splitEnabled
+    && splitLines.length >= 2
+    && splitLines.every((l) => l.category && parseFloat(l.amount) > 0)
+    && splitRemainingCents === 0;
+
   const freqOption = FREQ_OPTIONS.find(f => f.key === freqKey) ?? FREQ_OPTIONS[2];
 
   // Derive the effective count and end date from the chosen end mode
@@ -173,6 +201,7 @@ export function AddTransactionForm() {
 
   const onSubmit = handleSubmit(async (values) => {
     if (amountInCents <= 0) return;
+    if (splitEnabled && !splitValid) return;
 
     const category = txType === "income" ? "income" : selectedCategory;
     const finalType = txType;
@@ -182,7 +211,9 @@ export function AddTransactionForm() {
       type: finalType,
       amount: amountInCents,
       currency,
-      category,
+      ...(splitEnabled
+        ? { splits: splitLines.map((l) => ({ category: l.category, amount: Math.round(parseFloat(l.amount) * 100) })) }
+        : { category }),
       description: values.description || undefined,
       note: values.note || undefined,
       date: date.toISOString(),
@@ -198,6 +229,8 @@ export function AddTransactionForm() {
     router.push(
       repeatEnabled && result?.recurringId
         ? `/transactions/recurring/${result.recurringId}`
+        : result?._id
+        ? `/transactions/${result._id}`
         : "/transactions"
     );
   });
@@ -207,20 +240,19 @@ export function AddTransactionForm() {
   return (
     <div className="grid md:grid-cols-2 gap-4 md:gap-5 h-full min-w-0">
       {/* LEFT: Numpad card */}
-      <div
-        className="rounded-(--r-lg) p-4 sm:p-6 flex flex-col gap-4 sm:gap-5 min-w-0"
-        style={{ background: "var(--card)", boxShadow: "var(--shadow)" }}
-      >
+      <Card radius="lg" elevation="floating" className="p-4 sm:p-6 flex flex-col gap-4 sm:gap-5 min-w-0">
         {/* Type toggle */}
         <div
           className="flex p-1 rounded-full gap-1"
           style={{ background: "var(--card-2)" }}
         >
           {(["expense", "income"] as const).map((t) => (
-            <button
+            <Button
               key={t}
-              onClick={() => setTxType(t)}
-              className="flex-1 py-2 rounded-full text-sm font-bold capitalize transition-all"
+              type="button"
+              variant="ghost"
+              onClick={() => { setTxType(t); if (t === "income") setSplitEnabled(false); }}
+              className="flex-1 h-auto py-2 rounded-full font-bold capitalize"
               style={
                 txType === t
                   ? {
@@ -231,7 +263,7 @@ export function AddTransactionForm() {
               }
             >
               {t}
-            </button>
+            </Button>
           ))}
         </div>
 
@@ -251,10 +283,13 @@ export function AddTransactionForm() {
         {/* Numpad */}
         <div className="grid grid-cols-3 gap-3">
           {NUMPAD_KEYS.map((key) => (
-            <button
+            <Button
               key={key}
+              type="button"
+              variant="ghost"
               onClick={() => handleNumpad(key)}
-              className="rounded-(--r-sm) h-12 sm:h-14 flex items-center justify-center text-lg sm:text-xl font-bold transition-all hover:opacity-80 active:scale-95"
+              aria-label={key === "⌫" ? "Backspace" : key}
+              className="rounded-(--r-sm) h-12 sm:h-14 text-lg sm:text-xl font-bold active:scale-95"
               style={
                 key === "⌫"
                   ? {
@@ -269,82 +304,160 @@ export function AddTransactionForm() {
               }
             >
               {key === "⌫" ? <Delete size={20} /> : key}
-            </button>
+            </Button>
           ))}
         </div>
-      </div>
+      </Card>
 
       {/* RIGHT: Details card */}
-      <form
+      <Card
+        as="form"
         onSubmit={onSubmit}
-        className="rounded-(--r-lg) p-4 sm:p-6 flex flex-col gap-4 sm:gap-5 min-w-0"
-        style={{ background: "var(--card)", boxShadow: "var(--shadow)" }}
+        radius="lg"
+        elevation="floating"
+        className="p-4 sm:p-6 flex flex-col gap-4 sm:gap-5 min-w-0"
       >
         {/* Category grid (only for expenses) */}
         {!isIncome && (
           <div>
-            <div className="text-[11px] font-bold uppercase tracking-wider mb-3" style={{ color: "var(--ink-3)" }}>
-              Category
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
+                Category
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  const next = !splitEnabled;
+                  setSplitEnabled(next);
+                  if (next) setRepeatEnabled(false);
+                }}
+                aria-pressed={splitEnabled}
+                className="h-auto px-2.5 py-1 rounded-full text-[11px] font-bold gap-1"
+                style={splitEnabled ? { background: "var(--violet)", color: "var(--violet-fg)" } : { background: "var(--card-2)", color: "var(--ink-2)" }}
+              >
+                <SplitSquareHorizontal size={12} />
+                Split
+              </Button>
             </div>
-            <div className="grid grid-cols-3 min-[390px]:grid-cols-4 gap-2">
-              {CATEGORIES.filter((c) => c.value !== "income" && c.value !== "transfer").map((cat) => {
-                const isActive = selectedCategory === cat.value;
-                return (
-                  <button
-                    key={cat.value}
-                    type="button"
-                    onClick={() => setSelectedCategory(cat.value)}
-                    className="flex flex-col items-center gap-1.5 rounded-(--r-sm) p-2 sm:p-2.5 transition-all min-w-0"
-                    style={
-                      isActive
-                        ? {
-                            background: "var(--violet)",
-                            boxShadow: "0 4px 12px rgba(0,0,0,.3)",
-                          }
-                        : {
-                            background: "var(--card-2)",
-                          }
-                    }
-                  >
-                    <span className="text-lg sm:text-xl">{cat.icon}</span>
-                    <span
-                      className="text-[10px] font-semibold truncate w-full text-center"
-                      style={{ color: isActive ? "#fff" : "var(--ink-2)" }}
+
+            {!splitEnabled ? (
+              <div className="grid grid-cols-3 min-[390px]:grid-cols-4 gap-2">
+                {CATEGORIES.filter((c) => c.value !== "income" && c.value !== "transfer").map((cat) => {
+                  const isActive = selectedCategory === cat.value;
+                  return (
+                    <Button
+                      key={cat.value}
+                      type="button"
+                      variant="ghost"
+                      onClick={() => setSelectedCategory(cat.value)}
+                      className="h-auto flex-col gap-1.5 rounded-(--r-sm) p-2 sm:p-2.5 min-w-0"
+                      style={
+                        isActive
+                          ? {
+                              background: "var(--violet)",
+                              boxShadow: "0 4px 12px rgba(0,0,0,.3)",
+                            }
+                          : {
+                              background: "var(--card-2)",
+                            }
+                      }
                     >
-                      {cat.label}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+                      <span className="text-lg sm:text-xl">{cat.icon}</span>
+                      <span
+                        className="text-[10px] font-semibold truncate w-full text-center"
+                        style={{ color: isActive ? "var(--violet-fg)" : "var(--ink-2)" }}
+                      >
+                        {cat.label}
+                      </span>
+                    </Button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {splitLines.map((line, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <Select value={line.category} onValueChange={(v) => setSplitLines((ls) => ls.map((l, idx) => idx === i ? { ...l, category: v } : l))}>
+                      <SelectTrigger className="h-10 flex-1 text-sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CATEGORIES.filter((c) => c.value !== "income" && c.value !== "transfer").map((cat) => (
+                          <SelectItem key={cat.value} value={cat.value}>{cat.icon} {cat.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={line.amount}
+                      onChange={(e) => setSplitLines((ls) => ls.map((l, idx) => idx === i ? { ...l, amount: e.target.value } : l))}
+                      placeholder="0.00"
+                      className="w-24"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label="Remove split line"
+                      disabled={splitLines.length <= 2}
+                      onClick={() => setSplitLines((ls) => ls.filter((_, idx) => idx !== i))}
+                      className="h-9 w-9 flex-none"
+                    >
+                      <X size={14} style={{ color: "var(--ink-3)" }} />
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setSplitLines((ls) => [...ls, { category: "other", amount: "" }])}
+                  className="h-auto self-start px-2.5 py-1.5 rounded-(--r-sm) text-xs font-bold gap-1"
+                  style={{ background: "var(--card-2)", color: "var(--violet)" }}
+                >
+                  <Plus size={13} />
+                  Add category
+                </Button>
+                <div
+                  className="text-xs font-semibold px-1"
+                  style={{ color: splitRemainingCents === 0 ? "var(--green)" : "var(--ink-3)" }}
+                >
+                  {splitRemainingCents === 0
+                    ? "Fully allocated"
+                    : `${formatCurrency(Math.abs(splitRemainingCents))} ${splitRemainingCents > 0 ? "remaining" : "over"}`}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         {/* Account selector */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
+          <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
             Account
-          </label>
-          <div className="relative">
-            <select
-              {...register("accountId")}
-              className="w-full rounded-(--r-sm) px-4 py-3 text-sm font-semibold appearance-none outline-none"
-              style={{
-                background: "var(--card-2)",
-                color: "var(--ink)",
-                border: "1.5px solid var(--line)",
-              }}
-            >
-              {accounts.map((acc) => (
-                <option key={String(acc._id)} value={String(acc._id)}>
-                  {acc.name} {acc.type === "credit_card"
-                    ? `(CC · Limit ${formatCurrency(acc.creditMeta?.creditLimit ?? 0)})`
-                    : `(${formatCurrency(acc.balance)})`}
-                </option>
-              ))}
-            </select>
-            <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--ink-3)" }} />
-          </div>
+          </Label>
+          <Controller
+            control={control}
+            name="accountId"
+            render={({ field }) => (
+              <Select value={field.value} onValueChange={field.onChange}>
+                <SelectTrigger className="h-auto w-full rounded-(--r-sm) px-4 py-3 text-sm font-semibold" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }}>
+                  <SelectValue placeholder="Select an account" />
+                </SelectTrigger>
+                <SelectContent>
+                  {accounts.map((acc) => (
+                    <SelectItem key={String(acc._id)} value={String(acc._id)}>
+                      {acc.name} {acc.type === "credit_card"
+                        ? `(CC · Limit ${formatCurrency(acc.creditMeta?.creditLimit ?? 0)})`
+                        : `(${formatCurrency(acc.balance)})`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          />
           {errors.accountId && (
             <p className="text-xs" style={{ color: "var(--red)" }}>{errors.accountId.message}</p>
           )}
@@ -354,53 +467,38 @@ export function AddTransactionForm() {
         </div>
 
         {/* Recurring options */}
-        <div
-          className="rounded-(--r-md) p-4 flex flex-col gap-3"
-          style={{ background: "var(--card-2)", border: "1px solid var(--line)" }}
-        >
+        <Card surface="card-2" radius="md" className="p-4 flex flex-col gap-3" style={{ border: "1px solid var(--line)" }}>
           {/* Toggle row */}
-          <label className="flex items-center justify-between gap-3 cursor-pointer">
+          <Label className="flex items-center justify-between gap-3 cursor-pointer">
             <span className="flex items-center gap-2 text-sm font-bold" style={{ color: "var(--ink)" }}>
               <Repeat2 size={16} />
               Recurring
             </span>
-            <button
-              type="button"
-              onClick={() => setRepeatEnabled(v => !v)}
-              className="relative w-10 h-5 rounded-full transition-all"
-              style={{ background: repeatEnabled ? "var(--violet)" : "var(--line)" }}
-            >
-              <span
-                className="absolute top-0.5 w-4 h-4 rounded-full transition-all"
-                style={{
-                  background: "#fff",
-                  left: repeatEnabled ? "calc(100% - 18px)" : "2px",
-                  boxShadow: "0 1px 3px rgba(0,0,0,.25)",
-                }}
-              />
-            </button>
-          </label>
+            <Switch checked={repeatEnabled} onCheckedChange={(v) => { setRepeatEnabled(v); if (v) setSplitEnabled(false); }} />
+          </Label>
 
           {repeatEnabled && (
             <div className="flex flex-col gap-3">
               {/* Quick presets */}
               <div className="flex gap-2">
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
                   onClick={() => { setTxType("income"); setFreqKey("monthly"); setRecurrenceLabel("Salary"); }}
-                  className="flex-1 rounded-(--r-sm) px-3 py-2 text-xs font-bold"
+                  className="flex-1 h-auto rounded-(--r-sm) px-3 py-2 text-xs font-bold"
                   style={{ background: "var(--card)", color: "var(--green)" }}
                 >
                   💰 Monthly salary
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
+                  variant="ghost"
                   onClick={() => { setTxType("expense"); setSelectedCategory("emi"); setFreqKey("monthly"); setRecurrenceLabel("EMI"); }}
-                  className="flex-1 rounded-(--r-sm) px-3 py-2 text-xs font-bold"
+                  className="flex-1 h-auto rounded-(--r-sm) px-3 py-2 text-xs font-bold"
                   style={{ background: "var(--card)", color: "var(--red)" }}
                 >
                   🏦 Monthly EMI
-                </button>
+                </Button>
               </div>
 
               {/* Frequency chips */}
@@ -408,19 +506,20 @@ export function AddTransactionForm() {
                 <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Frequency</span>
                 <div className="flex flex-wrap gap-1.5">
                   {FREQ_OPTIONS.map(f => (
-                    <button
+                    <Button
                       key={f.key}
                       type="button"
+                      variant="ghost"
                       onClick={() => setFreqKey(f.key)}
-                      className="px-3 py-1.5 rounded-full text-[12px] font-bold transition-all"
+                      className="h-auto px-3 py-1.5 rounded-full text-[12px] font-bold"
                       style={
                         freqKey === f.key
-                          ? { background: "var(--violet)", color: "#fff" }
+                          ? { background: "var(--violet)", color: "var(--violet-fg)" }
                           : { background: "var(--card)", color: "var(--ink-2)" }
                       }
                     >
                       {f.label}
-                    </button>
+                    </Button>
                   ))}
                 </div>
               </div>
@@ -430,31 +529,32 @@ export function AddTransactionForm() {
                 <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Ends</span>
                 <div className="flex gap-1.5">
                   {(["never", "count", "date"] as EndMode[]).map(m => (
-                    <button
+                    <Button
                       key={m}
                       type="button"
+                      variant="ghost"
                       onClick={() => setEndMode(m)}
-                      className="flex-1 py-1.5 rounded-(--r-sm) text-xs font-bold transition-all"
+                      className="flex-1 h-auto py-1.5 rounded-(--r-sm) text-xs font-bold"
                       style={
                         endMode === m
-                          ? { background: "var(--violet)", color: "#fff" }
+                          ? { background: "var(--violet)", color: "var(--violet-fg)" }
                           : { background: "var(--card)", color: "var(--ink-2)" }
                       }
                     >
                       {m === "never" ? "Never" : m === "count" ? "After N payments" : "On a date"}
-                    </button>
+                    </Button>
                   ))}
                 </div>
 
                 {endMode === "count" && (
-                  <input
+                  <Input
                     type="number"
                     min={1}
                     max={3650}
                     value={recurrenceCount}
                     onChange={(e) => setRecurrenceCount(e.target.value)}
                     placeholder="e.g. 12 for 1 year monthly"
-                    className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none w-full"
+                    className="w-full"
                     style={{ background: "var(--card)", color: "var(--ink)", border: "1px solid var(--line)" }}
                   />
                 )}
@@ -469,16 +569,15 @@ export function AddTransactionForm() {
               </div>
 
               {/* Label */}
-              <label className="flex flex-col gap-1.5">
-                <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Label</span>
-                <input
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Label</Label>
+                <Input
                   value={recurrenceLabel}
                   onChange={(e) => setRecurrenceLabel(e.target.value)}
                   placeholder="e.g. House EMI, Netflix, Salary"
-                  className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none"
                   style={{ background: "var(--card)", color: "var(--ink)", border: "1px solid var(--line)" }}
                 />
-              </label>
+              </div>
 
               {/* Summary pill */}
               {recurringSummary && (
@@ -502,7 +601,7 @@ export function AddTransactionForm() {
               )}
             </div>
           )}
-        </div>
+        </Card>
 
         {/* Date picker */}
         <DatePickerField
@@ -515,13 +614,12 @@ export function AddTransactionForm() {
 
         {/* Description */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
+          <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
             Description
-          </label>
-          <input
+          </Label>
+          <Input
             {...register("description")}
             placeholder="What was this for?"
-            className="rounded-(--r-sm) px-4 py-3 text-sm outline-none"
             style={{
               background: "var(--card-2)",
               color: "var(--ink)",
@@ -532,14 +630,14 @@ export function AddTransactionForm() {
 
         {/* Note */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
+          <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
             Note (optional)
-          </label>
-          <textarea
+          </Label>
+          <Textarea
             {...register("note")}
             placeholder="Add a note..."
             rows={2}
-            className="rounded-(--r-sm) px-4 py-3 text-sm outline-none resize-none"
+            className="resize-none"
             style={{
               background: "var(--card-2)",
               color: "var(--ink)",
@@ -549,15 +647,14 @@ export function AddTransactionForm() {
         </div>
 
         {/* Save button */}
-        <button
+        <Button
           type="submit"
-          disabled={isPending || amountInCents <= 0}
-          className="mt-auto rounded-(--r-md) py-3.5 sm:py-4 font-extrabold text-sm tracking-wide transition-all hover:opacity-90 disabled:opacity-50"
-          style={{ background: "var(--violet)", color: "#fff" }}
+          disabled={isPending || amountInCents <= 0 || (splitEnabled && !splitValid)}
+          className="mt-auto h-auto rounded-(--r-md) py-3.5 sm:py-4 font-extrabold text-sm tracking-wide"
         >
           {isPending ? "Saving..." : "Save Transaction"}
-        </button>
-      </form>
+        </Button>
+      </Card>
     </div>
   );
 }

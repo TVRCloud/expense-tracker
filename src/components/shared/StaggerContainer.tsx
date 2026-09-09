@@ -1,11 +1,12 @@
 "use client";
 
 import { motion } from "motion/react";
-import { ReactNode } from "react";
+import { ReactNode, CSSProperties } from "react";
 
 interface StaggerContainerProps {
   children: ReactNode;
   className?: string;
+  style?: CSSProperties;
   staggerDelay?: number;
   delayChildren?: number;
 }
@@ -13,6 +14,7 @@ interface StaggerContainerProps {
 export function StaggerContainer({
   children,
   className = "",
+  style,
   staggerDelay = 0.06,
   delayChildren = 0.02,
 }: StaggerContainerProps) {
@@ -31,6 +33,7 @@ export function StaggerContainer({
         },
       }}
       className={className}
+      style={style}
     >
       {children}
     </motion.div>
@@ -40,9 +43,10 @@ export function StaggerContainer({
 interface StaggerItemProps {
   children: ReactNode;
   className?: string;
+  style?: CSSProperties;
 }
 
-export function StaggerItem({ children, className = "" }: StaggerItemProps) {
+export function StaggerItem({ children, className = "", style }: StaggerItemProps) {
   return (
     <motion.div
       variants={{
@@ -59,6 +63,7 @@ export function StaggerItem({ children, className = "" }: StaggerItemProps) {
         },
       }}
       className={className}
+      style={style}
     >
       {children}
     </motion.div>

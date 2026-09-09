@@ -1,4 +1,4 @@
-import { ChevronRight, ArrowLeftRight, Repeat } from "lucide-react";
+import { ChevronRight, ArrowLeftRight, Repeat, SplitSquareHorizontal } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -6,31 +6,7 @@ import { type ITransaction } from "@/types/models";
 import { format } from "date-fns";
 import { getTransactionActivityDate, isPaidRecurringTransaction } from "../utils/activity-date";
 import { TRANSACTION_CATEGORY_ICONS } from "@/lib/icons";
-
-// Category avatar colors live in globals.css (--cat-*) so theming/rebrand
-// only touches one place instead of every component with a copy of this map.
-const CAT_COLOR_VARS = new Set([
-  "income",
-  "groceries",
-  "travel",
-  "transport",
-  "subscription",
-  "health",
-  "shopping",
-  "rent",
-  "gym",
-  "other",
-  "coffee",
-  "education",
-  "entertainment",
-  "emi",
-  "transfer",
-]);
-
-function getAvatarColor(category: string) {
-  const key = category.toLowerCase();
-  return `var(--cat-${CAT_COLOR_VARS.has(key) ? key : "other"})`;
-}
+import { getCategoryColor as getAvatarColor } from "@/lib/category-colors";
 
 interface Props {
   transaction: ITransaction;
@@ -108,6 +84,15 @@ export function TransactionRow({ transaction }: Props) {
               <Repeat size={9} className="inline" />
               {transaction.installmentIndex != null ? ` #${transaction.installmentIndex + 1}` : " recurring"}
             </Link>
+          )}
+          {transaction.splitGroupId && (
+            <span
+              className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-none"
+              style={{ background: "color-mix(in srgb, var(--amber) 12%, transparent)", color: "var(--amber)" }}
+            >
+              <SplitSquareHorizontal size={9} className="inline" />
+              Split
+            </span>
           )}
         </div>
         <div className="text-xs font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>

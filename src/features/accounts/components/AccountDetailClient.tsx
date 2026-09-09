@@ -13,7 +13,12 @@ import { useTransactions } from "@/features/transactions/hooks/useTransactions";
 import { TransactionRow } from "@/features/transactions/components/TransactionRow";
 import { CreditCardDetailClient } from "@/features/credit-cards/components/CreditCardDetailClient";
 import { type IAccount } from "@/types/models";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/_ui/Skeleton";
+import { Card } from "@/components/_ui/Card";
+import { Button } from "@/components/_ui/Button";
+import { useConfirm } from "@/components/_ui/ConfirmDialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 interface Props {
   id: string;
@@ -23,6 +28,7 @@ export function AccountDetailClient({ id }: Props) {
   const router = useRouter();
   const qc = useQueryClient();
   const { formatCurrency } = useCurrency();
+  const { confirm, dialog } = useConfirm();
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ name: "", color: "" });
 
@@ -86,10 +92,10 @@ export function AccountDetailClient({ id }: Props) {
           <ArrowLeft size={16} />
           Back to accounts
         </Link>
-        <div className="rounded-(--r-lg) p-8 text-center" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
+        <Card radius="lg" className="p-8 text-center">
           <div className="font-bold" style={{ color: "var(--ink)" }}>Account not found</div>
           <p className="text-sm mt-1" style={{ color: "var(--ink-3)" }}>It may have been archived or deleted.</p>
-        </div>
+        </Card>
       </div>
     );
   }
@@ -106,11 +112,11 @@ export function AccountDetailClient({ id }: Props) {
         Back to accounts
       </Link>
 
-      <section className="rounded-(--r-lg) p-5" style={{ background: "var(--card)", boxShadow: "var(--shadow)" }}>
+      <Card radius="lg" elevation="floating" className="p-5">
         <div className="flex items-start gap-4">
           <div
             className="w-14 h-14 rounded-2xl grid place-items-center flex-none"
-            style={{ background: account.color || "var(--card-2)", color: account.color ? "#fff" : "var(--violet)" }}
+            style={{ background: account.color || "var(--card-2)", color: account.color ? "var(--violet-fg)" : "var(--violet)" }}
           >
             {(() => {
               const TypeIcon = ACCOUNT_TYPE_ICONS[account.type] ?? CreditCard;
@@ -127,48 +133,59 @@ export function AccountDetailClient({ id }: Props) {
             </div>
           </div>
           <div className="ml-auto flex gap-2">
-            <button
+            <Button
+              type="button"
+              variant="secondary"
               onClick={() => setEditing((value) => !value)}
-              className="px-4 py-2 rounded-(--r-sm) text-sm font-bold"
-              style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
+              className="h-auto px-4 py-2 rounded-(--r-sm) font-bold"
             >
               {editing ? "Cancel" : "Edit"}
-            </button>
-            <button
-              onClick={() => {
-                if (confirm(`Archive "${account.name}"?`)) archiveAccount.mutate();
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Archive account"
+              onClick={async () => {
+                const ok = await confirm({
+                  title: `Archive "${account.name}"?`,
+                  description: "You can restore it later from an archived-accounts view. Its balance history stays intact.",
+                  confirmLabel: "Archive",
+                  destructive: true,
+                });
+                if (ok) archiveAccount.mutate();
               }}
               disabled={archiveAccount.isPending}
-              className="w-10 h-10 rounded-(--r-sm) grid place-items-center"
+              className="w-10 h-10 rounded-(--r-sm)"
               style={{ background: "rgba(235,87,87,.12)", color: "var(--red)" }}
             >
               <Archive size={16} />
-            </button>
+            </Button>
           </div>
         </div>
 
         {editing && (
           <div className="grid md:grid-cols-3 gap-3 mt-5">
-            <label className="flex flex-col gap-1.5 md:col-span-3">
-              <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Name</span>
-              <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
-            </label>
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Color</span>
-              <input value={form.color} onChange={(e) => setForm((f) => ({ ...f, color: e.target.value }))} placeholder="#6B46F5" className="rounded-(--r-sm) px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
-            </label>
-            <button
+            <div className="flex flex-col gap-1.5 md:col-span-3">
+              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Name</Label>
+              <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Color</Label>
+              <Input value={form.color} onChange={(e) => setForm((f) => ({ ...f, color: e.target.value }))} placeholder="#6B46F5" />
+            </div>
+            <Button
+              type="button"
               onClick={() => updateAccount.mutate()}
               disabled={updateAccount.isPending || !form.name}
-              className="inline-flex items-center justify-center gap-2 rounded-(--r-sm) text-sm font-bold disabled:opacity-50"
-              style={{ background: "var(--violet)", color: "#fff" }}
+              className="h-auto rounded-(--r-sm) font-bold"
             >
               <Save size={16} />
               {updateAccount.isPending ? "Saving..." : "Save"}
-            </button>
+            </Button>
           </div>
         )}
-      </section>
+      </Card>
 
       <section className="flex flex-col gap-3">
         <div className="flex items-center justify-between px-1">
@@ -180,10 +197,10 @@ export function AccountDetailClient({ id }: Props) {
             {[0, 1, 2].map((i) => <Skeleton key={i} className="h-16 rounded-(--r-md)" />)}
           </div>
         ) : (transactions?.data ?? []).length === 0 ? (
-          <div className="rounded-(--r-lg) p-8 text-center" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
+          <Card radius="lg" className="p-8 text-center">
             <div className="font-bold" style={{ color: "var(--ink)" }}>No transactions yet</div>
             <p className="text-sm mt-1" style={{ color: "var(--ink-3)" }}>Transactions linked to this account will appear here.</p>
-          </div>
+          </Card>
         ) : (
           <div className="flex flex-col gap-2">
             {(transactions?.data ?? []).map((transaction) => (
@@ -192,6 +209,7 @@ export function AccountDetailClient({ id }: Props) {
           </div>
         )}
       </section>
+      {dialog}
     </div>
   );
 }

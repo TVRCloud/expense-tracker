@@ -4,6 +4,10 @@ import { useState } from "react";
 import { Pencil, Check, X } from "lucide-react";
 import { useUpdateProfile } from "../hooks/useProfile";
 import { type IUser } from "@/types/models";
+import { Card } from "@/components/_ui/Card";
+import { Button } from "@/components/_ui/Button";
+import { Avatar } from "@/components/_ui/Avatar";
+import { Input } from "@/components/ui/input";
 
 interface Props {
   user: IUser;
@@ -13,13 +17,6 @@ export function ProfileCard({ user }: Props) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(user.name);
   const { mutateAsync: update, isPending } = useUpdateProfile();
-
-  const initials = user.name
-    .split(" ")
-    .map((n) => n[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
 
   const handleSave = async () => {
     if (name.trim() === user.name) {
@@ -31,38 +28,16 @@ export function ProfileCard({ user }: Props) {
   };
 
   return (
-    <div
-      className="rounded-[var(--r-lg)] p-6 flex items-center gap-5"
-      style={{ background: "var(--card)", boxShadow: "var(--shadow)" }}
-    >
-      {/* Avatar */}
-      <div
-        className="w-[72px] h-[72px] rounded-[22px] grid place-items-center text-white text-2xl font-extrabold flex-none"
-        style={{
-          background: user.avatar
-            ? undefined
-            : "linear-gradient(135deg, #6B46F5 0%, #8A6BFF 100%)",
-        }}
-      >
-        {user.avatar ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={user.avatar} alt={user.name} className="w-full h-full rounded-[22px] object-cover" />
-        ) : (
-          initials
-        )}
-      </div>
+    <Card radius="lg" elevation="floating" className="p-6 flex items-center gap-5">
+      <Avatar name={user.name} src={user.avatar ?? undefined} size={72} className="rounded-[22px]" />
 
       {/* Info */}
       <div className="flex-1 min-w-0">
         {editing ? (
           <div className="flex items-center gap-2">
-            <input
-              className="flex-1 rounded-[var(--r-sm)] px-3 py-2 text-sm font-bold outline-none min-w-0"
-              style={{
-                background: "var(--card-2)",
-                color: "var(--ink)",
-                border: "1.5px solid var(--violet)",
-              }}
+            <Input
+              className="flex-1 font-bold min-w-0"
+              style={{ border: "1.5px solid var(--violet)" }}
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => {
@@ -71,12 +46,18 @@ export function ProfileCard({ user }: Props) {
               }}
               autoFocus
             />
-            <button onClick={() => void handleSave()} disabled={isPending}>
+            <Button type="button" variant="ghost" size="icon" aria-label="Save name" onClick={() => void handleSave()} disabled={isPending}>
               <Check size={17} style={{ color: "var(--green)" }} />
-            </button>
-            <button onClick={() => { setEditing(false); setName(user.name); }}>
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Cancel edit"
+              onClick={() => { setEditing(false); setName(user.name); }}
+            >
               <X size={17} style={{ color: "var(--ink-3)" }} />
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="text-lg font-extrabold truncate" style={{ color: "var(--ink)" }}>
@@ -96,14 +77,18 @@ export function ProfileCard({ user }: Props) {
 
       {/* Edit button */}
       {!editing && (
-        <button
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label="Edit name"
           onClick={() => setEditing(true)}
-          className="w-10 h-10 rounded-[var(--r-sm)] grid place-items-center flex-none"
+          className="w-10 h-10 rounded-(--r-sm)"
           style={{ background: "var(--card-2)" }}
         >
           <Pencil size={16} style={{ color: "var(--ink-2)" }} />
-        </button>
+        </Button>
       )}
-    </div>
+    </Card>
   );
 }

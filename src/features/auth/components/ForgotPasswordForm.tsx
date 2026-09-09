@@ -8,6 +8,10 @@ import Link from "next/link";
 import { Wallet, ArrowLeft, CheckCircle } from "lucide-react";
 import { forgotPasswordSchema, type ForgotPasswordInput } from "@/features/auth/schemas/auth.schema";
 import apiClient from "@/lib/api-client";
+import { Card } from "@/components/_ui/Card";
+import { Button } from "@/components/_ui/Button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 export function ForgotPasswordForm() {
   const [loading, setLoading] = useState(false);
@@ -32,10 +36,7 @@ export function ForgotPasswordForm() {
   };
 
   return (
-    <div
-      className="rounded-[var(--r-lg)] p-8 shadow-[var(--shadow)]"
-      style={{ background: "var(--card)" }}
-    >
+    <Card radius="lg" elevation="floating" className="p-8">
       <div className="flex items-center gap-3 mb-8">
         <div
           className="w-10 h-10 rounded-[12px] grid place-items-center text-white"
@@ -76,15 +77,15 @@ export function ForgotPasswordForm() {
 
           <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
             <div>
-              <label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
+              <Label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
                 Email
-              </label>
-              <input
+              </Label>
+              <Input
                 type="email"
                 autoComplete="email"
                 placeholder="you@example.com"
-                className="w-full px-4 py-3 rounded-[14px] text-sm font-semibold outline-none"
-                style={{ background: "var(--card-2)", border: "1.5px solid var(--line-2)", color: "var(--ink)" }}
+                className="rounded-[14px] py-3 px-4 h-auto font-semibold"
+                style={{ background: "var(--card-2)", border: "1.5px solid var(--line-2)" }}
                 {...register("email")}
               />
               {errors.email && (
@@ -94,14 +95,14 @@ export function ForgotPasswordForm() {
               )}
             </div>
 
-            <button
+            <Button
               type="submit"
               disabled={loading}
-              className="w-full py-4 rounded-[15px] font-bold text-base mt-1 disabled:opacity-60"
+              className="w-full h-auto py-4 rounded-[15px] font-bold text-base mt-1"
               style={{ background: "var(--fab)", color: "var(--fab-ink)" }}
             >
               {loading ? "Sending…" : "Send reset link"}
-            </button>
+            </Button>
           </form>
 
           <div className="mt-6 flex justify-center">
@@ -115,6 +116,6 @@ export function ForgotPasswordForm() {
           </div>
         </>
       )}
-    </div>
+    </Card>
   );
 }

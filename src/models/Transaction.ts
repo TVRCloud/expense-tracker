@@ -33,6 +33,10 @@ const TransactionSchema = new Schema(
       default: "upcoming",
     },
     paidAt: { type: Date },
+    // Split-purchase siblings — one real Transaction document per category,
+    // sharing this id, same pattern as recurringId above (not an embedded
+    // array), so every existing $sum/$group aggregation needs no changes.
+    splitGroupId: { type: Schema.Types.ObjectId },
     isDeleted: { type: Boolean, default: false },
     deletedAt: { type: Date },
     deletedBy: { type: Schema.Types.ObjectId, ref: "User" },
@@ -50,5 +54,6 @@ TransactionSchema.index({ user: 1, isDeleted: 1, recurringId: 1, date: 1 });
 TransactionSchema.index({ user: 1, isDeleted: 1, isRecurring: 1, installmentStatus: 1, date: 1 });
 TransactionSchema.index({ isDeleted: 1, recurrenceIsOpenEnded: 1, recurrenceCancelled: 1, recurringId: 1 });
 TransactionSchema.index({ user: 1, tags: 1 });
+TransactionSchema.index({ user: 1, isDeleted: 1, splitGroupId: 1 });
 
 export default models.Transaction || model("Transaction", TransactionSchema, "transactions");

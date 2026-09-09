@@ -1,13 +1,21 @@
 "use client";
 
 import { useState, useMemo, useEffect } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
-import { format, subMonths } from "date-fns";
+import { ChevronLeft, ChevronRight, TrendingUp } from "lucide-react";
+import { format, subMonths, getDaysInMonth } from "date-fns";
 import { AnalyticsBarChart } from "./AnalyticsBarChart";
+import { CategoryDonutChart } from "./CategoryDonutChart";
+import { NetWorthTrendChart } from "./NetWorthTrendChart";
 import { IOCard } from "./IOCard";
 import { HistoryRow } from "./HistoryRow";
 import { useMultiMonthStats } from "../hooks/useAnalytics";
-import { Skeleton } from "@/components/ui/skeleton";
+import { useAccounts } from "@/features/dashboard/hooks/useDashboard";
+import { getCategoryColor } from "@/lib/category-colors";
+import { Skeleton } from "@/components/_ui/Skeleton";
+import { Card } from "@/components/_ui/Card";
+import { Button } from "@/components/_ui/Button";
+import { Progress } from "@/components/_ui/Progress";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCurrency } from "@/hooks/useCurrency";
 
 function getLast6Months(): { month: number; year: number }[] {
@@ -26,7 +34,9 @@ export function AnalyticsClient() {
   const [tab, setTab] = useState<Tab>("expense");
 
   const { data, isLoading } = useMultiMonthStats(months);
+  const { data: accounts } = useAccounts();
   const { formatCurrency } = useCurrency();
+  const currentTotalBalance = (accounts ?? []).reduce((sum, a) => sum + a.balance, 0);
 
   // When data first loads, if the current month is empty auto-jump to the most recent month that has data
   useEffect(() => {
@@ -45,13 +55,24 @@ export function AnalyticsClient() {
   const activeMonth = data?.[activeIdx];
   const activeStats = activeMonth?.stats;
 
+  // Projected month-end spend — only meaningful while viewing the real
+  // current calendar month (a "projection" for a past month makes no sense).
+  const now = new Date();
+  const isViewingCurrentMonth = activeMonth?.month === now.getMonth() + 1 && activeMonth?.year === now.getFullYear();
+  const projectedSpend = isViewingCurrentMonth && activeStats
+    ? (activeStats.expense / now.getDate()) * getDaysInMonth(now)
+    : null;
+
+  // Next-month estimate — trailing average of up to the last 3 months' expense.
+  const recentExpenses = (data ?? []).slice(-3).map((h) => h.stats?.expense ?? 0);
+  const nextMonthEstimate = recentExpenses.length > 0
+    ? recentExpenses.reduce((sum, v) => sum + v, 0) / recentExpenses.length
+    : null;
+
   return (
     <div className="flex flex-col gap-5">
       {/* Chart card */}
-      <div
-        className="rounded-(--r-lg) p-5"
-        style={{ background: "var(--card)", boxShadow: "var(--shadow)" }}
-      >
+      <Card radius="lg" className="p-5">
         <div className="flex items-center justify-between mb-5">
           <div>
             <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
@@ -74,25 +95,42 @@ export function AnalyticsClient() {
         </div>
 
         {isLoading ? (
-          <Skeleton className="h-[220px] w-full rounded-(--r-md)" />
+          <Skeleton className="h-55 w-full rounded-(--r-md)" />
         ) : (
           <AnalyticsBarChart data={data ?? []} />
         )}
-      </div>
+      </Card>
+
+      {/* Net worth trend */}
+      <Card radius="lg" className="p-5">
+        <div className="mb-4">
+          <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
+            Net Worth
+          </div>
+          <div className="text-lg font-extrabold mt-0.5 tnum" style={{ color: "var(--ink)" }}>
+            {formatCurrency(currentTotalBalance)}
+          </div>
+        </div>
+        {isLoading ? (
+          <Skeleton className="h-48 w-full rounded-(--r-md)" />
+        ) : (
+          <NetWorthTrendChart data={data ?? []} currentTotalBalance={currentTotalBalance} />
+        )}
+      </Card>
 
       {/* Month navigator */}
       <div className="flex items-center justify-between px-1">
-        <button onClick={() => setActiveIdx((i) => Math.max(0, i - 1))}>
+        <Button type="button" variant="ghost" size="icon" aria-label="Previous month" onClick={() => setActiveIdx((i) => Math.max(0, i - 1))}>
           <ChevronLeft size={20} style={{ color: "var(--ink-3)" }} />
-        </button>
+        </Button>
         <span className="text-sm font-bold" style={{ color: "var(--ink)" }}>
           {activeMonth
             ? format(new Date(activeMonth.year, activeMonth.month - 1, 1), "MMMM yyyy")
             : "—"}
         </span>
-        <button onClick={() => setActiveIdx((i) => Math.min(months.length - 1, i + 1))}>
+        <Button type="button" variant="ghost" size="icon" aria-label="Next month" onClick={() => setActiveIdx((i) => Math.min(months.length - 1, i + 1))}>
           <ChevronRight size={20} style={{ color: "var(--ink-3)" }} />
-        </button>
+        </Button>
       </div>
 
       {/* IO summary cards */}
@@ -108,59 +146,49 @@ export function AnalyticsClient() {
         </div>
       )}
 
-      {/* Tab toggle + breakdown */}
-      <div
-        className="rounded-(--r-lg) p-5"
-        style={{ background: "var(--card)", boxShadow: "var(--shadow)" }}
-      >
-        {/* Tabs */}
-        <div
-          className="flex rounded-(--r-sm) p-1 mb-5"
-          style={{ background: "var(--card-2)" }}
-        >
-          {(["income", "expense"] as Tab[]).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className="flex-1 py-2 text-[13px] font-bold rounded-[calc(var(--r-sm)-4px)] transition-all"
-              style={{
-                background: tab === t ? "var(--card)" : "transparent",
-                color: tab === t ? "var(--ink)" : "var(--ink-3)",
-                boxShadow: tab === t ? "var(--shadow-sm)" : "none",
-              }}
-            >
-              {t === "income" ? "Income" : "Expenses"}
-            </button>
-          ))}
+      {projectedSpend !== null && (
+        <div className="flex items-center gap-2 px-1 -mt-2">
+          <TrendingUp size={14} style={{ color: "var(--amber)" }} />
+          <span className="text-xs font-semibold" style={{ color: "var(--ink-2)" }}>
+            Projected by month end: <span className="tnum font-bold" style={{ color: "var(--ink)" }}>{formatCurrency(projectedSpend)}</span>
+          </span>
         </div>
+      )}
+
+      {/* Tab toggle + breakdown */}
+      <Card radius="lg" className="p-5">
+        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+          <TabsList className="w-full grid grid-cols-2 rounded-(--r-sm) p-1 mb-5" style={{ background: "var(--card-2)" }}>
+            <TabsTrigger value="income" className="rounded-[calc(var(--r-sm)-4px)] text-[13px] font-bold">Income</TabsTrigger>
+            <TabsTrigger value="expense" className="rounded-[calc(var(--r-sm)-4px)] text-[13px] font-bold">Expenses</TabsTrigger>
+          </TabsList>
+        </Tabs>
 
         {/* Expenses tab — category breakdown */}
         {tab === "expense" && activeStats && activeStats.byCategory.length > 0 && (
-          <div className="flex flex-col gap-3">
-            {activeStats.byCategory.map(({ category, total }) => {
-              const pct = activeStats.expense > 0 ? (total / activeStats.expense) * 100 : 0;
-              return (
-                <div key={category} className="flex flex-col gap-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold capitalize" style={{ color: "var(--ink)" }}>
-                      {category}
-                    </span>
-                    <span className="text-sm font-bold tnum" style={{ color: "var(--ink-2)" }}>
-                      {formatCurrency(total)}
-                      <span className="text-[11px] ml-1.5" style={{ color: "var(--ink-3)" }}>
-                        {Math.round(pct)}%
+          <div className="flex flex-col gap-5">
+            <CategoryDonutChart byCategory={activeStats.byCategory} total={activeStats.expense} />
+            <div className="flex flex-col gap-3">
+              {activeStats.byCategory.map(({ category, total }) => {
+                const pct = activeStats.expense > 0 ? (total / activeStats.expense) * 100 : 0;
+                return (
+                  <div key={category} className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-semibold capitalize" style={{ color: "var(--ink)" }}>
+                        {category}
                       </span>
-                    </span>
+                      <span className="text-sm font-bold tnum" style={{ color: "var(--ink-2)" }}>
+                        {formatCurrency(total)}
+                        <span className="text-[11px] ml-1.5" style={{ color: "var(--ink-3)" }}>
+                          {Math.round(pct)}%
+                        </span>
+                      </span>
+                    </div>
+                    <Progress value={pct} height={8} trackColor="var(--line)" color={getCategoryColor(category)} />
                   </div>
-                  <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--line)" }}>
-                    <div
-                      className="h-full rounded-full"
-                      style={{ width: `${pct}%`, background: "var(--violet)" }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -188,24 +216,16 @@ export function AnalyticsClient() {
                           {h.stats ? formatCurrency(h.stats.income) : "—"}
                         </span>
                       </div>
-                      <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--line)" }}>
-                        <div
-                          className="h-full rounded-full"
-                          style={{ width: `${pct}%`, background: "var(--violet)" }}
-                        />
-                      </div>
+                      <Progress value={pct} height={8} trackColor="var(--line)" color="var(--violet)" />
                     </div>
                   );
                 })}
           </div>
         )}
-      </div>
+      </Card>
 
       {/* Monthly history */}
-      <div
-        className="rounded-(--r-lg) p-5"
-        style={{ background: "var(--card)", boxShadow: "var(--shadow)" }}
-      >
+      <Card radius="lg" className="p-5">
         <div className="text-[11px] font-bold uppercase tracking-wider mb-4" style={{ color: "var(--ink-3)" }}>
           Monthly History
         </div>
@@ -224,7 +244,15 @@ export function AnalyticsClient() {
                 );
               })}
         </div>
-      </div>
+        {!isLoading && nextMonthEstimate !== null && (
+          <div className="flex items-center gap-2 mt-4 pt-4" style={{ borderTop: "1px solid var(--line)" }}>
+            <TrendingUp size={14} style={{ color: "var(--ink-3)" }} />
+            <span className="text-xs font-semibold" style={{ color: "var(--ink-3)" }}>
+              Next month, at this pace: <span className="tnum font-bold" style={{ color: "var(--ink-2)" }}>~{formatCurrency(nextMonthEstimate)}</span>
+            </span>
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

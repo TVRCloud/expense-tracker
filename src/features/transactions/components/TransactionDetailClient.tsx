@@ -3,14 +3,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
-import { ArrowLeft, Save, Trash2 } from "lucide-react";
+import { ArrowLeft, Save, Trash2, SplitSquareHorizontal } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import apiClient from "@/lib/api-client";
 import { useCurrency } from "@/hooks/useCurrency";
 import { type ITransaction } from "@/types/models";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/_ui/Skeleton";
+import { Card } from "@/components/_ui/Card";
+import { Button } from "@/components/_ui/Button";
+import { useConfirm } from "@/components/_ui/ConfirmDialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { DatePickerField } from "@/components/shared/DatePickerField";
 
 interface Props {
@@ -26,6 +32,7 @@ export function TransactionDetailClient({ id }: Props) {
   const router = useRouter();
   const qc = useQueryClient();
   const { formatCurrency } = useCurrency();
+  const { confirm, dialog } = useConfirm();
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({
     description: "",
@@ -42,6 +49,16 @@ export function TransactionDetailClient({ id }: Props) {
       const res = await apiClient.get<{ data: ITransaction }>(`/transactions/${id}`);
       return res.data.data;
     },
+  });
+
+  const splitGroupId = transaction?.splitGroupId;
+  const { data: splitSiblings } = useQuery<ITransaction[]>({
+    queryKey: ["transactions", "split", splitGroupId],
+    queryFn: async () => {
+      const res = await apiClient.get<{ data: ITransaction[] }>(`/transactions?splitGroupId=${splitGroupId}`);
+      return res.data.data;
+    },
+    enabled: Boolean(splitGroupId),
   });
 
   useEffect(() => {
@@ -93,6 +110,22 @@ export function TransactionDetailClient({ id }: Props) {
     onError: (err: Error) => toast.error(err.message),
   });
 
+  const deleteSplitGroup = useMutation({
+    mutationFn: async () => {
+      const ids = (splitSiblings ?? []).map((s) => String(s._id));
+      for (const splitId of ids) {
+        await apiClient.delete(`/transactions/${splitId}`);
+      }
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["transactions"] });
+      void qc.invalidateQueries({ queryKey: ["accounts"] });
+      toast.success("Split purchase deleted");
+      router.push("/transactions");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
   const amountStyle = useMemo(() => {
     if (!transaction) return { color: "var(--ink)" };
     return { color: transaction.type === "income" ? "var(--green)" : "var(--red)" };
@@ -101,9 +134,9 @@ export function TransactionDetailClient({ id }: Props) {
   if (isLoading) {
     return (
       <div className="flex flex-col gap-4">
-        <Skeleton className="h-12 w-32 rounded-[var(--r-sm)]" />
-        <Skeleton className="h-44 rounded-[var(--r-lg)]" />
-        <Skeleton className="h-64 rounded-[var(--r-lg)]" />
+        <Skeleton className="h-12 w-32 rounded-(--r-sm)" />
+        <Skeleton className="h-44 rounded-(--r-lg)" />
+        <Skeleton className="h-64 rounded-(--r-lg)" />
       </div>
     );
   }
@@ -115,10 +148,10 @@ export function TransactionDetailClient({ id }: Props) {
           <ArrowLeft size={16} />
           Back to transactions
         </Link>
-        <div className="rounded-[var(--r-lg)] p-8 text-center" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
+        <Card radius="lg" className="p-8 text-center">
           <div className="font-bold" style={{ color: "var(--ink)" }}>Transaction not found</div>
           <p className="text-sm mt-1" style={{ color: "var(--ink-3)" }}>It may have been deleted or moved.</p>
-        </div>
+        </Card>
       </div>
     );
   }
@@ -130,7 +163,7 @@ export function TransactionDetailClient({ id }: Props) {
         Back to transactions
       </Link>
 
-      <section className="rounded-[var(--r-lg)] p-5" style={{ background: "var(--card)", boxShadow: "var(--shadow)" }}>
+      <Card radius="lg" elevation="floating" className="p-5">
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
@@ -145,43 +178,100 @@ export function TransactionDetailClient({ id }: Props) {
             </div>
           </div>
           <div className="flex gap-2">
-            <button
+            <Button
+              type="button"
+              variant="secondary"
               onClick={() => setEditing((value) => !value)}
-              className="px-4 py-2 rounded-[var(--r-sm)] text-sm font-bold"
-              style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
+              className="h-auto px-4 py-2 rounded-(--r-sm) font-bold"
             >
               {editing ? "Cancel" : "Edit"}
-            </button>
-            <button
-              onClick={() => {
-                if (confirm("Delete this transaction?")) deleteTransaction.mutate();
+            </Button>
+            {splitGroupId && splitSiblings && splitSiblings.length > 1 && (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={async () => {
+                  const ok = await confirm({
+                    title: "Delete entire split purchase?",
+                    description: `This removes all ${splitSiblings.length} categories from this purchase and reverses the full amount from your account. This can't be undone.`,
+                    confirmLabel: "Delete all",
+                    destructive: true,
+                  });
+                  if (ok) deleteSplitGroup.mutate();
+                }}
+                disabled={deleteSplitGroup.isPending}
+                className="h-auto px-4 py-2 rounded-(--r-sm) font-bold text-sm"
+                style={{ background: "rgba(235,87,87,.12)", color: "var(--red)" }}
+              >
+                Delete entire split
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Delete transaction"
+              onClick={async () => {
+                const ok = await confirm({
+                  title: "Delete this transaction?",
+                  description: "This can't be undone. Account balances will be reversed.",
+                  confirmLabel: "Delete",
+                  destructive: true,
+                });
+                if (ok) deleteTransaction.mutate();
               }}
               disabled={deleteTransaction.isPending}
-              className="w-10 h-10 rounded-[var(--r-sm)] grid place-items-center"
+              className="w-10 h-10 rounded-(--r-sm)"
               style={{ background: "rgba(235,87,87,.12)", color: "var(--red)" }}
             >
               <Trash2 size={16} />
-            </button>
+            </Button>
           </div>
         </div>
-      </section>
+      </Card>
 
-      <section className="rounded-[var(--r-lg)] overflow-hidden" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
+      {splitGroupId && splitSiblings && splitSiblings.length > 1 && (
+        <Card radius="lg" className="p-5 flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            <SplitSquareHorizontal size={15} style={{ color: "var(--amber)" }} />
+            <span className="text-sm font-bold" style={{ color: "var(--ink)" }}>
+              Split purchase — {splitSiblings.length} categories, total {formatCurrency(splitSiblings.reduce((sum, s) => sum + s.amount, 0))}
+            </span>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {splitSiblings.map((s) => (
+              <Link
+                key={s._id}
+                href={`/transactions/${s._id}`}
+                className="flex items-center justify-between px-3 py-2 rounded-(--r-sm) text-sm"
+                style={{
+                  background: String(s._id) === id ? "color-mix(in srgb, var(--violet) 10%, transparent)" : "var(--card-2)",
+                }}
+              >
+                <span className="font-semibold capitalize" style={{ color: "var(--ink)" }}>{s.category}</span>
+                <span className="tnum font-bold" style={{ color: "var(--ink-2)" }}>{formatCurrency(s.amount)}</span>
+              </Link>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      <Card radius="lg" className="overflow-hidden">
         {editing ? (
           <div className="p-5 flex flex-col gap-4">
             <div className="grid md:grid-cols-2 gap-3">
-              <label className="flex flex-col gap-1.5 md:col-span-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Description</span>
-                <input value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
-              </label>
-              <label className="flex flex-col gap-1.5">
-                <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Category</span>
-                <input value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))} className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
-              </label>
-              <label className="flex flex-col gap-1.5">
-                <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Subcategory</span>
-                <input value={form.subcategory} onChange={(e) => setForm((f) => ({ ...f, subcategory: e.target.value }))} className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
-              </label>
+              <div className="flex flex-col gap-1.5 md:col-span-2">
+                <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Description</Label>
+                <Input value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Category</Label>
+                <Input value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Subcategory</Label>
+                <Input value={form.subcategory} onChange={(e) => setForm((f) => ({ ...f, subcategory: e.target.value }))} />
+              </div>
               <div className="flex flex-col gap-1.5">
                 <DatePickerField
                   label="Date"
@@ -191,24 +281,24 @@ export function TransactionDetailClient({ id }: Props) {
                   }}
                 />
               </div>
-              <label className="flex flex-col gap-1.5">
-                <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Tags</span>
-                <input value={form.tags} onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))} placeholder="comma separated" className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
-              </label>
-              <label className="flex flex-col gap-1.5 md:col-span-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Note</span>
-                <textarea value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} rows={4} className="rounded-[var(--r-sm)] px-3 py-2.5 text-sm outline-none resize-none" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }} />
-              </label>
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Tags</Label>
+                <Input value={form.tags} onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))} placeholder="comma separated" />
+              </div>
+              <div className="flex flex-col gap-1.5 md:col-span-2">
+                <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Note</Label>
+                <Textarea value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} rows={4} className="resize-none" />
+              </div>
             </div>
-            <button
+            <Button
+              type="button"
               onClick={() => updateTransaction.mutate()}
               disabled={updateTransaction.isPending || !form.category}
-              className="inline-flex items-center justify-center gap-2 py-3 rounded-[var(--r-sm)] text-sm font-bold disabled:opacity-50"
-              style={{ background: "var(--violet)", color: "#fff" }}
+              className="h-auto py-3 rounded-(--r-sm) font-bold"
             >
               <Save size={16} />
               {updateTransaction.isPending ? "Saving..." : "Save changes"}
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="divide-y" style={{ borderColor: "var(--line)" }}>
@@ -227,7 +317,8 @@ export function TransactionDetailClient({ id }: Props) {
             ))}
           </div>
         )}
-      </section>
+      </Card>
+      {dialog}
     </div>
   );
 }

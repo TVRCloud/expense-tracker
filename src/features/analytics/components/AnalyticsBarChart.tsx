@@ -1,45 +1,24 @@
 "use client";
 
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from "recharts";
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { format } from "date-fns";
 import { type MonthHistory } from "../hooks/useAnalytics";
 import { useCurrency } from "@/hooks/useCurrency";
+import {
+  ChartConfig,
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+} from "@/components/ui/chart";
 
 interface Props {
   data: MonthHistory[];
 }
 
-interface TooltipProps {
-  active?: boolean;
-  payload?: { name: string; value: number; color: string }[];
-  label?: string;
-  formatCompact: (v: number) => string;
-}
-
-function CustomTooltip({ active, payload, label, formatCompact }: TooltipProps) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div
-      className="rounded-[var(--r-sm)] px-4 py-3 text-sm"
-      style={{ background: "var(--card)", boxShadow: "var(--shadow)", border: "1px solid var(--line)" }}
-    >
-      <p className="font-bold mb-1.5" style={{ color: "var(--ink)" }}>{label}</p>
-      {payload.map((p) => (
-        <p key={p.name} className="font-semibold tnum" style={{ color: p.color }}>
-          {p.name}: {formatCompact(p.value)}
-        </p>
-      ))}
-    </div>
-  );
-}
+const chartConfig = {
+  income: { label: "Income", color: "var(--violet)" },
+  expense: { label: "Expense", color: "var(--green)" },
+} satisfies ChartConfig;
 
 export function AnalyticsBarChart({ data }: Props) {
   const { formatCurrencyCompact } = useCurrency();
@@ -52,7 +31,7 @@ export function AnalyticsBarChart({ data }: Props) {
     }));
 
   return (
-    <ResponsiveContainer width="100%" height={220}>
+    <ChartContainer config={chartConfig} className="h-55 w-full">
       <BarChart data={chartData} barCategoryGap="28%" barGap={4}>
         <CartesianGrid vertical={false} strokeDasharray="4 4" stroke="var(--line)" />
         <XAxis
@@ -68,10 +47,13 @@ export function AnalyticsBarChart({ data }: Props) {
           tickFormatter={(v: number) => formatCurrencyCompact(v)}
           width={52}
         />
-        <Tooltip content={<CustomTooltip formatCompact={formatCurrencyCompact} />} cursor={{ fill: "var(--line)", radius: 6 }} />
-        <Bar dataKey="income" name="Income" fill="var(--violet)" radius={[6, 6, 0, 0]} maxBarSize={32} />
-        <Bar dataKey="expense" name="Expense" fill="var(--green)" radius={[6, 6, 0, 0]} maxBarSize={32} />
+        <ChartTooltip
+          cursor={{ fill: "var(--line)", radius: 6 }}
+          content={<ChartTooltipContent formatter={(value, name) => `${chartConfig[name as keyof typeof chartConfig]?.label ?? name}: ${formatCurrencyCompact(Number(value))}`} />}
+        />
+        <Bar dataKey="income" fill="var(--color-income)" radius={[6, 6, 0, 0]} maxBarSize={32} />
+        <Bar dataKey="expense" fill="var(--color-expense)" radius={[6, 6, 0, 0]} maxBarSize={32} />
       </BarChart>
-    </ResponsiveContainer>
+    </ChartContainer>
   );
 }

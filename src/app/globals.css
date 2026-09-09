@@ -41,6 +41,7 @@
   --violet: #27272a;
   --violet-2: #3f3f46;
   --violet-ink: #18181b;
+  --violet-fg: #ffffff; /* readable text/icon color ON a --violet fill (adapts per theme, unlike hardcoded white) */
   --green: #16a34a;
   --green-bar: #86efac;
   --red: #ef4444;
@@ -83,7 +84,7 @@
   --background: var(--bg);
   --foreground: var(--ink);
   --primary: var(--violet);
-  --primary-foreground: #0d0b06;
+  --primary-foreground: var(--violet-fg);
   --secondary: var(--card-2);
   --secondary-foreground: var(--ink);
   --muted: var(--card-2);
@@ -146,6 +147,7 @@
   --violet: #a1a1aa;
   --violet-2: #d4d4d8;
   --violet-ink: #e4e4e7;
+  --violet-fg: #0a0a0b;
   --green: #4ade80;
   --green-bar: #86efac;
   --red: #f87171;
@@ -177,7 +179,7 @@
   --background: var(--bg);
   --foreground: var(--ink);
   --primary: var(--violet);
-  --primary-foreground: #0d0b06;
+  --primary-foreground: var(--violet-fg);
   --secondary: var(--card-2);
   --secondary-foreground: var(--ink);
   --muted: var(--card-2);

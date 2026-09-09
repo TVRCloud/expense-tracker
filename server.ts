@@ -16,6 +16,7 @@ const handle = app.getRequestHandler();
 
 app.prepare().then(() => {
   const httpServer = createServer((req, res) => {
+    res.setMaxListeners(20);
     const parsedUrl = parse(req.url ?? "", true);
     void handle(req, res, parsedUrl);
   });

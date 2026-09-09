@@ -9,6 +9,10 @@ import { toast } from "sonner";
 import Link from "next/link";
 import { Eye, EyeOff, Wallet } from "lucide-react";
 import { loginSchema, type LoginInput } from "@/features/auth/schemas/auth.schema";
+import { Card } from "@/components/_ui/Card";
+import { Button } from "@/components/_ui/Button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 export function LoginForm() {
   const router = useRouter();
@@ -40,10 +44,7 @@ export function LoginForm() {
   };
 
   return (
-    <div
-      className="rounded-[var(--r-lg)] p-8 shadow-[var(--shadow)]"
-      style={{ background: "var(--card)" }}
-    >
+    <Card radius="lg" elevation="floating" className="p-8">
       {/* Brand */}
       <div className="flex items-center gap-3 mb-8">
         <div
@@ -66,22 +67,15 @@ export function LoginForm() {
 
       <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
         <div>
-          <label
-            className="block text-xs font-bold mb-2"
-            style={{ color: "var(--ink-2)" }}
-          >
+          <Label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
             Email
-          </label>
-          <input
+          </Label>
+          <Input
             type="email"
             autoComplete="email"
             placeholder="you@example.com"
-            className="w-full px-4 py-3 rounded-[14px] text-sm font-semibold outline-none transition-all"
-            style={{
-              background: "var(--card-2)",
-              border: "1.5px solid var(--line-2)",
-              color: "var(--ink)",
-            }}
+            className="rounded-[14px] py-3 px-4 h-auto font-semibold"
+            style={{ background: "var(--card-2)", border: "1.5px solid var(--line-2)" }}
             {...register("email")}
           />
           {errors.email && (
@@ -92,33 +86,29 @@ export function LoginForm() {
         </div>
 
         <div>
-          <label
-            className="block text-xs font-bold mb-2"
-            style={{ color: "var(--ink-2)" }}
-          >
+          <Label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
             Password
-          </label>
+          </Label>
           <div className="relative">
-            <input
+            <Input
               type={showPw ? "text" : "password"}
               autoComplete="current-password"
               placeholder="••••••••"
-              className="w-full px-4 py-3 pr-12 rounded-[14px] text-sm font-semibold outline-none transition-all"
-              style={{
-                background: "var(--card-2)",
-                border: "1.5px solid var(--line-2)",
-                color: "var(--ink)",
-              }}
+              className="rounded-[14px] py-3 px-4 pr-12 h-auto font-semibold"
+              style={{ background: "var(--card-2)", border: "1.5px solid var(--line-2)" }}
               {...register("password")}
             />
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               onClick={() => setShowPw((v) => !v)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 p-1"
+              aria-label={showPw ? "Hide password" : "Show password"}
+              className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8"
               style={{ color: "var(--ink-3)" }}
             >
               {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
-            </button>
+            </Button>
           </div>
           {errors.password && (
             <p className="mt-1 text-xs font-semibold" style={{ color: "var(--red)" }}>
@@ -137,14 +127,14 @@ export function LoginForm() {
           </Link>
         </div>
 
-        <button
+        <Button
           type="submit"
           disabled={loading}
-          className="w-full py-4 rounded-[15px] font-bold text-base mt-1 transition-all disabled:opacity-60"
+          className="w-full h-auto py-4 rounded-[15px] font-bold text-base mt-1"
           style={{ background: "var(--fab)", color: "var(--fab-ink)" }}
         >
           {loading ? "Signing in…" : "Sign in"}
-        </button>
+        </Button>
       </form>
 
       <p className="text-center mt-6 text-sm font-semibold" style={{ color: "var(--ink-2)" }}>
@@ -153,6 +143,6 @@ export function LoginForm() {
           Sign up
         </Link>
       </p>
-    </div>
+    </Card>
   );
 }
