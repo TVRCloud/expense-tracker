@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import connectDB from "@/lib/mongodb";
 import User from "@/models/User";
 import { requireAuth } from "@/lib/auth-guard";
+import { escapeRegExp } from "@/lib/regex";
 import logger from "@/lib/logger";
 
 export async function GET(req: NextRequest) {
@@ -16,9 +17,10 @@ export async function GET(req: NextRequest) {
 
     const query: Record<string, unknown> = {};
     if (search) {
+      const pattern = escapeRegExp(search);
       query.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
+        { name: { $regex: pattern, $options: "i" } },
+        { email: { $regex: pattern, $options: "i" } },
       ];
     }
 

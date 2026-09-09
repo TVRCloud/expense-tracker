@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import connectDB from "@/lib/mongodb";
 import User from "@/models/User";
+import Session from "@/models/Session";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
@@ -46,6 +47,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     }
 
     await connectDB();
+    const before = await User.findById(id).select("role isActive").lean<{ role: string; isActive: boolean } | null>();
+    if (!before) return NextResponse.json({ error: "User not found" }, { status: 404 });
+
     const updated = await User.findByIdAndUpdate(
       id,
       { $set: parsed.data },
@@ -53,6 +57,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     ).select("-password -passwordResetToken -passwordResetExpires").lean();
 
     if (!updated) return NextResponse.json({ error: "User not found" }, { status: 404 });
+
+    // Privilege/status just changed — kill every existing session for this
+    // user so a stale JWT can't keep using the old role or a deactivated
+    // account. A pure `name` edit shouldn't force a re-login, so only do
+    // this when role/isActive actually changed.
+    const roleChanged = parsed.data.role !== undefined && parsed.data.role !== before.role;
+    const activeChanged = parsed.data.isActive !== undefined && parsed.data.isActive !== before.isActive;
+    if (roleChanged || activeChanged) {
+      await Session.updateMany({ user: id, isActive: true }, { $set: { isActive: false } });
+    }
+
     logger.info({ adminId: user.id, targetId: id, changes: parsed.data }, "Admin updated user");
     return NextResponse.json({ data: updated });
   } catch (err) {

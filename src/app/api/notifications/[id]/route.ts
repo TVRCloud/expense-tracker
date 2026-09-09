@@ -3,6 +3,9 @@ import connectDB from "@/lib/mongodb";
 import Notification from "@/models/Notification";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
+import { z } from "zod";
+
+const schema = z.object({ isRead: z.boolean().optional() });
 
 type Params = Promise<{ id: string }>;
 
@@ -12,12 +15,16 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     if (errorResponse) return errorResponse;
 
     const { id } = await params;
-    const body = await req.json() as { isRead?: boolean };
+    const body = await req.json();
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Validation failed", details: parsed.error.flatten() }, { status: 400 });
+    }
 
     await connectDB();
     const notification = await Notification.findOneAndUpdate(
       { _id: id, user: user.id },
-      { $set: { isRead: body.isRead ?? true } },
+      { $set: { isRead: parsed.data.isRead ?? true } },
       { new: true }
     ).lean();
 
