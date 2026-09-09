@@ -2,69 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import connectDB from "@/lib/mongodb";
 import Account from "@/models/Account";
 import CreditStatement from "@/models/CreditStatement";
-import Transaction from "@/models/Transaction";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { getCurrentCycle, getPastCycles, computeMinPayment, getDueDateForStatementClose } from "@/lib/credit-card";
+import { computeCycleBalancesForRanges } from "@/lib/credit-balance";
 import { checkCreditDueNotifications } from "@/lib/credit-notifications";
 import { type ICreditMeta } from "@/types/models";
 import { Types } from "mongoose";
 import { appendLedgerBlock } from "@/lib/ledger";
 
 type Params = Promise<{ accountId: string }>;
-
-async function computeStatementBalance(userId: string, accountId: string, periodStart: Date, periodEnd: Date): Promise<number> {
-  const accountObjectId = new Types.ObjectId(accountId);
-  const result = await Transaction.aggregate([
-    {
-      $match: {
-        user: new Types.ObjectId(userId),
-        isDeleted: { $ne: true },
-        $or: [
-          { account: accountObjectId },
-          { transferTo: accountObjectId },
-        ],
-        date: { $gte: periodStart, $lte: periodEnd },
-      },
-    },
-    {
-      $group: {
-        _id: null,
-        total: {
-          $sum: {
-            $switch: {
-              branches: [
-                {
-                  case: {
-                    $and: [
-                      { $eq: ["$type", "transfer"] },
-                      { $eq: ["$account", accountObjectId] },
-                    ],
-                  },
-                  then: "$amount",
-                },
-                { case: { $eq: ["$type", "income"] }, then: { $multiply: [-1, "$amount"] } },
-                {
-                  case: {
-                    $and: [
-                      { $eq: ["$type", "transfer"] },
-                      { $eq: ["$transferTo", accountObjectId] },
-                    ],
-                  },
-                  then: 0,
-                },
-                { case: { $eq: ["$type", "expense"] }, then: "$amount" },
-              ],
-              default: 0,
-            },
-          },
-        },
-      },
-    },
-  ]);
-
-  return Math.max(0, result[0]?.total ?? 0);
-}
 
 export async function GET(req: NextRequest, { params }: { params: Params }) {
   try {
@@ -107,7 +54,6 @@ export async function GET(req: NextRequest, { params }: { params: Params }) {
 
     // Current open cycle (no DB record)
     const current = getCurrentCycle(config);
-    const currentBalance = await computeStatementBalance(user.id, accountId, current.periodStart, current.periodEnd);
 
     // Past 12 closed cycles
     const pastCycles = getPastCycles(config, 12);
@@ -150,45 +96,46 @@ export async function GET(req: NextRequest, { params }: { params: Params }) {
       .sort({ periodStart: -1 })
       .lean();
 
-    // Enrich with computed balance
-    const enriched = await Promise.all(
-      statements.map(async (s) => {
-        const statementBalance = await computeStatementBalance(
-          user.id,
-          accountId,
-          new Date(s.periodStart),
-          new Date(s.periodEnd)
-        );
-        const paidAmount = s.paidAmount ?? 0;
-        const remainingDue = Math.max(0, statementBalance - paidAmount);
-        const minPayment = computeMinPayment(remainingDue, config.minPaymentPct);
-        const dueDate = getDueDateForStatementClose(config.paymentDueDay, new Date(s.periodEnd));
-        const isPayable = remainingDue > 0;
+    // Enrich with computed balance — one batched query covering the current
+    // open cycle plus every statement's period, instead of one aggregate
+    // per statement.
+    const ranges = [
+      { periodStart: current.periodStart, periodEnd: current.periodEnd },
+      ...statements.map((s) => ({ periodStart: new Date(s.periodStart), periodEnd: new Date(s.periodEnd) })),
+    ];
+    const [currentBalance, ...statementBalances] = await computeCycleBalancesForRanges(user.id, accountId, ranges);
 
-        // Auto-update status if stale
-        let status = s.status as string;
-        if (remainingDue === 0) {
-          status = "paid";
-        } else {
-          const now = new Date();
-          if (dueDate < now) status = "overdue";
-          else if (new Date(s.periodEnd) < now) status = "closed";
-        }
+    const enriched = statements.map((s, i) => {
+      const statementBalance = statementBalances[i]!;
+      const paidAmount = s.paidAmount ?? 0;
+      const remainingDue = Math.max(0, statementBalance - paidAmount);
+      const minPayment = computeMinPayment(remainingDue, config.minPaymentPct);
+      const dueDate = getDueDateForStatementClose(config.paymentDueDay, new Date(s.periodEnd));
+      const isPayable = remainingDue > 0;
 
-        return {
-          ...s,
-          dueDate,
-          balance: statementBalance,
-          statementBalance,
-          paidAmount,
-          remainingDue,
-          isPayable,
-          isPaid: remainingDue === 0,
-          minPayment,
-          status,
-        };
-      })
-    );
+      // Auto-update status if stale
+      let status = s.status as string;
+      if (remainingDue === 0) {
+        status = "paid";
+      } else {
+        const now = new Date();
+        if (dueDate < now) status = "overdue";
+        else if (new Date(s.periodEnd) < now) status = "closed";
+      }
+
+      return {
+        ...s,
+        dueDate,
+        balance: statementBalance,
+        statementBalance,
+        paidAmount,
+        remainingDue,
+        isPayable,
+        isPaid: remainingDue === 0,
+        minPayment,
+        status,
+      };
+    });
 
     // Hide empty cycles — no transactions and never paid
     const filtered = enriched.filter(s => s.statementBalance > 0 || s.paidAmount > 0);

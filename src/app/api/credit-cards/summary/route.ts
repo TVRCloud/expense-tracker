@@ -1,19 +1,29 @@
 import { NextResponse } from "next/server";
 import connectDB from "@/lib/mongodb";
 import Account from "@/models/Account";
-import CreditStatement from "@/models/CreditStatement";
-import Transaction from "@/models/Transaction";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
-import { getCurrentCycle, getPastCycles, computeUtilization, getDueDateStatus } from "@/lib/credit-card";
+import { computeUtilization, getDueDateStatus } from "@/lib/credit-card";
+import { getCardCycleBalances } from "@/lib/credit-balance";
 import { checkCreditDueNotifications } from "@/lib/credit-notifications";
 import { type ICreditMeta } from "@/types/models";
-import { Types } from "mongoose";
+import { redis } from "@/lib/redis";
+
+function cacheKey(userId: string) {
+  return `credit-summary:${userId}`;
+}
 
 export async function GET() {
   try {
     const { user, errorResponse } = await requireAuth();
     if (errorResponse) return errorResponse;
+
+    try {
+      const cached = await redis?.get(cacheKey(user.id));
+      if (cached) return NextResponse.json({ data: JSON.parse(cached) });
+    } catch {
+      // Redis unavailable — continue without cache
+    }
 
     await connectDB();
 
@@ -72,121 +82,22 @@ export async function GET() {
           minPaymentPct: meta.minPaymentPct ?? 2,
         };
 
-        const cycle = getCurrentCycle(config);
-
-        // Fire-and-forget notification checks (non-blocking)
-        void checkCreditDueNotifications(user.id, String(card._id), card.name, meta as ICreditMeta);
-
-        // Compute unbilled open-cycle usage. Statement payment transfers do not reduce this.
-        const cardObjectId = new Types.ObjectId(String(card._id));
-        const result = await Transaction.aggregate([
-          {
-            $match: {
-              user: new Types.ObjectId(user.id),
-              isDeleted: { $ne: true },
-              $or: [
-                { account: cardObjectId },
-                { transferTo: cardObjectId },
-              ],
-              date: { $gte: cycle.periodStart, $lte: cycle.periodEnd },
-            },
-          },
-          {
-            $group: {
-              _id: null,
-              balance: {
-                $sum: {
-                  $switch: {
-                    branches: [
-                      {
-                        case: {
-                          $and: [
-                            { $eq: ["$type", "transfer"] },
-                            { $eq: ["$account", cardObjectId] },
-                          ],
-                        },
-                        then: "$amount",
-                      },
-                      { case: { $eq: ["$type", "income"] }, then: { $multiply: [-1, "$amount"] } },
-                      {
-                        case: {
-                          $and: [
-                            { $eq: ["$type", "transfer"] },
-                            { $eq: ["$transferTo", cardObjectId] },
-                          ],
-                        },
-                        then: 0,
-                      },
-                      { case: { $eq: ["$type", "expense"] }, then: "$amount" },
-                    ],
-                    default: 0,
-                  },
-                },
-              },
-            },
-          },
-        ]);
-
-        const unbilledUsage = Math.max(0, result[0]?.balance ?? 0);
-        const statementRecords = await CreditStatement.find({
-          account: cardObjectId,
-          user: user.id,
-          isDeleted: { $ne: true },
-        }).lean();
-        const payableStatements = await Promise.all(
-          getPastCycles(config, 12).map(async (pastCycle) => {
-            const [statementResult] = await Transaction.aggregate([
-              {
-                $match: {
-                  user: new Types.ObjectId(user.id),
-                  isDeleted: { $ne: true },
-                  $or: [{ account: cardObjectId }, { transferTo: cardObjectId }],
-                  date: { $gte: pastCycle.periodStart, $lte: pastCycle.periodEnd },
-                },
-              },
-              {
-                $group: {
-                  _id: null,
-                  balance: {
-                    $sum: {
-                      $switch: {
-                        branches: [
-                          {
-                            case: {
-                              $and: [
-                                { $eq: ["$type", "transfer"] },
-                                { $eq: ["$account", cardObjectId] },
-                              ],
-                            },
-                            then: "$amount",
-                          },
-                          { case: { $eq: ["$type", "income"] }, then: { $multiply: [-1, "$amount"] } },
-                          {
-                            case: {
-                              $and: [
-                                { $eq: ["$type", "transfer"] },
-                                { $eq: ["$transferTo", cardObjectId] },
-                              ],
-                            },
-                            then: 0,
-                          },
-                          { case: { $eq: ["$type", "expense"] }, then: "$amount" },
-                        ],
-                        default: 0,
-                      },
-                    },
-                  },
-                },
-              },
-            ]);
-            const statementBalance = Math.max(0, statementResult?.balance ?? 0);
-            const record = statementRecords.find((item) =>
-              new Date(item.periodStart).getTime() === pastCycle.periodStart.getTime()
-            );
-            const remainingDue = Math.max(0, statementBalance - (record?.paidAmount ?? 0));
-            return { ...pastCycle, remainingDue };
-          })
+        const { currentCycle: cycle, unbilledUsage, pastCycles: payableStatements } = await getCardCycleBalances(
+          user.id,
+          String(card._id),
+          config
         );
+
+        // Fire-and-forget notification check (non-blocking) — reuses the
+        // balances just computed above instead of redoing the same queries.
+        void checkCreditDueNotifications(
+          user.id,
+          String(card._id),
+          card.name,
+          meta as ICreditMeta,
+          { currentCycle: cycle, unbilledUsage, pastCycles: payableStatements }
+        );
+
         const unpaidStatements = payableStatements
           .filter((statement) => statement.remainingDue > 0)
           .sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
@@ -221,16 +132,27 @@ export async function GET() {
     const totalAvailableCredit = Math.max(0, totalCreditLimit - totalCreditExposure);
     const totalDebt = totalCreditExposure;
 
-    return NextResponse.json({
-      data: {
-        totalDebt,
-        totalPayableStatementDue,
-        totalUnbilledUsage,
-        totalCreditExposure,
-        totalAvailableCredit,
-        cards: cardSummaries,
-      },
-    });
+    const data = {
+      totalDebt,
+      totalPayableStatementDue,
+      totalUnbilledUsage,
+      totalCreditExposure,
+      totalAvailableCredit,
+      cards: cardSummaries,
+    };
+
+    try {
+      // Short TTL rather than invalidate-on-write — same convention as
+      // stats-service.ts. This data changes with every transaction, so a
+      // long-lived cache would need writes updated in many places; 60s
+      // keeps it fresh enough while still cutting the query load way down
+      // on repeated dashboard loads.
+      await redis?.setex(cacheKey(user.id), 60, JSON.stringify(data));
+    } catch {
+      // Redis unavailable — response still returned below
+    }
+
+    return NextResponse.json({ data });
   } catch (err) {
     logger.error({ err }, "GET /api/credit-cards/summary failed");
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

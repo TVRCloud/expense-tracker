@@ -1,10 +1,8 @@
 import Notification from "@/models/Notification";
-import CreditStatement from "@/models/CreditStatement";
-import Transaction from "@/models/Transaction";
-import { getCurrentCycle, getPastCycles, getDueDateStatus } from "@/lib/credit-card";
+import { getDueDateStatus } from "@/lib/credit-card";
+import { getCardCycleBalances, type CardCycleBalances } from "@/lib/credit-balance";
 import { type ICreditMeta } from "@/types/models";
 import logger from "@/lib/logger";
-import { Types } from "mongoose";
 import { sendPushToUser } from "@/lib/push";
 
 const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -29,60 +27,18 @@ async function createNotif(userId: string, type: string, title: string, body: st
   }
 }
 
-async function computeStatementBalance(userId: string, accountId: string, periodStart: Date, periodEnd: Date) {
-  const accountObjectId = new Types.ObjectId(accountId);
-  const [result] = await Transaction.aggregate([
-    {
-      $match: {
-        user: new Types.ObjectId(userId),
-        isDeleted: { $ne: true },
-        $or: [{ account: accountObjectId }, { transferTo: accountObjectId }],
-        date: { $gte: periodStart, $lte: periodEnd },
-      },
-    },
-    {
-      $group: {
-        _id: null,
-        balance: {
-          $sum: {
-            $switch: {
-              branches: [
-                {
-                  case: {
-                    $and: [
-                      { $eq: ["$type", "transfer"] },
-                      { $eq: ["$account", accountObjectId] },
-                    ],
-                  },
-                  then: "$amount",
-                },
-                { case: { $eq: ["$type", "income"] }, then: { $multiply: [-1, "$amount"] } },
-                {
-                  case: {
-                    $and: [
-                      { $eq: ["$type", "transfer"] },
-                      { $eq: ["$transferTo", accountObjectId] },
-                    ],
-                  },
-                  then: 0,
-                },
-                { case: { $eq: ["$type", "expense"] }, then: "$amount" },
-              ],
-              default: 0,
-            },
-          },
-        },
-      },
-    },
-  ]);
-  return Math.max(0, result?.balance ?? 0);
-}
-
 export async function checkCreditDueNotifications(
   userId: string,
   accountId: string,
   accountName: string,
-  creditMeta: ICreditMeta
+  creditMeta: ICreditMeta,
+  // Optional already-computed balances (see getCardCycleBalances) — pass
+  // this when the caller just computed the same numbers itself (e.g. the
+  // dashboard's credit-cards summary route) to avoid redoing the same
+  // queries twice per request. Omitted by the cron path
+  // (reminder-scheduler.ts), which has nothing to share it with and
+  // computes standalone as before.
+  precomputed?: CardCycleBalances
 ): Promise<void> {
   try {
     if (!creditMeta.billingCycleDay || !creditMeta.paymentDueDay) return;
@@ -94,7 +50,7 @@ export async function checkCreditDueNotifications(
       minPaymentPct: creditMeta.minPaymentPct ?? 2,
     };
 
-    const cycle = getCurrentCycle(config);
+    const { currentCycle: cycle, pastCycles } = precomputed ?? (await getCardCycleBalances(userId, accountId, config));
 
     // Days until cycle closes
     const now = new Date();
@@ -114,37 +70,20 @@ export async function checkCreditDueNotifications(
       );
     }
 
-    const statementRecords = await CreditStatement.find({
-      account: new Types.ObjectId(accountId),
-      user: userId,
-      isDeleted: { $ne: true },
-    }).lean();
-    const payableStatements = await Promise.all(
-      getPastCycles(config, 12).map(async (pastCycle) => {
-        const balance = await computeStatementBalance(userId, accountId, pastCycle.periodStart, pastCycle.periodEnd);
-        const record = statementRecords.find((item) =>
-          new Date(item.periodStart).getTime() === pastCycle.periodStart.getTime()
-        );
-        return {
-          cycle: pastCycle,
-          remainingDue: Math.max(0, balance - (record?.paidAmount ?? 0)),
-        };
-      })
-    );
-    const nextPayable = payableStatements
+    const nextPayable = pastCycles
       .filter((statement) => statement.remainingDue > 0)
-      .sort((a, b) => a.cycle.dueDate.getTime() - b.cycle.dueDate.getTime())[0];
+      .sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime())[0];
 
     if (nextPayable) {
-      const { daysUntilDue, isOverdue } = getDueDateStatus(nextPayable.cycle.dueDate);
-      const payableKey = nextPayable.cycle.periodEnd.toISOString().slice(0, 7);
+      const { daysUntilDue, isOverdue } = getDueDateStatus(nextPayable.dueDate);
+      const payableKey = nextPayable.periodEnd.toISOString().slice(0, 7);
 
       if (!isOverdue && daysUntilDue >= 0 && daysUntilDue <= 7) {
         await createNotif(
           userId,
           "credit_due",
           `${accountName} payment due in ${daysUntilDue}d`,
-          `Payment for your ${accountName} ${nextPayable.cycle.label} statement is due in ${daysUntilDue} day${daysUntilDue === 1 ? "" : "s"}.`,
+          `Payment for your ${accountName} ${nextPayable.label} statement is due in ${daysUntilDue} day${daysUntilDue === 1 ? "" : "s"}.`,
           { accountId, dedupKey: `due-${accountId}-${payableKey}` }
         );
       }
@@ -154,7 +93,7 @@ export async function checkCreditDueNotifications(
           userId,
           "credit_overdue",
           `${accountName} payment overdue`,
-          `Payment for your ${accountName} ${nextPayable.cycle.label} statement is overdue.`,
+          `Payment for your ${accountName} ${nextPayable.label} statement is overdue.`,
           { accountId, dedupKey: `overdue-${accountId}-${payableKey}` }
         );
       }
