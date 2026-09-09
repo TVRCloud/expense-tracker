@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import connectDB from "@/lib/mongodb";
 import User from "@/models/User";
+import Session from "@/models/Session";
 import { requireAuth } from "@/lib/auth-guard";
 import { hashPassword, verifyPassword } from "@/utils/password";
 import logger from "@/lib/logger";
@@ -35,6 +36,13 @@ export async function PATCH(req: NextRequest) {
     const hashed = await hashPassword(parsed.data.newPassword);
     await User.findByIdAndUpdate(user.id, { $set: { password: hashed } });
     await revokeAllLogUnlocks(user.id);
+    // Log out every other session (e.g. a stolen cookie) now that the
+    // password has changed — but keep the caller's own current session
+    // alive, since they just proved they know the new password.
+    await Session.updateMany(
+      { user: user.id, isActive: true, jti: { $ne: user.jti ?? null } },
+      { $set: { isActive: false } }
+    );
 
     logger.info({ userId: user.id }, "Password changed");
     return NextResponse.json({ data: { message: "Password updated" } });

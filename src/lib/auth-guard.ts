@@ -18,7 +18,7 @@ type GuardResult =
 export async function requireAuth(allowedRoles?: string[]): Promise<GuardResult> {
   const session = await getServerSession(authOptions);
 
-  if (!session?.user?.id) {
+  if (!session?.user?.id || session.error === "SessionTerminated") {
     return {
       errorResponse: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
     };
