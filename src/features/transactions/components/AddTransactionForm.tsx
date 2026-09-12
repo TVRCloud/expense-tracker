@@ -18,10 +18,10 @@ import { DatePickerField } from "@/components/shared/DatePickerField";
 import { BillingCycleHint } from "@/features/credit-cards/components/BillingCycleHint";
 import { Card } from "@/components/_ui/Card";
 import { Button } from "@/components/_ui/Button";
-import { Input } from "@/components/ui/input";
+import { Input } from "@/components/_ui/Input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
+import { Switch } from "@/components/_ui/Switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 // Each option maps to an API {frequency, interval} pair

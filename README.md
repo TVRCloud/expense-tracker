@@ -7,6 +7,7 @@ A production-quality full-stack expense tracker built with Next.js 15 App Router
 - **Expense tracking** — income, expenses, transfers with category tags
 - **Budgets** — monthly category budgets with configurable alert thresholds
 - **Loans** — track money given/received with repayment history
+- **Bank SMS auto-import** — forward a bank/NBFC SMS (card spend, EMI payment) via n8n and it's parsed into a transaction or loan repayment automatically, with a review queue for anything it can't confidently match
 - **Goals** — savings goals with progress tracking
 - **Analytics** — 6-month bar chart overview, category breakdown, monthly history
 - **Real-time** — live balance and notification updates via Socket.io

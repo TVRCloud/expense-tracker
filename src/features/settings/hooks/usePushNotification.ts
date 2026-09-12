@@ -109,8 +109,8 @@ export function usePushNotification() {
 
       const reg = await withTimeout(
         navigator.serviceWorker.ready,
-        10000,
-        "Service worker isn't ready. Try reloading the page."
+        25000,
+        "Service worker still installing. Try again in a moment."
       );
       const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
       if (!vapidKey) throw new Error("VAPID public key not configured");
@@ -159,8 +159,8 @@ export function usePushNotification() {
     try {
       const reg = await withTimeout(
         navigator.serviceWorker.ready,
-        10000,
-        "Service worker isn't ready. Try reloading the page."
+        25000,
+        "Service worker still installing. Try again in a moment."
       );
       const sub = await reg.pushManager.getSubscription();
       if (sub) {

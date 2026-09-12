@@ -13,6 +13,7 @@ the loan and a progress bar tracks how much is left.
 **Key elements**
 - Direction tabs: All / Lent / Borrowed
 - Add-loan form: direction, counterparty, principal, interest rate, start/due date, account, note
+- Optional "Loan account number" field (Borrowed loans only) — the lender's own loan/account number from an EMI SMS (e.g. "loan account 010021753351"). When set, `POST /api/integrations/sms` auto-matches incoming EMI-payment SMS to this loan and logs a repayment automatically — see [docs/n8n-integration.md](../n8n-integration.md).
 - Repayment entries (income/expense icons), progress bar toward full repayment
 - Edit/delete (confirm dialog)
 

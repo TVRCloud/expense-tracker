@@ -7,6 +7,7 @@ import { z } from "zod";
 
 const schema = z.object({
   theme: z.enum(["light", "dark", "system"]).optional(),
+  glassIntensity: z.enum(["subtle", "full"]).optional(),
   language: z.string().optional(),
   pushNotifications: z.boolean().optional(),
   emailNotifications: z.boolean().optional(),

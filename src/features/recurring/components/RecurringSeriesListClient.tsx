@@ -6,6 +6,7 @@ import { format } from "date-fns";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useRecurringSeriesList, type RecurringSeries } from "../hooks/useRecurringSeries";
 import { TRANSACTION_CATEGORY_ICONS } from "@/lib/icons";
+import { canonicalizeCategory } from "@/lib/category-colors";
 import { Skeleton } from "@/components/ui/skeleton";
 
 function freqLabel(frequency: string, interval: number): string {
@@ -15,7 +16,7 @@ function freqLabel(frequency: string, interval: number): string {
 
 function SeriesCard({ series }: { series: RecurringSeries }) {
   const { formatCurrency } = useCurrency();
-  const CategoryIcon = TRANSACTION_CATEGORY_ICONS[series.category] ?? RotateCcw;
+  const CategoryIcon = TRANSACTION_CATEGORY_ICONS[canonicalizeCategory(series.category)] ?? RotateCcw;
   const amountColor = series.type === "income" ? "var(--green)" : "var(--red)";
   const remaining = series.remainingCount;
 

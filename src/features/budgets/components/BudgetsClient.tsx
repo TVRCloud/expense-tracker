@@ -10,10 +10,10 @@ import { Card } from "@/components/_ui/Card";
 import { Button } from "@/components/_ui/Button";
 import { Progress } from "@/components/_ui/Progress";
 import { useConfirm } from "@/components/_ui/ConfirmDialog";
-import { Input } from "@/components/ui/input";
+import { Input } from "@/components/_ui/Input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
+import { Switch } from "@/components/_ui/Switch";
 import { budgetCreateSchema } from "@/features/budgets/schemas/budget.schema";
 import { toast } from "sonner";
 

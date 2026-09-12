@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
+import { GlassIntensityProvider } from "@/components/providers/GlassIntensityProvider";
 import { SessionProvider } from "@/components/providers/SessionProvider";
 import { QueryProvider } from "@/components/providers/QueryProvider";
 import { SocketProvider } from "@/components/providers/SocketProvider";
@@ -47,12 +48,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body suppressHydrationWarning>
         <SessionProvider>
           <ThemeProvider>
-            <QueryProvider>
-              <SocketProvider>
-                {children}
-              </SocketProvider>
-              <Toaster position="top-right" richColors closeButton />
-            </QueryProvider>
+            <GlassIntensityProvider>
+              <QueryProvider>
+                <SocketProvider>
+                  {children}
+                </SocketProvider>
+                <Toaster position="top-right" richColors closeButton />
+              </QueryProvider>
+            </GlassIntensityProvider>
           </ThemeProvider>
         </SessionProvider>
       </body>

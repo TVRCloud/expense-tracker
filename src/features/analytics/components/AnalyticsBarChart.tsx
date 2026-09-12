@@ -51,8 +51,24 @@ export function AnalyticsBarChart({ data }: Props) {
           cursor={{ fill: "var(--line)", radius: 6 }}
           content={<ChartTooltipContent formatter={(value, name) => `${chartConfig[name as keyof typeof chartConfig]?.label ?? name}: ${formatCurrencyCompact(Number(value))}`} />}
         />
-        <Bar dataKey="income" fill="var(--color-income)" radius={[6, 6, 0, 0]} maxBarSize={32} />
-        <Bar dataKey="expense" fill="var(--color-expense)" radius={[6, 6, 0, 0]} maxBarSize={32} />
+        <Bar
+          dataKey="income"
+          fill="var(--color-income)"
+          radius={[6, 6, 0, 0]}
+          maxBarSize={32}
+          isAnimationActive
+          animationDuration={700}
+          animationEasing="ease-out"
+        />
+        <Bar
+          dataKey="expense"
+          fill="var(--color-expense)"
+          radius={[6, 6, 0, 0]}
+          maxBarSize={32}
+          isAnimationActive
+          animationDuration={700}
+          animationEasing="ease-out"
+        />
       </BarChart>
     </ChartContainer>
   );

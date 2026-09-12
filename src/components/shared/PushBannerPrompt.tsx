@@ -79,7 +79,7 @@ export function PushBannerPrompt() {
           className="text-xs rounded-(--r-sm) px-3 py-2"
           style={{ background: "color-mix(in srgb, var(--red) 10%, transparent)", color: "var(--red)" }}
         >
-          {error} — permission was granted, but the subscription itself failed. Try again, or check{" "}
+          <span className="font-semibold">{error}</span> Try again, or check{" "}
           <span className="font-semibold">Settings → Notifications</span> for details.
         </div>
       )}

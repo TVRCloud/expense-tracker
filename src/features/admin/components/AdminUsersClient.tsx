@@ -18,7 +18,7 @@ import { Skeleton } from "@/components/_ui/Skeleton";
 import { Card } from "@/components/_ui/Card";
 import { Button } from "@/components/_ui/Button";
 import { Avatar } from "@/components/_ui/Avatar";
-import { Input } from "@/components/ui/input";
+import { Input } from "@/components/_ui/Input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {

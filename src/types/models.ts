@@ -28,6 +28,7 @@ export interface ICreditMeta {
 
 export interface UserPreferences {
   theme: "light" | "dark" | "system";
+  glassIntensity: "subtle" | "full";
   language: string;
   pushNotifications: boolean;
   emailNotifications: boolean;
@@ -157,6 +158,7 @@ export interface ILoan {
   isSettled: boolean;
   settledAt?: string;
   account?: string | IAccount;
+  externalLoanId?: string;
   isDeleted?: boolean;
   deletedAt?: string;
   deletedBy?: string;

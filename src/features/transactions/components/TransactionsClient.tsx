@@ -11,7 +11,7 @@ import { type ITransaction } from "@/types/models";
 import { Skeleton } from "@/components/_ui/Skeleton";
 import { Card } from "@/components/_ui/Card";
 import { Button } from "@/components/_ui/Button";
-import { Input } from "@/components/ui/input";
+import { Input } from "@/components/_ui/Input";
 import { getTransactionActivityDate } from "../utils/activity-date";
 
 const TYPE_CHIPS = [

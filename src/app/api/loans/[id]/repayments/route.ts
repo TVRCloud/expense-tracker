@@ -2,13 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import connectDB from "@/lib/mongodb";
 import Loan from "@/models/Loan";
 import Repayment from "@/models/Repayment";
-import Account from "@/models/Account";
-import Transaction from "@/models/Transaction";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
-import { redis } from "@/lib/redis";
-import { appendLedgerBlock } from "@/lib/ledger";
+import { createRepayment, LoanServiceError } from "@/lib/loan-service";
 
 const createSchema = z.object({
   amount: z.number().int().positive(),
@@ -18,14 +15,6 @@ const createSchema = z.object({
 });
 
 type Params = Promise<{ id: string }>;
-
-async function invalidateStatsCache(userId: string, date: Date) {
-  try {
-    await redis?.del(`stats:v2:${userId}:${date.getFullYear()}:${date.getMonth() + 1}`);
-  } catch {
-    // Redis unavailable
-  }
-}
 
 export async function GET(_req: NextRequest, { params }: { params: Params }) {
   try {
@@ -60,110 +49,21 @@ export async function POST(req: NextRequest, { params }: { params: Params }) {
       return NextResponse.json({ error: "Validation failed", details: parsed.error.flatten() }, { status: 400 });
     }
 
-    await connectDB();
-    const loan = await Loan.findOne({ _id: id, user: user.id, isDeleted: { $ne: true } }).lean<{
-      _id: { toString(): string };
-      remainingAmount: number;
-      direction: "given" | "received";
-      counterparty: string;
-      currency?: string;
-    }>();
-    if (!loan) return NextResponse.json({ error: "Loan not found" }, { status: 404 });
-
-    if (parsed.data.accountId) {
-      const account = await Account.findOne({ _id: parsed.data.accountId, user: user.id, isArchived: false });
-      if (!account) return NextResponse.json({ error: "Account not found" }, { status: 404 });
-    }
-
-    const newRemaining = Math.max(0, loan.remainingAmount - parsed.data.amount);
-    const isSettled = newRemaining === 0;
-    const repaymentDate = new Date(parsed.data.date);
-
-    const updatedLoan = await Loan.findByIdAndUpdate(
-      id,
-      {
-        $set: {
-          remainingAmount: newRemaining,
-          isSettled,
-          ...(isSettled ? { settledAt: repaymentDate } : { settledAt: undefined }),
-        },
-      },
-      { new: true }
-    );
-    await appendLedgerBlock({
+    const { repayment, isSettled } = await createRepayment({
+      loanId: id,
       userId: user.id,
-      scope: "loan",
-      entityId: id,
-      action: "update",
-      before: loan,
-      after: updatedLoan,
       actor: user,
-    });
-
-    const repayment = await Repayment.create({
-      loan: id,
-      user: user.id,
       amount: parsed.data.amount,
-      date: repaymentDate,
+      date: new Date(parsed.data.date),
       note: parsed.data.note,
-      account: parsed.data.accountId,
+      accountId: parsed.data.accountId,
     });
-    await appendLedgerBlock({
-      userId: user.id,
-      scope: "repayment",
-      entityId: repayment._id.toString(),
-      action: "create",
-      after: repayment,
-      actor: user,
-    });
-
-    if (parsed.data.accountId) {
-      const type = loan.direction === "given" ? "income" : "expense";
-      const balanceDelta = type === "income" ? parsed.data.amount : -parsed.data.amount;
-      const accountBefore = await Account.findOne({ _id: parsed.data.accountId, user: user.id });
-      const accountAfter = await Account.findOneAndUpdate(
-        { _id: parsed.data.accountId, user: user.id },
-        { $inc: { balance: balanceDelta } },
-        { new: true }
-      );
-      if (accountBefore && accountAfter) {
-        await appendLedgerBlock({
-          userId: user.id,
-          scope: "account",
-          entityId: accountAfter._id.toString(),
-          action: "update",
-          before: accountBefore,
-          after: accountAfter,
-          actor: user,
-        });
-      }
-      const transaction = await Transaction.create({
-        user: user.id,
-        account: parsed.data.accountId,
-        type,
-        amount: parsed.data.amount,
-        currency: loan.currency ?? "INR",
-        category: "loan_repayment",
-        description: loan.direction === "given"
-          ? `Repayment from ${loan.counterparty}`
-          : `Repayment to ${loan.counterparty}`,
-        note: parsed.data.note,
-        date: repaymentDate,
-        tags: [`loan:${id}`, `repayment:${repayment._id.toString()}`],
-      });
-      await appendLedgerBlock({
-        userId: user.id,
-        scope: "transaction",
-        entityId: transaction._id.toString(),
-        action: "create",
-        after: transaction,
-        actor: user,
-      });
-      await invalidateStatsCache(user.id, repaymentDate);
-    }
 
     return NextResponse.json({ data: repayment, isSettled }, { status: 201 });
   } catch (err) {
+    if (err instanceof LoanServiceError) {
+      return NextResponse.json({ error: err.message }, { status: err.code === "NOT_FOUND" ? 404 : 404 });
+    }
     logger.error({ err }, "POST /api/loans/[id]/repayments failed");
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }

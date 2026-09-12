@@ -9,6 +9,10 @@ interface Props {
   className?: string;
   height?: number;
   "aria-label"?: string;
+  /** Adds a moving stripe overlay (`.progress-striped` in globals.css) —
+   * use for bars representing an actively-changing/in-progress value
+   * (budget spend still accruing, loan payoff in flight). */
+  striped?: boolean;
 }
 
 /** Progress bar with a per-instance fill color — the stock component's
@@ -18,7 +22,15 @@ interface Props {
  * per-instance color without touching the CLI-vendored component (this app
  * needs green/amber/red bars driven by data — budget usage, credit
  * utilization, loan payoff, goal progress). */
-export function Progress({ value, color, trackColor, className, height = 8, "aria-label": ariaLabel }: Props) {
+export function Progress({
+  value,
+  color,
+  trackColor,
+  className,
+  height = 8,
+  "aria-label": ariaLabel,
+  striped = false,
+}: Props) {
   const style = {
     height,
     "--primary": color ?? "var(--violet)",
@@ -28,7 +40,7 @@ export function Progress({ value, color, trackColor, className, height = 8, "ari
   return (
     <ProgressRoot
       value={Math.min(100, Math.max(0, value))}
-      className={cn(className)}
+      className={cn(striped && "progress-striped", className)}
       style={style}
       aria-label={ariaLabel}
     />
