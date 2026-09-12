@@ -11,7 +11,7 @@ import { Eye, EyeOff, Wallet } from "lucide-react";
 import { loginSchema, type LoginInput } from "@/features/auth/schemas/auth.schema";
 import { Card } from "@/components/_ui/Card";
 import { Button } from "@/components/_ui/Button";
-import { Input } from "@/components/ui/input";
+import { Input } from "@/components/_ui/Input";
 import { Label } from "@/components/ui/label";
 
 export function LoginForm() {

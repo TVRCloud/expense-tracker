@@ -73,6 +73,9 @@ export function NetWorthTrendChart({ data, currentTotalBalance }: Props) {
           stroke="var(--color-netWorth)"
           strokeWidth={2}
           fill="url(#netWorthFill)"
+          isAnimationActive
+          animationDuration={800}
+          animationEasing="ease-out"
         />
       </AreaChart>
     </ChartContainer>

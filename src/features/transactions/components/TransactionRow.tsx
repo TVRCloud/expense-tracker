@@ -6,7 +6,7 @@ import { type ITransaction } from "@/types/models";
 import { format } from "date-fns";
 import { getTransactionActivityDate, isPaidRecurringTransaction } from "../utils/activity-date";
 import { TRANSACTION_CATEGORY_ICONS } from "@/lib/icons";
-import { getCategoryColor as getAvatarColor } from "@/lib/category-colors";
+import { getCategoryColor as getAvatarColor, canonicalizeCategory } from "@/lib/category-colors";
 
 interface Props {
   transaction: ITransaction;
@@ -19,7 +19,7 @@ export function TransactionRow({ transaction }: Props) {
   const isTransfer = transaction.type === "transfer";
   const sign = isTransfer ? "" : isIncome ? "+" : "-";
   const color = isTransfer ? "var(--violet)" : isIncome ? "var(--green)" : "var(--red)";
-  const catKey = transaction.category.toLowerCase();
+  const catKey = canonicalizeCategory(transaction.category);
   const CategoryIcon = isTransfer ? ArrowLeftRight : (TRANSACTION_CATEGORY_ICONS[catKey] ?? TRANSACTION_CATEGORY_ICONS.other);
   const avatarHex = isTransfer ? null : getAvatarColor(transaction.category);
   const activityDate = getTransactionActivityDate(transaction);

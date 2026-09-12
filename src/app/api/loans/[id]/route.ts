@@ -16,6 +16,7 @@ const updateSchema = z.object({
   isSettled: z.boolean().optional(),
   description: z.string().optional(),
   interestRate: z.number().min(0).max(100).optional(),
+  externalLoanId: z.string().max(64).optional(),
 });
 
 type Params = Promise<{ id: string }>;

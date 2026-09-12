@@ -17,7 +17,7 @@ import { Card } from "@/components/_ui/Card";
 import { Button } from "@/components/_ui/Button";
 import { useConfirm } from "@/components/_ui/ConfirmDialog";
 import { Progress } from "@/components/_ui/Progress";
-import { Input } from "@/components/ui/input";
+import { Input } from "@/components/_ui/Input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -57,7 +57,7 @@ function CreditRow({
   const available = Math.max(0, limit - displayBalance);
 
   return (
-    <Card as={Link} href={`/accounts/${String(acc._id)}`} elevation="raised" radius="md" className="flex items-center gap-4 px-4 py-4 group">
+    <Card as={Link} href={`/accounts/${String(acc._id)}`} elevation="raised" radius="md" interactive className="flex items-center gap-4 px-4 py-4 group">
       <div className="w-12 h-12 rounded-[14px] grid place-items-center flex-none" style={{ background: "var(--card-2)" }}>
         <CreditCard size={22} style={{ color: "var(--ink-2)" }} />
       </div>
@@ -129,7 +129,7 @@ function CreditRow({
 function RegularRow({ acc, onArchive, formatCurrency }: { acc: IAccount; onArchive: () => void; formatCurrency: (n: number) => string }) {
   const TypeIcon = ACCOUNT_TYPE_ICONS[acc.type] ?? CreditCard;
   return (
-    <Card as={Link} href={`/accounts/${String(acc._id)}`} elevation="raised" radius="md" className="flex items-center gap-4 px-4 py-4 group">
+    <Card as={Link} href={`/accounts/${String(acc._id)}`} elevation="raised" radius="md" interactive className="flex items-center gap-4 px-4 py-4 group">
       <div className="w-12 h-12 rounded-[14px] grid place-items-center flex-none" style={{ background: "var(--card-2)" }}>
         <TypeIcon size={22} style={{ color: "var(--ink-2)" }} />
       </div>

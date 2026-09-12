@@ -21,7 +21,7 @@ import {
   KeyRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Switch } from "@/components/ui/switch";
+import { Switch } from "@/components/_ui/Switch";
 import { Button } from "@/components/_ui/Button";
 import { Avatar } from "@/components/_ui/Avatar";
 

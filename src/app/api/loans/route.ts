@@ -19,6 +19,7 @@ const createSchema = z.object({
   dueDate: z.string().optional(),
   note: z.string().optional(),
   accountId: z.string().optional(),
+  externalLoanId: z.string().max(64).optional(),
 });
 
 async function invalidateStatsCache(userId: string, date: Date) {

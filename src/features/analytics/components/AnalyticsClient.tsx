@@ -234,6 +234,13 @@ export function AnalyticsClient() {
             ? [0, 1, 2].map((i) => <Skeleton key={i} className="h-16 rounded-(--r-md)" />)
             : (data ?? []).slice().reverse().map((h, revIdx) => {
                 const idx = (data?.length ?? 0) - 1 - revIdx;
+                // Skip months with no income/expense activity at all — kept
+                // showing up as a flat row of five ₹0.00 months before any
+                // real data existed. Always keep the current month, even
+                // when it's zero too, so the list is never empty.
+                const hasActivity = (h.stats?.income ?? 0) > 0 || (h.stats?.expense ?? 0) > 0;
+                const isCurrentMonth = idx === (data?.length ?? 0) - 1;
+                if (!hasActivity && !isCurrentMonth) return null;
                 return (
                   <HistoryRow
                     key={`${h.year}-${h.month}`}

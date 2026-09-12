@@ -8,18 +8,19 @@ import { signOut } from "next-auth/react";
 import { ArrowLeft, Bell, BellOff, Check, HelpCircle, Lock, Monitor, Moon, Shield, Smartphone, Sun, User } from "lucide-react";
 import { toast } from "sonner";
 import apiClient from "@/lib/api-client";
-import { Switch } from "@/components/ui/switch";
+import { Switch } from "@/components/_ui/Switch";
 import { Skeleton } from "@/components/_ui/Skeleton";
 import { Card } from "@/components/_ui/Card";
 import { Button } from "@/components/_ui/Button";
 import { useConfirm } from "@/components/_ui/ConfirmDialog";
-import { Input } from "@/components/ui/input";
+import { Input } from "@/components/_ui/Input";
 import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { CURRENCY_ICON } from "@/lib/icons";
 import { useChangePassword, useProfile, useUpdatePreferences, useUpdateProfile } from "@/features/settings/hooks/useProfile";
+import { useGlassIntensity } from "@/components/providers/GlassIntensityProvider";
 import { usePushNotification, type PushStatus } from "@/features/settings/hooks/usePushNotification";
 import { parseDeviceLabel } from "@/lib/device-label";
 
@@ -381,36 +382,90 @@ export function NotificationSettingsPage() {
 
 export function AppearanceFields() {
   const { theme, setTheme } = useTheme();
+  const { glassIntensity, setGlassIntensity } = useGlassIntensity();
+  const { data: profile } = useProfile();
   const updatePreferences = useUpdatePreferences();
+
+  // next-themes (and our glass-intensity provider) only know the real value
+  // after mount — SSR always renders the "no preference yet" state. Gating
+  // `active` on `mounted` avoids a hydration mismatch on first paint (the
+  // buttons briefly render unpressed, then correct instantly on mount).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const options = [
     { value: "light", label: "Light", Icon: Sun },
     { value: "dark", label: "Dark", Icon: Moon },
     { value: "system", label: "System", Icon: Monitor },
   ] as const;
 
+  const glassOptions = [
+    { value: "subtle", label: "Subtle" },
+    { value: "full", label: "Full" },
+  ] as const;
+
+  // Reconcile locally-applied glass intensity with the DB-synced value once
+  // the profile loads, same as theme is reconciled from next-themes + DB.
+  useEffect(() => {
+    const dbValue = profile?.preferences?.glassIntensity;
+    if (dbValue && dbValue !== glassIntensity) {
+      setGlassIntensity(dbValue);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile]);
+
   return (
-    <div className="grid grid-cols-3 gap-2">
-      {options.map(({ value, label, Icon }) => {
-        const active = theme === value;
-        return (
-          <Button
-            key={value}
-            type="button"
-            variant="ghost"
-            aria-pressed={active}
-            onClick={() => {
-              setTheme(value);
-              updatePreferences.mutate({ theme: value });
-            }}
-            className="h-auto flex-col gap-2 rounded-(--r-md) py-5 font-bold"
-            style={active ? { background: "var(--violet)", color: "var(--violet-fg)" } : { background: "var(--card-2)", color: "var(--ink-2)" }}
-          >
-            <Icon size={20} />
-            {label}
-          </Button>
-        );
-      })}
-    </div>
+    <>
+      <div className="grid grid-cols-3 gap-2">
+        {options.map(({ value, label, Icon }) => {
+          const active = mounted && theme === value;
+          return (
+            <Button
+              key={value}
+              type="button"
+              variant="ghost"
+              aria-pressed={active}
+              onClick={() => {
+                setTheme(value);
+                updatePreferences.mutate({ theme: value });
+              }}
+              className="h-auto flex-col gap-2 rounded-(--r-md) py-5 font-bold"
+              style={active ? { background: "var(--violet)", color: "var(--violet-fg)" } : { background: "var(--card-2)", color: "var(--ink-2)" }}
+            >
+              <Icon size={20} />
+              {label}
+            </Button>
+          );
+        })}
+      </div>
+
+      <div>
+        <div className="text-[11px] font-bold uppercase tracking-wider mb-3" style={{ color: "var(--ink-3)" }}>
+          Glass intensity
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {glassOptions.map(({ value, label }) => {
+            const active = mounted && glassIntensity === value;
+            return (
+              <Button
+                key={value}
+                type="button"
+                variant="ghost"
+                aria-pressed={active}
+                onClick={() => {
+                  setGlassIntensity(value);
+                  updatePreferences.mutate({ glassIntensity: value });
+                }}
+                className="h-auto flex-col gap-2 rounded-(--r-md) py-5 font-bold"
+                style={active ? { background: "var(--violet)", color: "var(--violet-fg)" } : { background: "var(--card-2)", color: "var(--ink-2)" }}
+              >
+                {label}
+              </Button>
+            );
+          })}
+        </div>
+      </div>
+    </>
   );
 }
 

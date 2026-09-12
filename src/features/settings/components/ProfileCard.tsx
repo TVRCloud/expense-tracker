@@ -7,7 +7,7 @@ import { type IUser } from "@/types/models";
 import { Card } from "@/components/_ui/Card";
 import { Button } from "@/components/_ui/Button";
 import { Avatar } from "@/components/_ui/Avatar";
-import { Input } from "@/components/ui/input";
+import { Input } from "@/components/_ui/Input";
 
 interface Props {
   user: IUser;

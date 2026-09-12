@@ -12,6 +12,7 @@ const UserSchema = new Schema(
     deletedAt: { type: Date },
     preferences: {
       theme: { type: String, enum: ["light", "dark", "system"], default: "system" },
+      glassIntensity: { type: String, enum: ["subtle", "full"], default: "subtle" },
       language: { type: String, default: "en" },
       pushNotifications: { type: Boolean, default: true },
       emailNotifications: { type: Boolean, default: true },

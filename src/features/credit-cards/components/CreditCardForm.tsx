@@ -3,7 +3,7 @@
 import { type ICreditMeta, type CardNetwork } from "@/types/models";
 import { dollarsToCents } from "@/lib/utils";
 import { FieldHint } from "@/components/_ui/FieldHint";
-import { Input } from "@/components/ui/input";
+import { Input } from "@/components/_ui/Input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const NETWORKS: { value: CardNetwork; label: string }[] = [

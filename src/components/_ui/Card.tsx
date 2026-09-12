@@ -28,6 +28,10 @@ interface CardOwnProps {
   surface?: keyof typeof SURFACE;
   elevation?: keyof typeof ELEVATION;
   radius?: keyof typeof RADIUS;
+  /** Adds the shared hover-lift micro-interaction (`.card-interactive` in
+   * globals.css) — opt in for clickable rows/cards (transactions, accounts,
+   * goals, loans list items), leave off for static layout cards. */
+  interactive?: boolean;
 }
 
 type CardProps<T extends ElementType> = CardOwnProps & {
@@ -41,13 +45,20 @@ export function Card<T extends ElementType = "div">({
   surface = "card",
   elevation = "resting",
   radius = "lg",
+  interactive = false,
   className,
   ...props
 }: CardProps<T>) {
   const Comp = as || "div";
   return (
     <Comp
-      className={cn(SURFACE[surface], RADIUS[radius], ELEVATION[elevation], className)}
+      className={cn(
+        SURFACE[surface],
+        RADIUS[radius],
+        ELEVATION[elevation],
+        interactive && "card-interactive",
+        className
+      )}
       {...props}
     />
   );

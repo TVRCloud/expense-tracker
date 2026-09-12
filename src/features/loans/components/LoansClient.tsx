@@ -13,9 +13,9 @@ import { Card } from "@/components/_ui/Card";
 import { Button } from "@/components/_ui/Button";
 import { Progress } from "@/components/_ui/Progress";
 import { useConfirm } from "@/components/_ui/ConfirmDialog";
-import { Input } from "@/components/ui/input";
+import { Input } from "@/components/_ui/Input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
+import { Switch } from "@/components/_ui/Switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DatePickerField } from "@/components/shared/DatePickerField";
@@ -47,6 +47,7 @@ interface LoanForm {
   dueDate?: Date;
   accountId: string;
   note: string;
+  externalLoanId: string;
 }
 
 function createEmptyLoanForm(): LoanForm {
@@ -59,6 +60,7 @@ function createEmptyLoanForm(): LoanForm {
     dueDate: undefined,
     accountId: "",
     note: "",
+    externalLoanId: "",
   };
 }
 
@@ -71,6 +73,7 @@ interface LoanEditForm {
   isSettled: boolean;
   description: string;
   interestRate: string;
+  externalLoanId: string;
 }
 
 function LoanEditPanel({ loan, onDone }: { loan: ILoan; onDone: () => void }) {
@@ -81,6 +84,7 @@ function LoanEditPanel({ loan, onDone }: { loan: ILoan; onDone: () => void }) {
     isSettled: loan.isSettled,
     description: loan.description ?? "",
     interestRate: loan.interestRate ? String(loan.interestRate) : "",
+    externalLoanId: loan.externalLoanId ?? "",
   });
 
   const updateLoan = useMutation({
@@ -90,6 +94,7 @@ function LoanEditPanel({ loan, onDone }: { loan: ILoan; onDone: () => void }) {
       isSettled: form.isSettled,
       description: form.description || undefined,
       interestRate: form.interestRate ? parseFloat(form.interestRate) : undefined,
+      externalLoanId: form.externalLoanId || undefined,
     }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["loans"] });
@@ -119,6 +124,17 @@ function LoanEditPanel({ loan, onDone }: { loan: ILoan; onDone: () => void }) {
         <div className="flex flex-col gap-1.5 md:col-span-2">
           <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Note</Label>
           <Input value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="Optional note" />
+        </div>
+        <div className="flex flex-col gap-1.5 md:col-span-2">
+          <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Loan account number (optional)</Label>
+          <Input
+            value={form.externalLoanId}
+            onChange={(e) => setForm((f) => ({ ...f, externalLoanId: e.target.value }))}
+            placeholder="e.g. 010021753351"
+          />
+          <p className="text-xs" style={{ color: "var(--ink-3)" }}>
+            Matches EMI payment SMS/messages to this loan automatically.
+          </p>
         </div>
         <Label className="flex items-center justify-between gap-3 cursor-pointer md:col-span-2">
           <span className="text-sm font-bold" style={{ color: "var(--ink)" }}>Mark as settled</span>
@@ -261,6 +277,7 @@ export function LoansClient() {
       interestRate: form.interestRate ? parseFloat(form.interestRate) : undefined,
       dueDate: form.dueDate?.toISOString(),
       accountId: form.accountId || undefined,
+      externalLoanId: form.externalLoanId || undefined,
     }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["loans"] });
@@ -495,6 +512,19 @@ export function LoansClient() {
                 placeholder="0"
               />
             </div>
+            {form.direction === "received" && (
+              <div className="flex flex-col gap-1.5 col-span-2">
+                <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Loan account number (optional)</Label>
+                <Input
+                  value={form.externalLoanId}
+                  onChange={e => setForm(f => ({ ...f, externalLoanId: e.target.value }))}
+                  placeholder="e.g. 010021753351"
+                />
+                <p className="text-xs" style={{ color: "var(--ink-3)" }}>
+                  Matches EMI payment SMS/messages to this loan automatically.
+                </p>
+              </div>
+            )}
             <div className="flex flex-col gap-1.5 col-span-2">
               <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Account impact</Label>
               <Select value={form.accountId} onValueChange={(value) => setForm(f => ({ ...f, accountId: value }))}>

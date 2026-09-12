@@ -34,7 +34,18 @@ export function CategoryDonutChart({ byCategory, total }: Props) {
       <ChartContainer config={chartConfig} className="h-40 w-40 flex-none">
         <PieChart>
           <ChartTooltip content={<ChartTooltipContent hideLabel formatter={(value) => formatCurrency(Number(value))} />} />
-          <Pie data={chartData} dataKey="total" nameKey="category" innerRadius={45} outerRadius={70} strokeWidth={2} stroke="var(--card)">
+          <Pie
+            data={chartData}
+            dataKey="total"
+            nameKey="category"
+            innerRadius={45}
+            outerRadius={70}
+            strokeWidth={2}
+            stroke="var(--card)"
+            isAnimationActive
+            animationDuration={700}
+            animationEasing="ease-out"
+          >
             {chartData.map((entry) => (
               <Cell key={entry.category} fill={entry.fill} />
             ))}

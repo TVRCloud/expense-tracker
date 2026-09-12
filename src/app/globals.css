@@ -42,9 +42,9 @@
   --violet-2: #3f3f46;
   --violet-ink: #18181b;
   --violet-fg: #ffffff; /* readable text/icon color ON a --violet fill (adapts per theme, unlike hardcoded white) */
-  --green: #16a34a;
+  --green: #15803d; /* 5.02:1 on white — #16a34a was 3.30:1, failed WCAG for bold body/figure text */
   --green-bar: #86efac;
-  --red: #ef4444;
+  --red: #dc2626; /* 4.83:1 on white — #ef4444 was 3.76:1, failed WCAG for bold body/figure text */
 
   /* gold — used ONLY on hero touchpoints (balance card, FAB, 3px active bar) */
   --amber: #d4a843;
@@ -266,6 +266,205 @@ body {
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-shadow) !important;
 }
+
+/* ============================================================
+   Interaction layer — press/hover/focus micro-animations.
+   All color values route through existing tokens (--violet, --card,
+   --shadow*) so light/dark adapt automatically; no separate .dark
+   rules needed. Motion is skipped entirely for reduced-motion users.
+   ============================================================ */
+
+/* Wrapped in Tailwind's own `utilities` layer: Tailwind v4 puts every
+   utility class (`absolute`, `-translate-y-1/2`, etc.) inside
+   `@layer utilities`, and unlayered CSS always wins over layered CSS
+   regardless of selector specificity or source order — so without this,
+   these rules would silently beat any Tailwind utility on the same
+   element no matter what. Inside the same layer, normal specificity
+   rules apply again, which is why the :where() wrapping below still
+   matters (0 specificity so a real Tailwind utility class still wins
+   ties). */
+@layer utilities {
+@media (prefers-reduced-motion: no-preference) {
+  /* Buttons — press scale-down + a bounded diagonal shine sweep on
+     hover, confined to the button's own surface (not page bg).
+     `position`/`overflow` go through :where() (specificity 0) so any
+     Tailwind utility on the call site still wins — otherwise this would
+     override `absolute` on overlay buttons like the password eye toggle.
+     Press feedback uses the standalone `scale` property, not `transform`,
+     so it composes with utilities like `-translate-y-1/2` instead of
+     replacing them. */
+  :where(.btn-interactive) {
+    position: relative;
+    overflow: hidden;
+  }
+  .btn-interactive {
+    transition: scale 120ms ease, box-shadow 120ms ease;
+  }
+  .btn-interactive::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      115deg,
+      transparent 40%,
+      color-mix(in srgb, var(--violet-fg) 22%, transparent) 50%,
+      transparent 60%
+    );
+    background-size: 250% 100%;
+    background-position: 150% 0;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 150ms ease;
+  }
+  .btn-interactive:hover::after {
+    opacity: 1;
+    animation: btn-shine 900ms ease;
+  }
+  .btn-interactive:active {
+    scale: 0.97;
+  }
+
+  /* Ripple — one expanding/fading circle spawned at pointerdown,
+     positioned via --ripple-x/--ripple-y set inline by the wrapper. */
+  .btn-ripple {
+    position: absolute;
+    border-radius: 9999px;
+    background: color-mix(in srgb, var(--violet-fg) 35%, transparent);
+    left: var(--ripple-x, 50%);
+    top: var(--ripple-y, 50%);
+    width: 8px;
+    height: 8px;
+    transform: translate(-50%, -50%) scale(0);
+    pointer-events: none;
+    animation: ripple 550ms ease-out forwards;
+  }
+
+  /* Cards — hover lift, shadow-tier bump, subtle border brighten.
+     Opt-in via `interactive` prop on _ui/Card.tsx (clickable rows). */
+  .card-interactive {
+    transition: translate 150ms ease, scale 150ms ease, box-shadow 150ms ease, border-color 150ms ease;
+  }
+  .card-interactive:hover,
+  .card-interactive:focus-visible {
+    translate: 0 -2px;
+    box-shadow: var(--shadow-lg);
+  }
+  .card-interactive:active {
+    translate: 0 -1px;
+    scale: 0.99;
+  }
+
+  /* Inputs — animated focus glow ring. */
+  .focus-glow {
+    transition: box-shadow 150ms ease, border-color 150ms ease;
+  }
+  .focus-glow:focus,
+  .focus-glow:focus-visible {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--violet) 22%, transparent);
+    animation: pulse-glow 1600ms ease-in-out infinite;
+  }
+  .focus-glow[aria-invalid="true"] {
+    animation: input-shake 350ms ease;
+  }
+
+  /* Progress bars — moving stripe while a value is actively changing. */
+  .progress-striped > [data-state] {
+    background-image: linear-gradient(
+      115deg,
+      transparent 25%,
+      color-mix(in srgb, var(--violet-fg) 25%, transparent) 50%,
+      transparent 75%
+    );
+    background-size: 200% 100%;
+    animation: stripe-move 1400ms linear infinite;
+  }
+
+  /* Spinner — dual-ring loader for button/page-loading states. */
+  .spinner-dual {
+    animation: spin-dual 700ms linear infinite;
+  }
+}
+} /* @layer utilities */
+
+@keyframes btn-shine {
+  from { background-position: 150% 0; }
+  to { background-position: -50% 0; }
+}
+@keyframes ripple {
+  to {
+    width: 320px;
+    height: 320px;
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--violet) 22%, transparent); }
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--violet) 12%, transparent); }
+}
+@keyframes input-shake {
+  0%, 100% { translate: 0; }
+  25% { translate: -4px 0; }
+  75% { translate: 4px 0; }
+}
+@keyframes stripe-move {
+  from { background-position: 0 0; }
+  to { background-position: -200% 0; }
+}
+@keyframes spin-dual {
+  to { transform: rotate(360deg); }
+}
+
+/* ============================================================
+   Liquid glass — "full" intensity tier, opt-in via data-glass="full"
+   on <html> (settings → Appearance). Default/"subtle" tier is the
+   interaction rules above; this layer adds a specular top-highlight
+   and pointer-tracked shine, still scoped to card/button surfaces.
+   ============================================================ */
+
+:root[data-glass="full"] {
+  --glass-shine-x: 50%;
+  --glass-shine-y: 0%;
+}
+
+/* Same @layer utilities reasoning as the interaction block above. */
+@layer utilities {
+@media (prefers-reduced-motion: no-preference) {
+  /* `position` via :where() (specificity 0) so call-site utilities such as
+     `absolute`/`fixed` still win; only the shadow is asserted here. */
+  :where(:root[data-glass="full"] .glass-surface),
+  :where(:root[data-glass="full"] .card-interactive) {
+    position: relative;
+  }
+  :root[data-glass="full"] .glass-surface,
+  :root[data-glass="full"] .card-interactive {
+    box-shadow: var(--glass-shadow), inset 0 1px 0 color-mix(in srgb, var(--violet-fg) 55%, transparent);
+  }
+  :root[data-glass="full"] .glass-surface::before,
+  :root[data-glass="full"] .card-interactive::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: radial-gradient(
+      220px circle at var(--glass-shine-x, 50%) var(--glass-shine-y, 0%),
+      color-mix(in srgb, var(--violet-fg) 16%, transparent),
+      transparent 70%
+    );
+    opacity: 0;
+    transition: opacity 200ms ease;
+    pointer-events: none;
+  }
+  :root[data-glass="full"] .glass-surface:hover::before,
+  :root[data-glass="full"] .card-interactive:hover::before {
+    opacity: 1;
+  }
+  :root[data-glass="full"] .btn-interactive:active {
+    scale: 0.94;
+    transition: scale 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+}
+} /* @layer utilities */
 
 /* Custom scrollbar */
 ::-webkit-scrollbar {
