@@ -95,6 +95,18 @@ All monetary amounts are in **cents** (integers).
 | GET | `/api/loans/:id/repayments` | List repayments |
 | POST | `/api/loans/:id/repayments` | Add repayment (updates remainingAmount) |
 
+## SMS Review
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/sms-review?status=pending` | List queued bank SMS that couldn't be auto-matched (default `status=pending`) |
+| DELETE | `/api/sms-review/:id` | Discard a queued item (no transaction/repayment created) |
+
+Populated by `POST /api/integrations/sms` (see
+[docs/n8n-integration.md](n8n-integration.md)) when a message parses but
+matches no account/loan, or doesn't parse at all. No apply-from-queue
+endpoint yet — discard only.
+
 ## Goals
 
 | Method | Path | Description |

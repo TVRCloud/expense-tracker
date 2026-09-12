@@ -45,6 +45,7 @@ Authorization: Bearer <YOUR_N8N_API_KEY>
 | GET | `/api/integrations/budgets` | List budgets with spend |
 | GET | `/api/integrations/goals` | List goals |
 | GET | `/api/integrations/summary` | Snapshot: accounts, monthly stats, budgets |
+| POST | `/api/integrations/sms` | Parse a bank/NBFC SMS and create a transaction or loan repayment |
 
 ### GET /api/integrations/transactions
 
@@ -110,6 +111,89 @@ Success response (`201`):
   }
 }
 ```
+
+### POST /api/integrations/sms
+
+Accepts raw bank/NBFC transactional SMS text and turns it into real data —
+without n8n (or a future phone app that auto-fetches SMS) ever needing to know
+the message format. All parsing, matching, and creation happens server-side
+in this one endpoint; the caller just forwards the text.
+
+```json
+{
+  "text": "Happy Shopping! INR 896.15 spent on your IDFC FIRST Bank Credit Card ending XX1832 at PAYPAL *XINDAWNCOMP on 24 JUN 2026 at 04:04 PM Avbl Limit: INR 10309.48",
+  "receivedAt": "2026-06-24T16:04:00.000Z"
+}
+```
+
+`receivedAt` is optional (ISO 8601) — when omitted, "now" is used. `text` is
+required, max 2000 characters.
+
+Two message formats are currently recognized (see
+[`src/lib/integrations/sms-parser.ts`](../src/lib/integrations/sms-parser.ts)):
+
+- **Credit card spend** — `"INR <amount> spent on your <bank> Credit Card
+  ending XX<last4> at <merchant> on <date>"`. Matched to the Account whose
+  `creditMeta.lastFourDigits` equals `<last4>`; on match, creates an expense
+  Transaction on that account.
+- **Loan EMI payment** — `"Rs.<amount>/- received towards <lender> loan
+  account <id> for <month year>"`. Matched to the Loan whose `externalLoanId`
+  equals `<id>` (set on the loan in the Loans page — see
+  [docs/pages/06-loans.md](pages/06-loans.md)); on match, creates a Repayment
+  and reduces the loan's `remainingAmount`.
+
+An unrecognized message, or one that parses but matches no account/loan, is
+**never** guessed into a transaction — it's stored in the `sms_review_items`
+collection (`status: "pending"`, TTL 30 days) and a `system` notification +
+push is sent to the user, so a person confirms or discards it instead of the
+API silently creating (or silently dropping) real financial data. Read the
+queue with `GET /api/sms-review` (browser session auth, not part of the
+`/api/integrations/*` surface); discard an item with `DELETE
+/api/sms-review/:id`. There is no auto-apply-from-queue endpoint yet.
+
+Idempotency works the same as `POST /api/integrations/transactions`, but the
+`Idempotency-Key` header is **optional** here: when omitted, the key defaults
+to a SHA-256 hash of the message text itself, so the same SMS forwarded twice
+(a common failure mode for SMS-forwarding tools) never creates a duplicate
+transaction/repayment, with no extra setup required on the caller's side.
+
+Success response — created (`201`):
+
+```json
+{ "success": true, "requestId": "…", "data": { "status": "created", "kind": "transaction", "id": "…" } }
+```
+
+or, for a matched loan repayment:
+
+```json
+{ "success": true, "requestId": "…", "data": { "status": "created", "kind": "repayment", "id": "…", "isSettled": false } }
+```
+
+Queued for review (`202`):
+
+```json
+{ "success": true, "requestId": "…", "data": { "status": "queued", "reviewItemId": "…" } }
+```
+
+curl example:
+
+```bash
+curl -X POST https://your-app.example.com/api/integrations/sms \
+  -H "Authorization: Bearer <YOUR_N8N_API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Payment Successful: Advance EMI of Rs.3,980/- received towards Navi Finserv loan account 010021753351 for October 2026."}'
+```
+
+SMS is one more input channel into the same "Expense Assistant" n8n workflow
+that already handles WhatsApp/Telegram — not a separate workflow. It adds a
+`SMS Webhook` trigger → `Normalize SMS Payload` → `Submit SMS to API` →
+`Respond With SMS Result` branch alongside the existing WhatsApp/Telegram
+triggers, reusing the workflow's existing "Header Auth account" credential
+for both the inbound webhook's shared secret and the outbound
+`Authorization: Bearer <N8N_API_KEY>` call to this endpoint — no new
+credential to create. The `Submit SMS to API` node's credential still needs
+attaching by hand in the n8n UI (same one-time step every HTTP Request node
+in this workflow needs).
 
 ## Idempotency
 

@@ -100,6 +100,9 @@ Unique index: `{user, category, year, month}`
 | `dueDate` | Date | |
 | `isSettled` | Boolean | |
 | `note` | String | |
+| `externalLoanId` | String | lender's own loan account number, e.g. from an EMI SMS; optional, used to auto-match incoming SMS to this loan |
+
+Sparse index: `{user, externalLoanId}`
 
 ## repayments
 
@@ -170,6 +173,26 @@ Short-lived TOTP unlocks tied to the active JWT session id and a tab-scoped devi
 | `deviceHash` | String | hash of tab-scoped unlock id |
 | `userAgentHash` | String | browser user-agent hash |
 | `expiresAt` | Date | TTL; logs relock after expiry |
+
+## sms_review_items
+
+Bank/NBFC SMS text that `POST /api/integrations/sms` (see
+[n8n-integration.md](n8n-integration.md)) couldn't safely turn into a
+Transaction/Repayment on its own.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | |
+| `rawText` | String | the original SMS text |
+| `receivedAt` | Date | when the message was received (caller-supplied or now) |
+| `parsedKind` | String | `credit_card_spend\|loan_emi_payment\|unknown` |
+| `parsedFields` | Mixed | whatever the parser extracted; shape varies with `parsedKind` |
+| `reason` | String | `unparsed\|no_matching_account\|no_matching_loan` |
+| `status` | String | `pending\|resolved\|discarded` |
+| `resolvedAt` | Date | |
+| `createdAt` | Date | TTL 30 days |
+
+Index: `{user, status, createdAt}`
 
 ## pushSubscriptions
 
