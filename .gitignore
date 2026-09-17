@@ -54,3 +54,4 @@ public/uploads/
 /.playwright-mcp
 /.agents
 skills-lock.json
+/.claude
