@@ -8,32 +8,47 @@ cannot bypass or duplicate that logic.
 
 ## Configuration
 
-Set in your environment (never commit real values):
+Global rate-limit tuning, set in your environment:
 
 ```
-N8N_API_KEY=<a long random secret, e.g. `openssl rand -hex 32`>
-N8N_USER_EMAIL=<the email of the app's single user account>
 N8N_RATE_LIMIT=30            # requests per window per route (default 30)
 N8N_RATE_WINDOW_MS=60000     # window length in ms (default 60000)
 N8N_IDEMPOTENCY_TTL_SECONDS=86400  # how long idempotency records live (default 24h)
 ```
+
+The API key itself is **not** an env var — it lives in the `api_keys` collection
+(`src/models/ApiKey.ts`), one row per caller (n8n, the mobile companion app, etc),
+so each can be revoked independently. Mint one with:
+
+```
+yarn api-keys create --label n8n --email <the app's user account email>
+```
+
+This prints the raw key once — store it in n8n's credential now, it can't be
+retrieved again later. `yarn api-keys list` shows existing keys (masked);
+`yarn api-keys revoke --id <apiKeyId>` disables one immediately.
+
+If you previously configured `N8N_API_KEY`/`N8N_USER_EMAIL`, those env vars are
+no longer read — mint a replacement key with the command above and update your
+n8n credential.
 
 ## Authentication
 
 Every request must include:
 
 ```
-Authorization: Bearer <YOUR_N8N_API_KEY>
+Authorization: Bearer <YOUR_API_KEY>
 ```
 
 - Missing or malformed header → `401`.
-- Wrong key → `401`.
+- Wrong or revoked key → `401`.
 - The key is never accepted via query string, cookie, or request body.
 - Failed attempts are rate-limited by client IP, separately from the normal
   per-route usage limit, to slow brute-force guessing.
-- On success, the request acts as the single user identified by
-  `N8N_USER_EMAIL`. There is no per-request user selection — this app is
-  single-user by design.
+- On success, the request acts as whichever user the key was minted for. This
+  app is still single-user in the sense that all its data belongs to one
+  account, but multiple independently-revocable keys (n8n, mobile, …) can now
+  act on that account's behalf, each with its own rate-limit quota.
 
 ## Endpoints
 
@@ -77,7 +92,7 @@ curl example:
 
 ```bash
 curl -X POST https://your-app.example.com/api/integrations/transactions \
-  -H "Authorization: Bearer <YOUR_N8N_API_KEY>" \
+  -H "Authorization: Bearer <YOUR_API_KEY>" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: whatsapp-message-12345" \
   -d '{
@@ -179,21 +194,39 @@ curl example:
 
 ```bash
 curl -X POST https://your-app.example.com/api/integrations/sms \
-  -H "Authorization: Bearer <YOUR_N8N_API_KEY>" \
+  -H "Authorization: Bearer <YOUR_API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"text": "Payment Successful: Advance EMI of Rs.3,980/- received towards Navi Finserv loan account 010021753351 for October 2026."}'
 ```
 
-SMS is one more input channel into the same "Expense Assistant" n8n workflow
-that already handles WhatsApp/Telegram — not a separate workflow. It adds a
-`SMS Webhook` trigger → `Normalize SMS Payload` → `Submit SMS to API` →
-`Respond With SMS Result` branch alongside the existing WhatsApp/Telegram
-triggers, reusing the workflow's existing "Header Auth account" credential
-for both the inbound webhook's shared secret and the outbound
-`Authorization: Bearer <N8N_API_KEY>` call to this endpoint — no new
-credential to create. The `Submit SMS to API` node's credential still needs
-attaching by hand in the n8n UI (same one-time step every HTTP Request node
-in this workflow needs).
+There is no dedicated webhook for this — SMS text is sent the same way as any
+other message, by forwarding/pasting the raw bank SMS into the WhatsApp or
+Telegram chat this app's "Expense Assistant" n8n workflow already listens on.
+Right after `Extract Message` (the node that normalizes both channels into
+one shape), an `Is Bank SMS?` check looks for either `"loan account"` or
+`"Credit Card ending"` in the message text:
+
+- **No match** — the message goes into the existing AI intent flow
+  (`Understand Message` → `Intent Router` → …) unchanged, exactly as before
+  this feature existed.
+- **Match** — it skips the AI entirely and goes straight to `Normalize SMS
+  Payload` → `Submit SMS to API` (this endpoint) → `Format SMS Reply`, then
+  joins the same `Merge` → `Route by Channel` → reply step every other intent
+  branch uses, so you get a WhatsApp/Telegram reply back either way: a ✅
+  confirmation, or a note that it was queued for review.
+
+Because the check is a plain substring match on two exact phrases from the
+two formats `sms-parser.ts` currently understands, a bank SMS with different
+wording won't be detected as SMS at all — it'll fall through to the AI intent
+flow instead (and most likely get misread as a normal expense message, or hit
+"unknown intent"). Add its trigger phrase to the `Is Bank SMS?` condition
+(and a new parser to `sms-parser.ts`) when a new bank/lender format shows up.
+
+The `Submit SMS to API` node's credential (reusing the workflow's existing
+"Header Auth account", `Authorization: Bearer <YOUR_API_KEY>`, minted via
+`yarn api-keys create --label n8n --email <...>`) needs attaching
+by hand in the n8n UI — the same one-time step every HTTP Request node in
+this workflow needs; it isn't set automatically.
 
 ## Idempotency
 
@@ -255,17 +288,22 @@ simply don't get a cache hit.
 ## Rate limits
 
 Each route allows `N8N_RATE_LIMIT` requests per `N8N_RATE_WINDOW_MS` window,
-per route, scoped to the single user. Authentication failures have a
-separate, fixed limit (10 per 10 minutes per source IP) that is not
-configurable, since it's a security control rather than a usage quota.
+per route, **scoped per API key** — n8n and the mobile app (or any other
+caller) each get their own quota even when acting on the same account.
+Authentication failures have a separate, fixed limit (10 per 10 minutes per
+source IP) that is not configurable, since it's a security control rather
+than a usage quota.
 
 ## Security notes
 
-- The API key is compared with a timing-safe comparison, never a plain string
-  equality check.
+- Keys are stored as a sha256 hash only (`api_keys` collection) — the raw
+  value is shown once at creation and is not recoverable afterwards. Losing
+  it means revoking it and minting a new one.
 - The key and the `Authorization` header value are never logged, in success
   or failure.
 - Errors never include stack traces, MongoDB error details, file paths, or
   environment variables.
 - Idempotency records store only the minimal response fields returned to the
   caller — never full account/transaction documents.
+- Each key is independently revocable (`yarn api-keys revoke --id ...`)
+  without affecting any other caller's key.
