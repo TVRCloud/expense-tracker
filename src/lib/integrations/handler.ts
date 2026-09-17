@@ -25,9 +25,9 @@ export function withIntegrationRoute<RouteCtx = unknown>(
     const auth = await verifyN8nAuth(req, requestId);
     if ("errorResponse" in auth) return auth.errorResponse;
 
-    const rateLimit = await checkRouteRateLimit(routeName, auth.user.id);
+    const rateLimit = await checkRouteRateLimit(routeName, auth.apiKeyId);
     if (!rateLimit.allowed) {
-      logger.warn({ requestId, route: routeName, userId: auth.user.id }, "n8n route rate limit exceeded");
+      logger.warn({ requestId, route: routeName, apiKeyId: auth.apiKeyId }, "integration route rate limit exceeded");
       return integrationError("RATE_LIMITED", "Rate limit exceeded", requestId, {
         retryAfterSeconds: rateLimit.retryAfterSeconds,
       });

@@ -62,8 +62,8 @@ export const config = {
   },
   get integrations() {
     return {
-      n8nApiKey: getEnv("N8N_API_KEY"),
-      n8nUserEmail: getEnv("N8N_USER_EMAIL"),
+      // Bearer keys themselves live in the api_keys collection (src/models/ApiKey.ts),
+      // minted via `yarn api-keys create --label <x> --email <y>` — not env vars.
       rateLimit: Number.parseInt(getEnv("N8N_RATE_LIMIT", "30"), 10),
       rateWindowMs: Number.parseInt(getEnv("N8N_RATE_WINDOW_MS", "60000"), 10),
       idempotencyTtlSeconds: Number.parseInt(getEnv("N8N_IDEMPOTENCY_TTL_SECONDS", "86400"), 10),

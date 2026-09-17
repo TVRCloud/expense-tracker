@@ -208,10 +208,11 @@ describe("verifyN8nAuth", () => {
   }
 
   beforeEach(async () => {
-    process.env.N8N_API_KEY = TEST_KEY;
-    process.env.N8N_USER_EMAIL = TEST_EMAIL;
     const { default: User } = await import("@/models/User");
-    await User.create({ name: "N8N User", email: TEST_EMAIL, password: "hash", isActive: true });
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "N8N User", email: TEST_EMAIL, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "test", keyHash: hashKey(TEST_KEY), lastFour: TEST_KEY.slice(-4) });
   });
 
   it("rejects a missing Authorization header", async () => {
@@ -346,12 +347,13 @@ describe("POST /api/integrations/transactions", () => {
   }
 
   beforeEach(async () => {
-    process.env.N8N_API_KEY = TEST_KEY;
-    process.env.N8N_USER_EMAIL = TEST_EMAIL;
     process.env.N8N_RATE_LIMIT = "1000";
     const { default: User } = await import("@/models/User");
     const { default: Account } = await import("@/models/Account");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
     const user = await User.create({ name: "N8N Route User", email: TEST_EMAIL, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "test", keyHash: hashKey(TEST_KEY), lastFour: TEST_KEY.slice(-4) });
     const account = await Account.create({
       user: user._id,
       name: "Wallet",

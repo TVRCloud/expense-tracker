@@ -4,10 +4,13 @@ import { config } from "@/lib/config";
 
 // Reuses the existing MongoDB-backed rate limiter (src/lib/security-rate-limit.ts)
 // instead of introducing a second mechanism. Two key namespaces:
-//  - n8n:route:{routeName}:{userId} — normal usage quota, env-configurable so
-//    it doesn't need code changes to loosen/tighten for real automation load.
-//  - n8n:auth-fail:{ip} — a tighter, fixed limit protecting the API key itself
-//    from brute-force guessing, checked before the key comparison runs.
+//  - n8n:route:{routeName}:{apiKeyId} — normal usage quota, per API key (not
+//    per user) so e.g. the mobile app and an n8n workflow on the same
+//    account each get their own quota instead of sharing one.
+//    env-configurable so it doesn't need code changes to loosen/tighten for
+//    real automation load.
+//  - n8n:auth-fail:{ip} — a tighter, fixed limit protecting API keys in
+//    general from brute-force guessing, checked before the DB lookup runs.
 
 function clientIp(req: NextRequest): string {
   const forwarded = req.headers.get("x-forwarded-for");
@@ -15,9 +18,9 @@ function clientIp(req: NextRequest): string {
   return "unknown";
 }
 
-export async function checkRouteRateLimit(routeName: string, userId: string) {
+export async function checkRouteRateLimit(routeName: string, apiKeyId: string) {
   return checkSecurityRateLimit({
-    key: `n8n:route:${routeName}:${userId}`,
+    key: `n8n:route:${routeName}:${apiKeyId}`,
     limit: config.integrations.rateLimit,
     windowMs: config.integrations.rateWindowMs,
   });

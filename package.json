@@ -14,7 +14,8 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,json}\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "api-keys": "tsx scripts/api-keys.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",
