@@ -33,4 +33,5 @@ export default withSentryConfig(withSerwist(nextConfig), {
   widenClientFileUpload: true,
   tunnelRoute: "/monitoring",
   silent: !process.env.CI,
+  telemetry: false,
 });
