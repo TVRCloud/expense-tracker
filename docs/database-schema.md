@@ -45,8 +45,11 @@ All monetary fields are stored as **integers (cents)** — divide by 100 for dis
 | `color` | String | hex |
 | `icon` | String | |
 | `isArchived` | Boolean | soft delete |
+| `deletedAt` / `deletedBy` | Date / ObjectId | set with `isArchived` |
+| `creditMeta` | Object | credit cards only: `creditLimit`, `billingCycleDay`, `paymentDueDay`, `apr`, `network`, `lastFourDigits`, `cardholderName`, `minPaymentPct` |
+| `smsLastFour` | [String] | 4-digit strings as shown in bank SMS (`A/c XX1234`), for matching captured messages |
 
-Indexes: `{user, isArchived}`, `{user, type}`
+Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`, `{user, creditMeta.lastFourDigits}`
 
 ## transactions
 
@@ -65,11 +68,18 @@ Indexes: `{user, isArchived}`, `{user, type}`
 | `tags` | [String] | |
 | `transferTo` | ObjectId | ref: Account, only for transfers |
 | `isRecurring` | Boolean | |
+| `recurringId`, `recurrence*`, `installmentIndex`, `installmentStatus`, `paidAt` | | recurring series fields |
+| `splitGroupId` | ObjectId | shared by split-purchase siblings |
+| `source` | String | `manual\|sms\|notification\|n8n\|recurring\|import`, default `manual` |
+| `sourceCapture` | ObjectId | ref: CapturedMessage, the message whose values are in use |
+| `captures` | [ObjectId] | every captured message for this payment |
+| `reviewStatus` | String | `unreviewed\|confirmed\|corrected\|voided`, null for manual rows |
+| `reviewedAt` / `reviewedBy` | Date / ObjectId | |
 | `isDeleted` | Boolean | soft delete |
 | `deletedAt` | Date | |
 | `deletedBy` | ObjectId | ref: User |
 
-Indexes: `{user, date}`, `{user, account}`, `{user, type}`, `{user, category}`, full-text on `{description, note}`
+Indexes: `{user, isDeleted, date}` plus `{user, isDeleted, <account\|transferTo\|type\|category\|splitGroupId\|reviewStatus>, date}`, recurring-series indexes, `{user, tags}`, full-text on `{description, note}`
 
 ## budgets
 
@@ -123,11 +133,13 @@ Sparse index: `{user, externalLoanId}`
 | `name` | String | |
 | `targetAmount` | Number | cents |
 | `savedAmount` | Number | cents |
+| `currency` | String | |
 | `targetDate` | Date | |
-| `linkedAccount` | ObjectId | ref: Account |
+| `category` | String | |
 | `icon` | String | |
-| `color` | String | |
-| `isCompleted` | Boolean | |
+| `roundUpEnabled` / `roundUpTo` | Boolean / Number | round expenses up into this goal |
+| `isCompleted` / `completedAt` | Boolean / Date | |
+| `isDeleted` / `deletedAt` / `deletedBy` | | soft delete |
 
 ## notifications
 
@@ -174,25 +186,87 @@ Short-lived TOTP unlocks tied to the active JWT session id and a tab-scoped devi
 | `userAgentHash` | String | browser user-agent hash |
 | `expiresAt` | Date | TTL; logs relock after expiry |
 
-## sms_review_items
+## captured_messages
 
-Bank/NBFC SMS text that `POST /api/integrations/sms` (see
-[n8n-integration.md](n8n-integration.md)) couldn't safely turn into a
-Transaction/Repayment on its own.
+Every bank message received from the phone (SMS / notification) or n8n. Nothing expires. Rules: [reconcile.md](reconcile.md). Replaces the old `sms_review_items` (30-day TTL); migrate with `yarn migrate:captures`.
 
 | Field | Type | Notes |
 |-------|------|-------|
 | `user` | ObjectId | |
-| `rawText` | String | the original SMS text |
-| `receivedAt` | Date | when the message was received (caller-supplied or now) |
-| `parsedKind` | String | `credit_card_spend\|loan_emi_payment\|unknown` |
-| `parsedFields` | Mixed | whatever the parser extracted; shape varies with `parsedKind` |
-| `reason` | String | `unparsed\|no_matching_account\|no_matching_loan` |
+| `channel` | String | `sms\|notification\|n8n` |
+| `apiKey` | ObjectId | ref: ApiKey, which caller sent it |
+| `sender` / `packageName` | String | DLT sender id, or the bank app |
+| `rawText` | `{iv, tag, ciphertext}` | AES-256-GCM with `CAPTURE_ENCRYPTION_KEY` |
+| `receivedAt` | Date | |
+| `contentHash` | String | sha256 of normalized text, permanent dedupe key |
+| `alsoSeenIn` | [String] | channels the phone merged into this upload |
+| `parse` | Object | `{kind, parserId, version, confidence, fields}` |
+| `eventKey` | Object | `{account, type, amount, ref, at, hasTime}` for cross-channel matching |
+| `sourcePriority` | Number | sms 3, n8n 2, notification 1 |
+| `role` | String | `primary\|supporting` |
+| `outcome` | String | `processing\|created\|queued\|pending_sms\|duplicate\|ignored` |
+| `reason` | String | why queued/ignored |
 | `status` | String | `pending\|resolved\|discarded` |
-| `resolvedAt` | Date | |
-| `createdAt` | Date | TTL 30 days |
+| `transaction` / `repayment` / `duplicateOf` | ObjectId | links |
 
-Index: `{user, status, createdAt}`
+Indexes: unique `{user, contentHash}`, `{user, status, createdAt}`, `{user, eventKey.amount, eventKey.type, eventKey.at}`, `{outcome, receivedAt}`, `{user, transaction}`
+
+## transaction_corrections
+
+Permanent record of each fix to an auto-captured transaction. Insert-only.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user`, `transaction`, `capturedMessage` | ObjectId | |
+| `before` / `after` | Object | `{amount, type, account, category, date, description}`; `after` null when voided |
+| `changedFields` | [String] | |
+| `reason` | String | `wrong_amount\|wrong_type\|wrong_account\|wrong_date\|wrong_category\|wrong_merchant\|duplicate\|not_a_transaction\|other\|sms_override\|kept_user_values` |
+| `note` | String | max 500 |
+| `via` | String | `web\|mobile\|system` |
+| `correctedBy` | ObjectId | null for system |
+| `balanceEffects` | [{account, delta}] | |
+| `ledgerSequence` | Number | matching ledger block |
+
+Indexes: `{user, transaction, createdAt}`, `{user, createdAt}`
+
+## api_keys
+
+Bearer keys for `/api/integrations/*`, managed at Settings › API keys.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | the key acts as this user |
+| `label` | String | |
+| `keyHash` | String | sha256 of the raw key, unique |
+| `lastFour` | String | display only |
+| `revoked` / `revokedAt` | Boolean / Date | revoked keys are kept |
+| `expiresAt` | Date | null = never |
+| `lastUsedAt` / `lastUsedIp` | Date / String | |
+| `createdVia` | String | `web\|cli` |
+
+Index: `{user, revoked}`
+
+## idempotency_records
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `userId` | String | |
+| `endpoint` / `key` | String | unique together with `userId` |
+| `fingerprint` | String | sha256 of the request body |
+| `status` | String | `pending\|completed` |
+| `responseStatus` / `responseBody` | | replayed on retry |
+| `expiresAt` | Date | TTL, `N8N_IDEMPOTENCY_TTL_SECONDS` |
+
+## credit_statements
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user`, `account` | ObjectId | |
+| `periodStart` / `periodEnd` / `dueDate` | Date | unique `{account, periodStart}` |
+| `status` | String | `open\|closed\|paid\|overdue` |
+| `isPaid` / `paidAmount` / `paidAt` | | |
+| `paymentTransactionId` | ObjectId | locks that transaction from edits |
+| `isDeleted` / `deletedAt` / `deletedBy` | | soft delete |
 
 ## pushSubscriptions
 

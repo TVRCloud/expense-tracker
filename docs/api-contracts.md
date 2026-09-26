@@ -95,17 +95,19 @@ All monetary amounts are in **cents** (integers).
 | GET | `/api/loans/:id/repayments` | List repayments |
 | POST | `/api/loans/:id/repayments` | Add repayment (updates remainingAmount) |
 
-## SMS Review
+## Reconcile
+
+Auto-captured payments (SMS, n8n, bank-app notifications) and their review / correction flow. Full rules and every route: [docs/reconcile.md](reconcile.md).
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/sms-review?status=pending` | List queued bank SMS that couldn't be auto-matched (default `status=pending`) |
-| DELETE | `/api/sms-review/:id` | Discard a queued item (no transaction/repayment created) |
-
-Populated by `POST /api/integrations/sms` (see
-[docs/n8n-integration.md](n8n-integration.md)) when a message parses but
-matches no account/loan, or doesn't parse at all. No apply-from-queue
-endpoint yet — discard only.
+| GET | `/api/reconcile` | Inbox: unreviewed captured transactions, queued messages, counts |
+| GET | `/api/reconcile/history` | Every correction, newest first |
+| GET | `/api/transactions/:id/corrections` | Where this transaction's values came from + its corrections |
+| POST | `/api/transactions/:id/confirm` | Mark an auto-captured transaction as correct |
+| POST | `/api/transactions/:id/corrections` | Fix it in place `{changes, reason, note?}`; `duplicate` / `not_a_transaction` voids it |
+| POST | `/api/captures/:id/resolve` | Act on a queued message `{action: create\|link\|keep_mine\|use_sms}` |
+| DELETE | `/api/captures/:id` | Discard a queued message (kept on record) |
 
 ## Goals
 
