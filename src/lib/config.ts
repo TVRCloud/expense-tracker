@@ -55,11 +55,6 @@ export const config = {
       privateKey: getEnv("VAPID_PRIVATE_KEY"),
     };
   },
-  get sentry() {
-    return {
-      dsn: getEnv("NEXT_PUBLIC_SENTRY_DSN"),
-    };
-  },
   get integrations() {
     return {
       // Bearer keys themselves live in the api_keys collection (src/models/ApiKey.ts),

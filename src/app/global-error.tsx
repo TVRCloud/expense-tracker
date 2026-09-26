@@ -1,16 +1,17 @@
 "use client";
 
-import * as Sentry from "@sentry/nextjs";
 import NextError from "next/error";
 import { useEffect } from "react";
 
+// Root error boundary. Error reporting was removed along with Sentry; errors
+// are logged to the browser console until an alternative is added.
 export default function GlobalError({
   error,
 }: {
   error: Error & { digest?: string };
 }) {
   useEffect(() => {
-    Sentry.captureException(error);
+    console.error(error);
   }, [error]);
 
   return (
