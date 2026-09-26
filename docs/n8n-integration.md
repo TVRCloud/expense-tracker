@@ -144,33 +144,30 @@ in this one endpoint; the caller just forwards the text.
 `receivedAt` is optional (ISO 8601) — when omitted, "now" is used. `text` is
 required, max 2000 characters.
 
-Two message formats are currently recognized (see
-[`src/lib/integrations/sms-parser.ts`](../src/lib/integrations/sms-parser.ts)):
+The message is parsed server-side (`src/lib/capture/parsers/`): the Navi-style
+EMI format, the IDFC card-spend format, and a generic parser for common
+HDFC / ICICI / SBI / Axis / Kotak / UPI phrasing. The parsed last 4 digits are
+matched to an account's "SMS match digits" (`smsLastFour`) or a card's
+`creditMeta.lastFourDigits`; an EMI's loan account number to `Loan.externalLoanId`.
 
-- **Credit card spend** — `"INR <amount> spent on your <bank> Credit Card
-  ending XX<last4> at <merchant> on <date>"`. Matched to the Account whose
-  `creditMeta.lastFourDigits` equals `<last4>`; on match, creates an expense
-  Transaction on that account.
-- **Loan EMI payment** — `"Rs.<amount>/- received towards <lender> loan
-  account <id> for <month year>"`. Matched to the Loan whose `externalLoanId`
-  equals `<id>` (set on the loan in the Loans page — see
-  [docs/pages/06-loans.md](pages/06-loans.md)); on match, creates a Repayment
-  and reduces the loan's `remainingAmount`.
+Anything uncertain is **never** guessed into a transaction: it goes to the
+reconcile inbox (`/reconcile` in the web app, and the phone app's Review tab)
+with a `system` notification + push. Transactions created from n8n start as
+`reviewStatus: "unreviewed"` so the user can confirm or fix them, and every
+fix is kept as a correction record. n8n counts as forwarded SMS: the phone's
+own SMS capture ranks above it, a bank-app notification below it. Full rules:
+[docs/reconcile.md](reconcile.md).
 
-An unrecognized message, or one that parses but matches no account/loan, is
-**never** guessed into a transaction — it's stored in the `sms_review_items`
-collection (`status: "pending"`, TTL 30 days) and a `system` notification +
-push is sent to the user, so a person confirms or discards it instead of the
-API silently creating (or silently dropping) real financial data. Read the
-queue with `GET /api/sms-review` (browser session auth, not part of the
-`/api/integrations/*` surface); discard an item with `DELETE
-/api/sms-review/:id`. There is no auto-apply-from-queue endpoint yet.
+Dedupe no longer depends on the `Idempotency-Key`: every message's normalized
+text hash is stored permanently, so the same SMS forwarded twice, or also
+captured by the phone, never creates a second transaction (response
+`status: "duplicate"`). The header is still accepted.
 
-Idempotency works the same as `POST /api/integrations/transactions`, but the
-`Idempotency-Key` header is **optional** here: when omitted, the key defaults
-to a SHA-256 hash of the message text itself, so the same SMS forwarded twice
-(a common failure mode for SMS-forwarding tools) never creates a duplicate
-transaction/repayment, with no extra setup required on the caller's side.
+Newer response statuses besides `created` / `queued`: `updated` (200, replaced
+values from a lower-priority source), `duplicate` (200), `ignored` (200, OTP /
+offer / due reminder). The workflow's "Format SMS Reply" node currently treats
+anything that isn't `created` as queued; see the suggested update in
+[docs/reconcile.md](reconcile.md).
 
 Success response — created (`201`):
 

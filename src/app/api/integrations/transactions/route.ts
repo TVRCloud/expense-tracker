@@ -79,7 +79,16 @@ export const POST = withIntegrationRoute("transactions", async ({ req, user, req
     body: parsed.data,
     execute: async (): Promise<{ status: number; body: Record<string, unknown> }> => {
       try {
-        const result = await createTransaction({ ...parsed.data, userId: user.id, actor: user });
+        // Values from an integration caller (n8n's AI parsing) can be wrong, so
+        // plain income/expense rows land in the reconcile inbox as unreviewed.
+        const reviewable =
+          parsed.data.type !== "transfer" && !parsed.data.isRecurring && !parsed.data.splits;
+        const result = await createTransaction({
+          ...parsed.data,
+          userId: user.id,
+          actor: user,
+          provenance: reviewable ? { source: "n8n", reviewStatus: "unreviewed" } : { source: "n8n" },
+        });
         const transaction = result.transaction as {
           _id: { toString(): string };
           type: string;

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { signOut } from "next-auth/react";
 import {
-  Sun, Lock, Bell, LogOut, ChevronRight, Shield, HelpCircle,
+  Sun, Lock, Bell, LogOut, ChevronRight, Shield, HelpCircle, KeyRound,
 } from "lucide-react";
 import { CURRENCY_ICON } from "@/lib/icons";
 import { Skeleton } from "@/components/_ui/Skeleton";
@@ -18,6 +18,7 @@ import {
   PreferencesFields, AppearanceFields, NotificationFields,
   SecurityFields, PrivacyFields, HelpFields,
 } from "./SettingsSubpages";
+import { ApiKeysFields } from "./ApiKeysSection";
 
 function SectionTrigger({
   icon: Icon,
@@ -118,6 +119,13 @@ export function SettingsClient() {
             <SectionTrigger icon={Lock} label="Security" sub="Password" />
             <AccordionContent className="px-5 pt-1 flex flex-col gap-3">
               <SecurityFields />
+            </AccordionContent>
+          </AccordionItem>
+
+          <AccordionItem value="api-keys" className="border-(--line) px-0">
+            <SectionTrigger icon={KeyRound} label="API keys" sub="Mobile app, n8n, integrations" />
+            <AccordionContent className="px-5 pt-1 flex flex-col gap-3">
+              <ApiKeysFields />
             </AccordionContent>
           </AccordionItem>
 

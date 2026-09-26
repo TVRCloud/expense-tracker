@@ -5,7 +5,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { useTheme } from "next-themes";
 import { signOut } from "next-auth/react";
-import { ArrowLeft, Bell, BellOff, Check, HelpCircle, Lock, Monitor, Moon, Shield, Smartphone, Sun, User } from "lucide-react";
+import { ArrowLeft, Bell, BellOff, Check, HelpCircle, KeyRound, Lock, Monitor, Moon, Shield, Smartphone, Sun, User } from "lucide-react";
 import { toast } from "sonner";
 import apiClient from "@/lib/api-client";
 import { Switch } from "@/components/_ui/Switch";
@@ -23,6 +23,7 @@ import { useChangePassword, useProfile, useUpdatePreferences, useUpdateProfile }
 import { useGlassIntensity } from "@/components/providers/GlassIntensityProvider";
 import { usePushNotification, type PushStatus } from "@/features/settings/hooks/usePushNotification";
 import { parseDeviceLabel } from "@/lib/device-label";
+import { ApiKeysFields } from "./ApiKeysSection";
 
 const CURRENCIES = [
   { code: "USD", symbol: "$" },
@@ -169,6 +170,14 @@ export function SecuritySettingsPage() {
   return (
     <PageShell title="Security" icon={Lock}>
       <Panel><SecurityFields /></Panel>
+    </PageShell>
+  );
+}
+
+export function ApiKeysSettingsPage() {
+  return (
+    <PageShell title="API keys" icon={KeyRound}>
+      <Panel><ApiKeysFields /></Panel>
     </PageShell>
   );
 }

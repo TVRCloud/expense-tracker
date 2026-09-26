@@ -8,8 +8,24 @@ import { NextRequest } from "next/server";
 // than standing up a real Redis instance.
 vi.mock("@/lib/redis", () => ({ redis: null }));
 
+// Session auth for the /api/me/* route suites. Each test sets
+// `sessionUser.current` to act as a signed-in user (or null for signed out).
+const sessionUser = vi.hoisted(() => ({ current: null as null | { id: string; name: string; email: string; role: string } }));
+vi.mock("@/lib/auth-guard", async () => {
+  const { NextResponse } = await import("next/server");
+  return {
+    requireAuth: async () =>
+      sessionUser.current
+        ? { user: sessionUser.current }
+        : { errorResponse: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) },
+  };
+});
+
 // All test-related code (setup + every suite) lives in this single file by
 // design, rather than a separate setup.ts + one file per module.
+
+// Raw captured SMS text is encrypted at rest (src/lib/crypto.ts).
+process.env.CAPTURE_ENCRYPTION_KEY = "test-capture-encryption-key-at-least-32-chars";
 
 let mongod: MongoMemoryServer;
 
@@ -243,6 +259,58 @@ describe("verifyN8nAuth", () => {
     if ("user" in result) expect(result.user.email).toBe(TEST_EMAIL);
   });
 
+  it("rejects a revoked key", async () => {
+    const { verifyN8nAuth } = await import("@/lib/integrations/auth");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    await ApiKey.updateMany({}, { $set: { revoked: true, revokedAt: new Date() } });
+    const result = await verifyN8nAuth(makeReq({ authorization: `Bearer ${TEST_KEY}` }), "req-6");
+    expect("errorResponse" in result).toBe(true);
+    if ("errorResponse" in result) expect(result.errorResponse.status).toBe(401);
+  });
+
+  it("rejects an expired key", async () => {
+    const { verifyN8nAuth } = await import("@/lib/integrations/auth");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    await ApiKey.updateMany({}, { $set: { expiresAt: new Date(Date.now() - 1000) } });
+    const result = await verifyN8nAuth(makeReq({ authorization: `Bearer ${TEST_KEY}` }), "req-7");
+    expect("errorResponse" in result).toBe(true);
+    if ("errorResponse" in result) expect(result.errorResponse.status).toBe(401);
+  });
+
+  it("accepts a key whose expiry is in the future", async () => {
+    const { verifyN8nAuth } = await import("@/lib/integrations/auth");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    await ApiKey.updateMany({}, { $set: { expiresAt: new Date(Date.now() + 60_000) } });
+    const result = await verifyN8nAuth(makeReq({ authorization: `Bearer ${TEST_KEY}` }), "req-8");
+    expect("user" in result).toBe(true);
+  });
+
+  it("does not count successful requests toward the failed-auth IP limit", async () => {
+    const { verifyN8nAuth } = await import("@/lib/integrations/auth");
+    for (let i = 0; i < 15; i++) {
+      const ok = await verifyN8nAuth(makeReq({ authorization: `Bearer ${TEST_KEY}` }), `req-ok-${i}`);
+      expect("user" in ok).toBe(true);
+    }
+  });
+
+  it("locks an IP out after 10 failed attempts, with a Retry-After header", async () => {
+    const { verifyN8nAuth } = await import("@/lib/integrations/auth");
+    for (let i = 0; i < 10; i++) {
+      await verifyN8nAuth(makeReq({ authorization: "Bearer wrong", "x-forwarded-for": "9.9.9.9" }), `req-bad-${i}`);
+    }
+    const locked = await verifyN8nAuth(
+      makeReq({ authorization: `Bearer ${TEST_KEY}`, "x-forwarded-for": "9.9.9.9" }),
+      "req-locked"
+    );
+    expect("errorResponse" in locked).toBe(true);
+    if ("errorResponse" in locked) {
+      expect(locked.errorResponse.status).toBe(429);
+      expect(Number(locked.errorResponse.headers.get("retry-after"))).toBeGreaterThan(0);
+    }
+    const otherIp = await verifyN8nAuth(makeReq({ authorization: `Bearer ${TEST_KEY}`, "x-forwarded-for": "1.1.1.1" }), "req-other");
+    expect("user" in otherIp).toBe(true);
+  });
+
   it("rejects a valid key when the configured user is missing", async () => {
     const { verifyN8nAuth } = await import("@/lib/integrations/auth");
     const { default: User } = await import("@/models/User");
@@ -250,6 +318,134 @@ describe("verifyN8nAuth", () => {
     const result = await verifyN8nAuth(makeReq({ authorization: `Bearer ${TEST_KEY}` }), "req-5");
     expect("errorResponse" in result).toBe(true);
     if ("errorResponse" in result) expect(result.errorResponse.status).toBe(401);
+  });
+});
+
+// ── src/app/api/me/api-keys ────────────────────────────────────────────────
+
+describe("/api/me/api-keys", () => {
+  const PASSWORD = "correct-horse-battery";
+
+  async function signIn(email = `k${Date.now()}${Math.random()}@x.com`) {
+    const { default: User } = await import("@/models/User");
+    const { hashPassword } = await import("@/utils/password");
+    const user = await User.create({ name: "Key User", email, password: await hashPassword(PASSWORD), isActive: true });
+    sessionUser.current = { id: user._id.toString(), name: user.name, email: user.email, role: "user" };
+    return user;
+  }
+
+  function postReq(body: unknown) {
+    return new NextRequest("http://localhost/api/me/api-keys", {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  function revokeCall(id: string) {
+    return import("@/app/api/me/api-keys/[id]/route").then(({ DELETE }) =>
+      DELETE(new NextRequest(`http://localhost/api/me/api-keys/${id}`, { method: "DELETE" }), {
+        params: Promise.resolve({ id }),
+      })
+    );
+  }
+
+  afterEach(() => {
+    sessionUser.current = null;
+  });
+
+  it("rejects signed-out callers", async () => {
+    const { GET, POST } = await import("@/app/api/me/api-keys/route");
+    expect((await GET()).status).toBe(401);
+    expect((await POST(postReq({ label: "x", expiresInDays: 30, currentPassword: PASSWORD }))).status).toBe(401);
+  });
+
+  it("refuses to create a key with the wrong password", async () => {
+    const { POST } = await import("@/app/api/me/api-keys/route");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    await signIn();
+    const res = await POST(postReq({ label: "phone", expiresInDays: 30, currentPassword: "wrong" }));
+    expect(res.status).toBe(400);
+    expect(await ApiKey.countDocuments()).toBe(0);
+  });
+
+  it("rejects an unsupported expiry", async () => {
+    const { POST } = await import("@/app/api/me/api-keys/route");
+    await signIn();
+    const res = await POST(postReq({ label: "phone", expiresInDays: 10000, currentPassword: PASSWORD }));
+    expect(res.status).toBe(400);
+  });
+
+  it("creates a key that is shown once, stored hashed, and authenticates", async () => {
+    const { GET, POST } = await import("@/app/api/me/api-keys/route");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { verifyN8nAuth, hashKey } = await import("@/lib/integrations/auth");
+    const user = await signIn();
+
+    const res = await POST(postReq({ label: "phone", expiresInDays: 30, currentPassword: PASSWORD }));
+    expect(res.status).toBe(201);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const { data } = await res.json();
+    expect(data.key).toMatch(/^etk_[0-9a-f]{64}$/);
+
+    const stored = await ApiKey.findById(data._id).lean<{ keyHash: string; expiresAt: Date; createdVia: string }>();
+    expect(stored!.keyHash).toBe(hashKey(data.key));
+    expect(stored!.expiresAt.getTime()).toBeGreaterThan(Date.now() + 29 * 24 * 3600 * 1000);
+    expect(stored!.createdVia).toBe("web");
+
+    const list = await (await GET()).json();
+    expect(list.data).toHaveLength(1);
+    expect(JSON.stringify(list.data)).not.toContain(data.key);
+    expect(list.data[0].keyHash).toBeUndefined();
+
+    const auth = await verifyN8nAuth(
+      new NextRequest("http://localhost/api/integrations/accounts", { headers: { authorization: `Bearer ${data.key}` } }),
+      "req-web-key"
+    );
+    expect("user" in auth && auth.user.id).toBe(user._id.toString());
+  });
+
+  it("revokes a key immediately and keeps the record", async () => {
+    const { GET, POST } = await import("@/app/api/me/api-keys/route");
+    const { verifyN8nAuth } = await import("@/lib/integrations/auth");
+    await signIn();
+    const { data } = await (await POST(postReq({ label: "phone", expiresInDays: null, currentPassword: PASSWORD }))).json();
+
+    expect((await revokeCall(data._id)).status).toBe(200);
+    expect((await revokeCall(data._id)).status).toBe(404);
+
+    const auth = await verifyN8nAuth(
+      new NextRequest("http://localhost/api/integrations/accounts", { headers: { authorization: `Bearer ${data.key}` } }),
+      "req-revoked"
+    );
+    expect("errorResponse" in auth).toBe(true);
+
+    const list = await (await GET()).json();
+    expect(list.data).toHaveLength(1);
+    expect(list.data[0].revoked).toBe(true);
+    expect(list.data[0].revokedAt).toBeTruthy();
+  });
+
+  it("does not let one user see or revoke another user's key", async () => {
+    const { GET, POST } = await import("@/app/api/me/api-keys/route");
+    await signIn();
+    const { data } = await (await POST(postReq({ label: "mine", expiresInDays: 30, currentPassword: PASSWORD }))).json();
+
+    await signIn();
+    expect((await revokeCall(data._id)).status).toBe(404);
+    expect((await revokeCall("not-an-id")).status).toBe(404);
+    expect((await (await GET()).json()).data).toHaveLength(0);
+  });
+
+  it("rate-limits key creation per user", async () => {
+    const { POST } = await import("@/app/api/me/api-keys/route");
+    await signIn();
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      statuses.push((await POST(postReq({ label: `k${i}`, expiresInDays: 30, currentPassword: "wrong" }))).status);
+    }
+    expect(statuses.slice(0, 5).every((s) => s === 400)).toBe(true);
+    expect(statuses[5]).toBe(429);
   });
 });
 
@@ -443,5 +639,491 @@ describe("POST /api/integrations/transactions", () => {
     const json = await res.json();
     expect(res.status).toBe(409);
     expect(json.error.code).toBe("IDEMPOTENCY_CONFLICT");
+  });
+});
+
+// ── src/lib/capture/parsers ────────────────────────────────────────────────
+
+describe("parseCapture", () => {
+  // 12:00 IST on 26 Sep 2026.
+  const RECEIVED = new Date("2026-09-26T06:30:00Z");
+
+  // Anonymized real-world phrasings, one per bank family.
+  const MONEY_FIXTURES: [string, { type: string; amount: number; last4?: string; ref?: string; merchant?: string }][] = [
+    [
+      "Rs.250.00 debited from A/c XX1234 on 26-09-26 to VPA swiggy@icici. UPI Ref 426912345678. Not you? Call 18002586161",
+      { type: "expense", amount: 25000, last4: "1234", ref: "426912345678", merchant: "swiggy@icici" },
+    ],
+    [
+      "Sent Rs.250.00 From HDFC Bank A/C *1234 To SWIGGY On 26/09/26 Ref 426912345678 Not You? Call 18002586161",
+      { type: "expense", amount: 25000, last4: "1234", ref: "426912345678", merchant: "SWIGGY" },
+    ],
+    [
+      "INR 1,200.00 credited to your A/c No XX5678 on 26 Sep 2026 by NEFT from ACME PVT LTD. Avl Bal INR 45,000.00",
+      { type: "income", amount: 120000, last4: "5678", merchant: "ACME PVT LTD" },
+    ],
+    [
+      "Dear Customer, Rs.499.00 spent on ICICI Bank Card XX9012 on 26-Sep-26 at AMAZON. Avl Lmt: Rs 1,20,000.00",
+      { type: "expense", amount: 49900, last4: "9012", merchant: "AMAZON" },
+    ],
+    [
+      "A/c *4321 debited Rs 1000.00 on 26Sep26 trf to RAHUL. Ref No 123456789. -Kotak",
+      { type: "expense", amount: 100000, last4: "4321", ref: "123456789", merchant: "RAHUL" },
+    ],
+    [
+      "Happy Shopping! INR 896.15 spent on your IDFC FIRST Bank Credit Card ending XX1832 at PAYPAL *XINDAWNCOMP on 24 JUN 2026 at 04:04 PM Avbl Limit: INR 10309.48",
+      { type: "expense", amount: 89615, last4: "1832", merchant: "PAYPAL *XINDAWNCOMP" },
+    ],
+    [
+      "Dear UPI user A/C X1234 debited by 250.0 on date 26Sep26 trf to SWIGGY Refno 426912345678. If not u? call 1800111109. -SBI",
+      { type: "expense", amount: 25000, last4: "1234", merchant: "SWIGGY" },
+    ],
+  ];
+
+  for (const [text, expected] of MONEY_FIXTURES) {
+    it(`parses: ${text.slice(0, 48)}…`, async () => {
+      const { parseCapture, CONFIDENCE_AUTO_CREATE } = await import("@/lib/capture/parsers");
+      const p = parseCapture(text, RECEIVED);
+      expect(p.kind).toBe("money");
+      if (p.kind !== "money") return;
+      expect(p.type).toBe(expected.type);
+      expect(p.amountMinor).toBe(expected.amount);
+      expect(p.last4).toBe(expected.last4);
+      if (expected.ref) expect(p.ref).toBe(expected.ref);
+      if (expected.merchant) expect(p.merchant).toBe(expected.merchant);
+      expect(p.confidence).toBeGreaterThanOrEqual(CONFIDENCE_AUTO_CREATE);
+    });
+  }
+
+  it("never parses the balance figure as the amount", async () => {
+    const { parseCapture } = await import("@/lib/capture/parsers");
+    const p = parseCapture("Avl Bal Rs 45,000.00. Rs 120.00 debited from A/c XX1234 on 26-09-26", RECEIVED);
+    expect(p.kind === "money" && p.amountMinor).toBe(12000);
+  });
+
+  it.each([
+    ["123456 is your OTP for txn of Rs 500 at AMAZON. Do not share.", "otp"],
+    ["Your credit card bill of Rs 5,000 is due on 05-Oct-26. Minimum amount due Rs 250.", "reminder"],
+    ["Get a pre-approved personal loan of Rs 5,00,000. Apply now!", "promo"],
+    ["RAHUL has requested money Rs 500 from you on UPI. Pay now", "not_financial"],
+  ])("ignores %s", async (text, reason) => {
+    const { parseCapture } = await import("@/lib/capture/parsers");
+    const p = parseCapture(text, RECEIVED);
+    expect(p.kind).toBe("ignored");
+    if (p.kind === "ignored") expect(p.reason).toBe(reason);
+  });
+
+  it("parses dates in IST: a stated time is exact, a missing one borrows receivedAt but isn't precise", async () => {
+    const { parseCapture } = await import("@/lib/capture/parsers");
+    const timed = parseCapture(
+      "Happy Shopping! INR 10.00 spent on your IDFC FIRST Bank Credit Card ending XX1832 at X on 24 JUN 2026 at 04:04 PM",
+      RECEIVED
+    );
+    expect(timed.kind === "money" && timed.date?.toISOString()).toBe("2026-06-24T10:34:00.000Z");
+    expect(timed.kind === "money" && timed.hasTime).toBe(true);
+
+    const sameDay = parseCapture("Rs 10 debited from A/c XX1234 on 26-09-26", RECEIVED);
+    expect(sameDay.kind === "money" && sameDay.date?.toISOString()).toBe(RECEIVED.toISOString());
+    expect(sameDay.kind === "money" && sameDay.hasTime).toBe(false);
+
+    const otherDay = parseCapture("Rs 10 debited from A/c XX1234 on 20-09-26", RECEIVED);
+    // Noon IST, not UTC midnight (05:30 IST).
+    expect(otherDay.kind === "money" && otherDay.date?.toISOString()).toBe("2026-09-20T06:30:00.000Z");
+  });
+
+  it("lowers confidence when no account digits or date are present", async () => {
+    const { parseCapture, CONFIDENCE_AUTO_CREATE } = await import("@/lib/capture/parsers");
+    const p = parseCapture("₹250 paid to Swiggy", RECEIVED);
+    expect(p.kind === "money" && p.confidence).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+  });
+});
+
+// ── src/lib/capture/ingest.ts + src/lib/reconcile/* ────────────────────────
+
+describe("capture ingest and reconcile", () => {
+  const T0 = new Date("2026-09-26T06:30:00Z");
+  const minutes = (n: number) => new Date(T0.getTime() + n * 60_000);
+  const SMS = "Rs.250.00 debited from A/c XX1234 on 26-09-26 to VPA swiggy@icici. UPI Ref 426912345678. Not you? Call 18002586161";
+  const NOTIFICATION = "₹250 paid to Swiggy from A/c XX1234";
+
+  async function setup(balance = 100000) {
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const user = await User.create({ name: "Cap", email: `c${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    const account = await Account.create({
+      user: user._id,
+      name: "HDFC Savings",
+      type: "bank",
+      balance,
+      currency: "INR",
+      smsLastFour: ["1234"],
+    });
+    const other = await Account.create({ user: user._id, name: "Wallet", type: "cash", balance: 50000, currency: "INR" });
+    const actor = { id: user._id.toString(), name: user.name, email: user.email, role: "user" };
+    return { user, account, other, actor };
+  }
+
+  async function ingest(actor: { id: string; name: string; email: string; role: string }, channel: "sms" | "notification" | "n8n", text: string, receivedAt: Date) {
+    const { ingestCapture } = await import("@/lib/capture/ingest");
+    return ingestCapture({ user: actor, channel, text, receivedAt, sender: channel === "sms" ? "VM-HDFCBK" : undefined });
+  }
+
+  async function balanceOf(id: unknown) {
+    const { default: Account } = await import("@/models/Account");
+    return (await Account.findById(id).lean<{ balance: number }>())!.balance;
+  }
+
+  async function liveTxns(userId: unknown) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    return Transaction.find({ user: userId, isDeleted: { $ne: true } }).lean<
+      { _id: unknown; amount: number; source: string; reviewStatus: string | null; captures: unknown[]; description: string }[]
+    >();
+  }
+
+  async function ledgerOk(userId: string) {
+    const { verifyLedgerChain } = await import("@/lib/ledger");
+    const result = (await verifyLedgerChain(userId)) as { valid: boolean };
+    expect(result.valid).toBe(true);
+  }
+
+  it("creates an unreviewed SMS transaction and stores the raw text encrypted", async () => {
+    const { actor, account } = await setup();
+    const res = await ingest(actor, "sms", SMS, T0);
+    expect(res.httpStatus).toBe(201);
+    expect(res.body.status).toBe("created");
+
+    const [txn] = await liveTxns(actor.id);
+    expect(txn.amount).toBe(25000);
+    expect(txn.source).toBe("sms");
+    expect(txn.reviewStatus).toBe("unreviewed");
+    expect(await balanceOf(account._id)).toBe(100000 - 25000);
+
+    const { default: CapturedMessage } = await import("@/models/CapturedMessage");
+    const raw = await mongoose.connection.db!.collection("captured_messages").findOne({});
+    // The raw message never sits in the DB as plain text. (Parsed fields such
+    // as the merchant are stored plainly: they become the transaction anyway.)
+    expect(JSON.stringify(raw)).not.toContain("Not you? Call");
+    expect(await CapturedMessage.countDocuments()).toBe(1);
+    await ledgerOk(actor.id);
+  });
+
+  it("recognises the same SMS from n8n, with a sender prefix, a day later: one transaction", async () => {
+    const { actor } = await setup();
+    await ingest(actor, "sms", SMS, T0);
+    const again = await ingest(actor, "n8n", `VM-HDFCBK: ${SMS}  `, minutes(25 * 60));
+    expect(again.body.status).toBe("duplicate");
+    expect(await liveTxns(actor.id)).toHaveLength(1);
+  });
+
+  it("ignores an OTP message and creates nothing", async () => {
+    const { actor } = await setup();
+    const res = await ingest(actor, "sms", "123456 is your OTP for txn of Rs 500 at AMAZON. Do not share.", T0);
+    expect(res.body.status).toBe("ignored");
+    expect(await liveTxns(actor.id)).toHaveLength(0);
+  });
+
+  it("holds a notification, then uses the SMS values when the SMS arrives (SMS is source of truth)", async () => {
+    const { actor, account } = await setup();
+    const held = await ingest(actor, "notification", NOTIFICATION, T0);
+    expect(held.httpStatus).toBe(202);
+    expect(held.body.status).toBe("pending");
+    expect(await liveTxns(actor.id)).toHaveLength(0);
+
+    const sms = await ingest(actor, "sms", SMS, minutes(3));
+    expect(sms.body.status).toBe("created");
+
+    const txns = await liveTxns(actor.id);
+    expect(txns).toHaveLength(1);
+    expect(txns[0].source).toBe("sms");
+    expect(txns[0].description).toBe("swiggy@icici");
+    expect(txns[0].captures).toHaveLength(2);
+    expect(await balanceOf(account._id)).toBe(75000);
+
+    const { default: CapturedMessage } = await import("@/models/CapturedMessage");
+    const notif = await CapturedMessage.findById(held.body.captureId).lean<{ role: string; outcome: string }>();
+    expect(notif).toMatchObject({ role: "supporting", outcome: "duplicate" });
+  });
+
+  it("merges a late SMS (hours after the notification, no time in text) by IST day", async () => {
+    const { actor } = await setup();
+    await ingest(actor, "notification", NOTIFICATION, T0);
+    await ingest(actor, "sms", SMS, minutes(4));
+    // A second copy of the same payment via n8n, worded differently, hours later.
+    const n8n = await ingest(actor, "n8n", "Rs 250.00 debited from A/c XX1234 on 26-09-26. UPI Ref 426912345678", minutes(180));
+    expect(n8n.body.status).toBe("duplicate");
+    expect(await liveTxns(actor.id)).toHaveLength(1);
+  });
+
+  it("promotes a notification whose SMS never came, labelled as the lower-priority source", async () => {
+    const { actor } = await setup();
+    await ingest(actor, "notification", NOTIFICATION, T0);
+    const { promoteStalePendingSms } = await import("@/lib/capture/ingest");
+    const { promoted } = await promoteStalePendingSms({ now: new Date(Date.now() + 16 * 60_000) });
+    expect(promoted).toBe(1);
+
+    const [txn] = await liveTxns(actor.id);
+    expect(txn.source).toBe("notification");
+    expect(txn.reviewStatus).toBe("unreviewed");
+
+    const { getReviewInbox } = await import("@/lib/reconcile/inbox");
+    const inbox = await getReviewInbox(actor.id);
+    expect(inbox.needsReview[0].sourceInfo.priority).toBe("fallback");
+  });
+
+  it("lets a later SMS override notification values, keeping the old values as a correction", async () => {
+    const { actor, account } = await setup();
+    await ingest(actor, "notification", "₹250 paid to Swiggy from A/c XX1234. UPI Ref 426912345678", T0);
+    const { promoteStalePendingSms } = await import("@/lib/capture/ingest");
+    await promoteStalePendingSms({ now: new Date(Date.now() + 16 * 60_000) });
+    expect(await balanceOf(account._id)).toBe(75000);
+
+    const sms = await ingest(actor, "sms", SMS.replace("Rs.250.00", "Rs.260.00"), minutes(120));
+    expect(sms.body.status).toBe("updated");
+
+    const txns = await liveTxns(actor.id);
+    expect(txns).toHaveLength(1);
+    expect(txns[0].amount).toBe(26000);
+    expect(txns[0].source).toBe("sms");
+    expect(await balanceOf(account._id)).toBe(74000);
+
+    const { default: TransactionCorrection } = await import("@/models/TransactionCorrection");
+    const [c] = await TransactionCorrection.find({ transaction: txns[0]._id }).lean<
+      { reason: string; via: string; before: { amount: number }; after: { amount: number } }[]
+    >();
+    expect(c).toMatchObject({ reason: "sms_override", via: "system", before: { amount: 25000 }, after: { amount: 26000 } });
+    await ledgerOk(actor.id);
+  });
+
+  it("never silently overrides values the user confirmed: queues a source conflict instead", async () => {
+    const { actor, account } = await setup();
+    const ref = ". UPI Ref 426912345678";
+    await ingest(actor, "notification", `₹250 paid to Swiggy from A/c XX1234${ref}`, T0);
+    const { promoteStalePendingSms } = await import("@/lib/capture/ingest");
+    await promoteStalePendingSms({ now: new Date(Date.now() + 16 * 60_000) });
+    const [txn] = await liveTxns(actor.id);
+    const { confirmTransaction } = await import("@/lib/reconcile/correct");
+    await confirmTransaction(actor.id, String(txn._id), actor);
+
+    const sms = await ingest(actor, "sms", SMS.replace("Rs.250.00", "Rs.260.00"), minutes(30));
+    expect(sms.body.status).toBe("queued");
+    expect(sms.body.reason).toBe("source_conflict");
+    expect((await liveTxns(actor.id))[0].amount).toBe(25000);
+
+    const { resolveCapture } = await import("@/lib/reconcile/inbox");
+    await resolveCapture({ userId: actor.id, captureId: sms.body.captureId, input: { action: "use_sms" }, actor, via: "web" });
+    const [after] = await liveTxns(actor.id);
+    expect(after.amount).toBe(26000);
+    expect(after.reviewStatus).toBe("corrected");
+    expect(await balanceOf(account._id)).toBe(74000);
+  });
+
+  it("keep_mine resolves a conflict without moving money, and records the decision", async () => {
+    const { actor, account } = await setup();
+    await ingest(actor, "notification", "₹250 paid to Swiggy from A/c XX1234. UPI Ref 426912345678", T0);
+    const { promoteStalePendingSms } = await import("@/lib/capture/ingest");
+    await promoteStalePendingSms({ now: new Date(Date.now() + 16 * 60_000) });
+    const [txn] = await liveTxns(actor.id);
+    const { confirmTransaction } = await import("@/lib/reconcile/correct");
+    await confirmTransaction(actor.id, String(txn._id), actor);
+    const sms = await ingest(actor, "sms", SMS.replace("Rs.250.00", "Rs.260.00"), minutes(30));
+
+    const { resolveCapture } = await import("@/lib/reconcile/inbox");
+    await resolveCapture({ userId: actor.id, captureId: sms.body.captureId, input: { action: "keep_mine" }, actor, via: "mobile" });
+    expect((await liveTxns(actor.id))[0].amount).toBe(25000);
+    expect(await balanceOf(account._id)).toBe(75000);
+    const { default: TransactionCorrection } = await import("@/models/TransactionCorrection");
+    expect(await TransactionCorrection.countDocuments({ reason: "kept_user_values" })).toBe(1);
+  });
+
+  it("treats a notification after its SMS as a duplicate that changes nothing", async () => {
+    const { actor, account } = await setup();
+    await ingest(actor, "sms", SMS, T0);
+    const notif = await ingest(actor, "notification", "₹999 paid to Swiggy from A/c XX1234. UPI Ref 426912345678", minutes(1));
+    expect(notif.body.status).toBe("duplicate");
+    expect((await liveTxns(actor.id))[0].amount).toBe(25000);
+    expect(await balanceOf(account._id)).toBe(75000);
+  });
+
+  it("keeps two real payments with the same amount apart (same channel, or different refs)", async () => {
+    const { actor } = await setup();
+    await ingest(actor, "sms", "Rs.200.00 debited from A/c XX1234 on 26-09-26 to VPA cafe@ybl. UPI Ref 111111111111", T0);
+    await ingest(actor, "sms", "Rs.200.00 debited from A/c XX1234 on 26-09-26 to VPA cafe@ybl. UPI Ref 222222222222", minutes(2));
+    await ingest(actor, "notification", "₹200 paid to cafe from A/c XX1234. UPI Ref 333333333333", minutes(3));
+    const { promoteStalePendingSms } = await import("@/lib/capture/ingest");
+    await promoteStalePendingSms({ now: new Date(Date.now() + 16 * 60_000) });
+    expect(await liveTxns(actor.id)).toHaveLength(3);
+  });
+
+  it("asks instead of guessing when the account is unknown on one side", async () => {
+    const { actor } = await setup();
+    await ingest(actor, "sms", SMS, T0);
+    // n8n copy worded without account digits: same payment? Not certain.
+    const res = await ingest(actor, "n8n", "Rs 250.00 paid to swiggy on 26-09-26", minutes(1));
+    expect(res.body.status).toBe("queued");
+    expect(res.body.reason).toBe("possible_duplicate");
+
+    const { resolveCapture } = await import("@/lib/reconcile/inbox");
+    await resolveCapture({ userId: actor.id, captureId: res.body.captureId, input: { action: "link" }, actor, via: "web" });
+    const txns = await liveTxns(actor.id);
+    expect(txns).toHaveLength(1);
+    expect(txns[0].captures).toHaveLength(2);
+  });
+
+  it("queues an unmatched account, and 'create' with rememberDigits matches the next one", async () => {
+    const { actor, other } = await setup();
+    const q = await ingest(actor, "sms", "Rs.80.00 debited from A/c XX9999 on 26-09-26 to VPA tea@ybl", T0);
+    expect(q.body.reason).toBe("no_matching_account");
+
+    const { resolveCapture } = await import("@/lib/reconcile/inbox");
+    await resolveCapture({
+      userId: actor.id,
+      captureId: q.body.captureId,
+      input: { action: "create", accountId: String(other._id), type: "expense", amount: 8000, category: "food", rememberDigits: true },
+      actor,
+      via: "web",
+    });
+    const next = await ingest(actor, "sms", "Rs.90.00 debited from A/c XX9999 on 26-09-26 to VPA tea@ybl", minutes(60));
+    expect(next.body.status).toBe("created");
+    expect(await balanceOf(other._id)).toBe(50000 - 8000 - 9000);
+  });
+
+  it("correction matrix: amount, type flip, account move and void each move the right balances", async () => {
+    const { actor, account, other } = await setup();
+    const res = await ingest(actor, "sms", SMS, T0);
+    const txnId = res.body.transactionId!;
+    const { correctTransaction } = await import("@/lib/reconcile/correct");
+
+    await correctTransaction({ userId: actor.id, transactionId: txnId, changes: { amount: 30000 }, reason: "wrong_amount", via: "web", actor });
+    expect(await balanceOf(account._id)).toBe(70000);
+
+    await correctTransaction({ userId: actor.id, transactionId: txnId, changes: { type: "income" }, reason: "wrong_type", via: "web", actor });
+    expect(await balanceOf(account._id)).toBe(130000);
+
+    await correctTransaction({
+      userId: actor.id,
+      transactionId: txnId,
+      changes: { accountId: String(other._id) },
+      reason: "wrong_account",
+      via: "mobile",
+      actor,
+    });
+    expect(await balanceOf(account._id)).toBe(100000);
+    expect(await balanceOf(other._id)).toBe(80000);
+
+    await correctTransaction({ userId: actor.id, transactionId: txnId, changes: {}, reason: "duplicate", via: "web", actor });
+    expect(await balanceOf(other._id)).toBe(50000);
+    expect(await liveTxns(actor.id)).toHaveLength(0);
+
+    const { default: TransactionCorrection } = await import("@/models/TransactionCorrection");
+    const rows = await TransactionCorrection.find({ transaction: txnId }).sort({ createdAt: 1 }).lean<{ reason: string; after: unknown }[]>();
+    expect(rows.map((r) => r.reason)).toEqual(["wrong_amount", "wrong_type", "wrong_account", "duplicate"]);
+    expect(rows[3].after).toBeNull();
+    await ledgerOk(actor.id);
+  });
+
+  it("guards: no-op correction, transfers, and another user's transaction", async () => {
+    const { actor, account, other } = await setup();
+    const res = await ingest(actor, "sms", SMS, T0);
+    const { correctTransaction, ReconcileError } = await import("@/lib/reconcile/correct");
+
+    await expect(
+      correctTransaction({ userId: actor.id, transactionId: res.body.transactionId!, changes: { amount: 25000 }, reason: "wrong_amount", via: "web", actor })
+    ).rejects.toMatchObject({ code: "NO_CHANGES" });
+
+    const { createTransaction } = await import("@/lib/transaction-service");
+    const t = await createTransaction({
+      userId: actor.id,
+      actor,
+      accountId: String(account._id),
+      transferToId: String(other._id),
+      type: "transfer",
+      amount: 1000,
+      currency: "INR",
+      category: "transfer",
+      date: T0.toISOString(),
+      tags: [],
+      isRecurring: false,
+    });
+    const transferId = String((t.transaction as { _id: unknown })._id);
+    await expect(
+      correctTransaction({ userId: actor.id, transactionId: transferId, changes: { amount: 5 }, reason: "wrong_amount", via: "web", actor })
+    ).rejects.toMatchObject({ code: "NOT_CORRECTABLE" });
+
+    const stranger = await setup();
+    await expect(
+      correctTransaction({ userId: stranger.actor.id, transactionId: res.body.transactionId!, changes: { amount: 5 }, reason: "wrong_amount", via: "web", actor: stranger.actor })
+    ).rejects.toBeInstanceOf(ReconcileError);
+  });
+
+  it("applies concurrent captures on one account without losing a balance update", async () => {
+    const { actor, account } = await setup(100000);
+    await Promise.all(
+      Array.from({ length: 10 }, (_, i) =>
+        ingest(actor, "sms", `Rs.10.00 debited from A/c XX1234 on 26-09-26 to VPA shop${i}@ybl. UPI Ref 90000000000${i}`, T0)
+      )
+    );
+    expect(await liveTxns(actor.id)).toHaveLength(10);
+    expect(await balanceOf(account._id)).toBe(100000 - 10 * 1000);
+  });
+
+  it("web routes: session-scoped corrections, provenance with the decrypted text", async () => {
+    const { actor } = await setup();
+    const res = await ingest(actor, "sms", SMS, T0);
+    const id = res.body.transactionId!;
+    sessionUser.current = actor;
+    try {
+      const { POST, GET } = await import("@/app/api/transactions/[id]/corrections/route");
+      const ctx = { params: Promise.resolve({ id }) };
+      const post = await POST(
+        new NextRequest(`http://localhost/api/transactions/${id}/corrections`, {
+          method: "POST",
+          body: JSON.stringify({ changes: { amount: 26000 }, reason: "wrong_amount" }),
+        }),
+        ctx
+      );
+      expect(post.status).toBe(201);
+
+      const got = await (await GET(new NextRequest(`http://localhost/api/transactions/${id}/corrections`), ctx)).json();
+      expect(got.data.captures[0].text).toBe(SMS);
+      expect(got.data.captures[0].source.label).toBe("SMS (source of truth)");
+      expect(got.data.corrections).toHaveLength(1);
+
+      sessionUser.current = (await setup()).actor;
+      const foreign = await GET(new NextRequest(`http://localhost/api/transactions/${id}/corrections`), ctx);
+      expect(foreign.status).toBe(404);
+    } finally {
+      sessionUser.current = null;
+    }
+  });
+
+  it("phone review routes need an Idempotency-Key and replay retries without a second correction", async () => {
+    const { actor } = await setup();
+    const res = await ingest(actor, "sms", SMS, T0);
+    const id = res.body.transactionId!;
+
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const key = "etk_test_phone_key_value";
+    await ApiKey.create({ user: actor.id, label: "phone", keyHash: hashKey(key), lastFour: key.slice(-4) });
+
+    const { POST } = await import("@/app/api/integrations/review/transactions/[id]/corrections/route");
+    const ctx = { params: Promise.resolve({ id }) };
+    const call = (headers: Record<string, string>) =>
+      POST(
+        new NextRequest(`http://localhost/api/integrations/review/transactions/${id}/corrections`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${key}`, ...headers },
+          body: JSON.stringify({ changes: { amount: 27000 }, reason: "wrong_amount" }),
+        }),
+        ctx
+      );
+
+    expect((await call({})).status).toBe(400);
+    expect((await call({ "idempotency-key": "fix-1" })).status).toBe(200);
+    expect((await call({ "idempotency-key": "fix-1" })).status).toBe(200);
+
+    const { default: TransactionCorrection } = await import("@/models/TransactionCorrection");
+    expect(await TransactionCorrection.countDocuments({ transaction: id })).toBe(1);
+    expect((await liveTxns(actor.id))[0].amount).toBe(27000);
   });
 });

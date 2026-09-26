@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useDashboardStats, useRecentTransactions, useAccounts } from "@/features/dashboard/hooks/useDashboard";
+import { type IAccount } from "@/types/models";
 import { BalanceCard } from "./SpendCard";
 import { WalletCard } from "./WalletCard";
 import { CreditCardSummaryWidget } from "@/features/credit-cards/components/CreditCardSummaryWidget";
@@ -23,6 +24,7 @@ export function DashboardClient() {
   const accountBalance = accounts
     ?.filter((account) => account.type !== "credit_card")
     .reduce((sum, account) => sum + account.balance, 0) ?? 0;
+  const primaryAccount = accounts?.[0] as (IAccount & { creditMeta?: { lastFourDigits?: string } }) | undefined;
 
   return (
     <div>
@@ -33,6 +35,7 @@ export function DashboardClient() {
           income={stats?.income ?? 0}
           expense={stats?.expense ?? 0}
           isLoading={statsLoading || acctLoading}
+          cardLastFour={primaryAccount?.creditMeta?.lastFourDigits}
         />
       </div>
 

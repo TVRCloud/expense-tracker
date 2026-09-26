@@ -26,6 +26,8 @@ export const GET = withIntegrationRoute("summary", async ({ req, user, requestId
 
   return integrationOk(
     {
+      // Who this key acts as, so a connected app can show "Connected as <name>".
+      user: { name: user.name },
       period: { month, year },
       accounts,
       stats,

@@ -35,5 +35,8 @@ export function integrationError(
     { status }
   );
   res.headers.set("X-Request-ID", requestId);
+  if (typeof extra?.retryAfterSeconds === "number") {
+    res.headers.set("Retry-After", String(Math.max(1, Math.ceil(extra.retryAfterSeconds))));
+  }
   return res;
 }

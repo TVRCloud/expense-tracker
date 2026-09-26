@@ -1,6 +1,7 @@
 "use client";
 
-import { TrendingDown, TrendingUp } from "lucide-react";
+import Link from "next/link";
+import { TrendingDown, TrendingUp, ArrowDownToLine, ArrowUpFromLine, ArrowLeftRight } from "lucide-react";
 import { useCurrency } from "@/hooks/useCurrency";
 import { Skeleton } from "@/components/_ui/Skeleton";
 
@@ -9,13 +10,14 @@ interface Props {
   income: number;
   expense: number;
   isLoading?: boolean;
+  cardLastFour?: string;
 }
 
 function Shimmer({ w }: { w: number | string }) {
   return <Skeleton inverse className="inline-block align-middle rounded-lg" style={{ width: w, height: 20 }} />;
 }
 
-export function BalanceCard({ accountBalance, income, expense, isLoading }: Props) {
+export function BalanceCard({ accountBalance, income, expense, isLoading, cardLastFour }: Props) {
   const { formatCurrency } = useCurrency();
 
   return (
@@ -23,7 +25,7 @@ export function BalanceCard({ accountBalance, income, expense, isLoading }: Prop
       className="relative overflow-hidden rounded-(--r-lg) text-white p-4.5 min-[390px]:p-6 sm:p-7"
       style={{
         background:
-          "linear-gradient(145deg, var(--hero-from) 0%, var(--hero-mid1) 30%, var(--hero-mid2) 65%, var(--hero-to) 100%)",
+          "linear-gradient(155deg, var(--hero-from) 0%, var(--hero-mid1) 58%, var(--hero-mid2) 88%, var(--hero-to) 115%)",
         boxShadow: "0 20px 48px rgba(13,7,40,.45)",
         minHeight: 200,
       }}
@@ -70,6 +72,21 @@ export function BalanceCard({ accountBalance, income, expense, isLoading }: Prop
           style={{ font: "var(--text-display)", minHeight: 40 }}
         >
           {isLoading ? <Shimmer w={180} /> : formatCurrency(accountBalance)}
+        </div>
+
+        {/* Masked card number — the same account whose balance is shown above,
+            given a physical-card presence instead of stopping at a number. */}
+        <div className="flex items-center justify-between mb-4">
+          <span
+            className="font-mono text-[15px] tracking-[0.25em]"
+            style={{ color: "rgba(255,255,255,.82)" }}
+          >
+            •••• {cardLastFour ?? "••••"}
+          </span>
+          <svg width="34" height="22" viewBox="0 0 34 22" fill="none" aria-hidden style={{ opacity: 0.9 }}>
+            <circle cx="13" cy="11" r="10" fill="rgba(255,255,255,.55)" />
+            <circle cx="21" cy="11" r="10" fill="rgba(212,168,67,.85)" />
+          </svg>
         </div>
 
         {/* Shimmer separator */}
@@ -122,7 +139,39 @@ export function BalanceCard({ accountBalance, income, expense, isLoading }: Prop
             </div>
           </div>
         </div>
+
+        {/* Quick actions */}
+        <div className="flex gap-2.5 mt-5">
+          <QuickAction href="/transactions/add" icon={ArrowDownToLine} label="Income" />
+          <QuickAction href="/transactions/add" icon={ArrowLeftRight} label="Transfer" />
+          <QuickAction href="/transactions/add" icon={ArrowUpFromLine} label="Expense" />
+        </div>
       </div>
     </div>
+  );
+}
+
+function QuickAction({
+  href,
+  icon: Icon,
+  label,
+}: {
+  href: string;
+  icon: typeof ArrowDownToLine;
+  label: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className="flex-1 flex flex-col items-center gap-1.5 py-3 rounded-2xl transition-transform active:scale-[0.96]"
+      style={{
+        background: "rgba(255,255,255,.12)",
+        border: "1px solid rgba(255,255,255,.16)",
+        backdropFilter: "blur(6px)",
+      }}
+    >
+      <Icon size={17} color="#fff" strokeWidth={2.25} />
+      <span style={{ font: "var(--text-micro)", color: "#fff" }}>{label}</span>
+    </Link>
   );
 }

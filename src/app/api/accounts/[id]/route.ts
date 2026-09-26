@@ -23,6 +23,9 @@ const updateSchema = z.object({
   icon: z.string().optional(),
   isArchived: z.boolean().optional(),
   creditMeta: creditMetaSchema.optional(),
+  // Last 4 digits as they appear in bank SMS ("A/c XX1234"), for matching
+  // captured messages to this account.
+  smsLastFour: z.array(z.string().regex(/^\d{4}$/)).max(10).optional(),
 });
 
 type Params = Promise<{ id: string }>;

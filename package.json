@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "api-keys": "tsx scripts/api-keys.ts"
+    "api-keys": "tsx --env-file=.env scripts/api-keys.ts",
+    "migrate:captures": "tsx --env-file=.env scripts/migrate-captures.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",

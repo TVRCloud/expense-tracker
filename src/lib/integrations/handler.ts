@@ -16,7 +16,10 @@ import { integrationError } from "@/lib/integrations/response";
 // through — required so per-route handlers can read path params.
 export function withIntegrationRoute<RouteCtx = unknown>(
   routeName: string,
-  handler: (ctx: { req: NextRequest; user: AuthUser; requestId: string }, routeCtx: RouteCtx) => Promise<Response>
+  handler: (
+    ctx: { req: NextRequest; user: AuthUser; requestId: string; apiKeyId: string },
+    routeCtx: RouteCtx
+  ) => Promise<Response>
 ) {
   return async function routeHandler(req: NextRequest, routeCtx: RouteCtx): Promise<Response> {
     const requestId = resolveRequestId(req);
@@ -34,7 +37,7 @@ export function withIntegrationRoute<RouteCtx = unknown>(
     }
 
     try {
-      const res = await handler({ req, user: auth.user, requestId }, routeCtx as RouteCtx);
+      const res = await handler({ req, user: auth.user, requestId, apiKeyId: auth.apiKeyId }, routeCtx as RouteCtx);
       logger.info(
         { requestId, route: routeName, method: req.method, status: res.status, durationMs: Date.now() - start },
         "n8n integration request handled"

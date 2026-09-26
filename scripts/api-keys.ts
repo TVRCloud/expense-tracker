@@ -1,19 +1,21 @@
 // Mint / list / revoke API keys for /api/integrations/* callers (n8n, the
 // mobile app, etc). Run with: `yarn api-keys <command> [...args]`.
 //
+// Users can also do all of this themselves at Settings > API keys in the web
+// app (src/app/api/me/api-keys). This script is for admin/ops use.
+//
 // The raw key is only ever shown once, at creation time — it is not
 // recoverable afterwards, matching how the collection stores only its hash
 // (src/models/ApiKey.ts). If it's lost, revoke it and create a new one.
 //
 // Usage:
-//   yarn api-keys create --label mobile --email amegh@oppam.me
+//   yarn api-keys create --label mobile --email amegh@oppam.me [--expires-days 90]
 //   yarn api-keys list
 //   yarn api-keys revoke --id <apiKeyId>
-import { randomBytes } from "crypto";
 import connectDB from "../src/lib/mongodb";
 import ApiKey from "../src/models/ApiKey";
 import User from "../src/models/User";
-import { hashKey } from "../src/lib/integrations/auth";
+import { API_KEY_EXPIRY_DAYS, expiryFromDays, generateApiKey } from "../src/lib/integrations/api-keys";
 
 function parseArgs(argv: string[]): Record<string, string> {
   const out: Record<string, string> = {};
@@ -28,7 +30,12 @@ function parseArgs(argv: string[]): Record<string, string> {
 async function create(args: Record<string, string>) {
   const { label, email } = args;
   if (!label || !email) {
-    console.error("Usage: yarn api-keys create --label <name> --email <user-email>");
+    console.error("Usage: yarn api-keys create --label <name> --email <user-email> [--expires-days <7|30|90|365>]");
+    process.exit(1);
+  }
+  const expiresDays = args["expires-days"] ? Number(args["expires-days"]) : null;
+  if (expiresDays !== null && !(API_KEY_EXPIRY_DAYS as readonly number[]).includes(expiresDays)) {
+    console.error(`--expires-days must be one of: ${API_KEY_EXPIRY_DAYS.join(", ")}`);
     process.exit(1);
   }
   const user = await User.findOne({ email: email.toLowerCase(), isActive: true });
@@ -37,13 +44,14 @@ async function create(args: Record<string, string>) {
     process.exit(1);
   }
 
-  const rawKey = randomBytes(32).toString("hex");
-  const keyHash = hashKey(rawKey);
+  const { rawKey, keyHash, lastFour } = generateApiKey();
   const apiKey = await ApiKey.create({
     user: user._id,
     label,
     keyHash,
-    lastFour: rawKey.slice(-4),
+    lastFour,
+    expiresAt: expiryFromDays(expiresDays),
+    createdVia: "cli",
   });
 
   console.log(`\nCreated API key "${label}" for ${email} (id: ${apiKey._id}).`);
@@ -61,7 +69,7 @@ async function list() {
     const user = k.user as unknown as { email?: string } | null;
     console.log(
       `${k._id}  ${k.revoked ? "[revoked]" : "[active] "}  label=${k.label}  user=${user?.email ?? "?"}  ` +
-        `...${k.lastFour}  lastUsed=${k.lastUsedAt ?? "never"}  created=${k.createdAt}`
+        `...${k.lastFour}  expires=${k.expiresAt ?? "never"}  lastUsed=${k.lastUsedAt ?? "never"}  created=${k.createdAt}`
     );
   }
 }

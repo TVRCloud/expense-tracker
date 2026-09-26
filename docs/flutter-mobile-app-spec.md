@@ -1,3 +1,8 @@
+> **Superseded in part.** The app is now built in the separate repo `expense-tracker-mobile`
+> and uploads to `POST /api/integrations/captures` (SMS + bank-app notifications, SMS as
+> source of truth), with a Review tab backed by `/api/integrations/review/*`. Current
+> rules and contracts: [docs/reconcile.md](reconcile.md).
+
 # Flutter Companion App — Spec
 
 Status: draft, for a companion Android app that reads bank SMS/notifications and forwards them
@@ -83,10 +88,13 @@ same as they do for n8n-sourced ones today. No mobile UI for this.
 
 Implemented: `/api/integrations/*` now authenticates against an `api_keys` collection
 (`src/models/ApiKey.ts`), not the old single-env-var scheme. n8n and the mobile app each get
-their own independently-revocable key, minted with:
+their own independently-revocable key. Users create, view and revoke their own keys in the web
+app at **Settings > API keys** (`/settings/api-keys`, backed by `/api/me/api-keys`). Creating
+one needs the account password, lets you pick an expiry (7/30/90/365 days or never), and shows the
+raw key once. Revoked and expired keys stay listed as a record. Admins can still use the CLI:
 
 ```
-yarn api-keys create --label mobile --email <the app's user account email>
+yarn api-keys create --label mobile --email <the app's user account email> [--expires-days 90]
 ```
 
 This prints the raw key once (not recoverable afterwards) — put it straight into the Flutter

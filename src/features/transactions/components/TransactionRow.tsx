@@ -1,4 +1,5 @@
 import { ChevronRight, ArrowLeftRight, Repeat, SplitSquareHorizontal } from "lucide-react";
+import { SourceBadge, ReviewBadge } from "@/features/reconcile/components/SourceBadge";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -94,6 +95,8 @@ export function TransactionRow({ transaction }: Props) {
               Split
             </span>
           )}
+          <SourceBadge source={transaction.source} />
+          <ReviewBadge status={transaction.reviewStatus} />
         </div>
         <div className="text-xs font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>
           {meta}

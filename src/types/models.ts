@@ -51,6 +51,7 @@ export interface IUser {
 
 export interface IAccount {
   _id: string;
+  smsLastFour?: string[];
   user: string;
   name: string;
   type: AccountType;
@@ -118,6 +119,8 @@ export interface ITransaction {
   installmentStatus?: "upcoming" | "paid" | "overdue" | "skipped";
   paidAt?: string;
   splitGroupId?: string;
+  source?: "manual" | "sms" | "notification" | "n8n" | "recurring" | "import";
+  reviewStatus?: "unreviewed" | "confirmed" | "corrected" | "voided" | null;
   isDeleted?: boolean;
   deletedAt?: string;
   deletedBy?: string;

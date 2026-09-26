@@ -37,6 +37,25 @@ const TransactionSchema = new Schema(
     // sharing this id, same pattern as recurringId above (not an embedded
     // array), so every existing $sum/$group aggregation needs no changes.
     splitGroupId: { type: Schema.Types.ObjectId },
+    // Where the values came from. Auto-captured rows (sms / notification /
+    // n8n) start as reviewStatus "unreviewed" and show in the reconcile
+    // inbox. Manual rows have no reviewStatus.
+    source: {
+      type: String,
+      enum: ["manual", "sms", "notification", "n8n", "recurring", "import"],
+      default: "manual",
+    },
+    // The captured message whose values this transaction currently uses.
+    sourceCapture: { type: Schema.Types.ObjectId, ref: "CapturedMessage" },
+    // Every captured message linked to this payment (primary + supporting).
+    captures: [{ type: Schema.Types.ObjectId, ref: "CapturedMessage" }],
+    reviewStatus: {
+      type: String,
+      enum: ["unreviewed", "confirmed", "corrected", "voided", null],
+      default: null,
+    },
+    reviewedAt: { type: Date },
+    reviewedBy: { type: Schema.Types.ObjectId, ref: "User" },
     isDeleted: { type: Boolean, default: false },
     deletedAt: { type: Date },
     deletedBy: { type: Schema.Types.ObjectId, ref: "User" },
@@ -56,5 +75,6 @@ TransactionSchema.index({ user: 1, isDeleted: 1, isRecurring: 1, installmentStat
 TransactionSchema.index({ isDeleted: 1, recurrenceIsOpenEnded: 1, recurrenceCancelled: 1, recurringId: 1 });
 TransactionSchema.index({ user: 1, tags: 1 });
 TransactionSchema.index({ user: 1, isDeleted: 1, splitGroupId: 1 });
+TransactionSchema.index({ user: 1, isDeleted: 1, reviewStatus: 1, date: -1 });
 
 export default models.Transaction || model("Transaction", TransactionSchema, "transactions");
