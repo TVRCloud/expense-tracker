@@ -1,9 +1,4 @@
-import { type ClassValue, clsx } from "clsx";
-import { twMerge } from "tailwind-merge";
-
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
+export { cn } from "cn";
 
 /** Format integer cents to a display string: 484500 → "₹4,845.00" */
 export function formatCurrency(cents: number, currency = "INR"): string {

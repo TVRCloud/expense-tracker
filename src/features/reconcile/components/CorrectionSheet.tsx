@@ -116,8 +116,8 @@ export function CorrectionSheet({ open, onOpenChange, transaction, sourceInfo, r
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full sm:max-w-md overflow-y-auto flex flex-col gap-4">
-        <SheetHeader>
+      <SheetContent side="right" className="w-full sm:max-w-md overflow-y-auto flex flex-col gap-4 p-5">
+        <SheetHeader className="p-0 pr-8">
           <SheetTitle>Fix this transaction</SheetTitle>
           <SheetDescription>Your changes are saved alongside the original values, so nothing is lost.</SheetDescription>
         </SheetHeader>
