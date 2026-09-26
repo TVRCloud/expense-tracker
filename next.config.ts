@@ -1,6 +1,5 @@
 import type { NextConfig } from "next";
 import withSerwistInit from "@serwist/next";
-import { withSentryConfig } from "@sentry/nextjs/config";
 
 const nextConfig: NextConfig = {
   turbopack: {},
@@ -26,12 +25,4 @@ const withSerwist = withSerwistInit({
   maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
 });
 
-export default withSentryConfig(withSerwist(nextConfig), {
-  org: process.env.SENTRY_ORG,
-  project: process.env.SENTRY_PROJECT,
-  authToken: process.env.SENTRY_AUTH_TOKEN,
-  widenClientFileUpload: true,
-  tunnelRoute: "/monitoring",
-  silent: !process.env.CI,
-  telemetry: false,
-});
+export default withSerwist(nextConfig);

@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef, useCallback, useRef, useState, type PointerEvent } from "react";
-import { Button as ButtonRoot, type ButtonProps, buttonVariants } from "@/components/ui/button";
+import { Button as ButtonRoot, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 // Thin wrapper so feature code never imports `@/components/ui/button`
@@ -14,7 +14,9 @@ import { cn } from "@/lib/utils";
 // one-shot ripple spawned at the pointer's down position — purely visual,
 // `asChild` still forwards straight to Slot with no ripple wrapper markup.
 export { buttonVariants };
-export type { ButtonProps };
+// The vendored button no longer exports a props type (shadcn's React 19
+// version is a plain function component), so derive it here.
+export type ButtonProps = React.ComponentProps<typeof ButtonRoot>;
 
 let rippleId = 0;
 

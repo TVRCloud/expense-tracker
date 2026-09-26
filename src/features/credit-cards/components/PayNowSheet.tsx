@@ -92,7 +92,7 @@ export function PayNowSheet({ statement, account, open, onOpenChange }: PayNowSh
         className="max-h-[90dvh] overflow-y-auto rounded-t-(--r-lg) p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] md:inset-x-auto md:inset-y-auto md:left-1/2 md:top-1/2 md:bottom-auto md:-translate-x-1/2 md:-translate-y-1/2 md:w-100 md:rounded-(--r-lg) md:border"
         style={{ background: "var(--card)", backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)", borderColor: "var(--line)", color: "var(--ink)" }}
       >
-        <SheetHeader className="text-left space-y-0.5">
+        <SheetHeader className="text-left space-y-0.5 p-0">
           <SheetTitle className="text-sm font-extrabold" style={{ color: "var(--ink)" }}>Pay Statement</SheetTitle>
           <SheetDescription className="text-[11px] font-medium" style={{ color: "var(--ink-3)" }}>
             {format(new Date(statement.periodEnd), "MMMM yyyy")} · {account.name}
