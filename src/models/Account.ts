@@ -27,6 +27,10 @@ const AccountSchema = new Schema(
       cardholderName: { type: String, maxlength: 60 },
       minPaymentPct: { type: Number },
     },
+    // Last 4 digits of the bank account / card numbers as they appear in bank
+    // SMS ("A/c XX1234"), used to match a captured message to this account.
+    // Credit cards also match on creditMeta.lastFourDigits.
+    smsLastFour: [{ type: String, match: /^\d{4}$/ }],
     deletedAt: { type: Date },
     deletedBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
@@ -35,5 +39,7 @@ const AccountSchema = new Schema(
 
 AccountSchema.index({ user: 1, isArchived: 1, createdAt: -1 });
 AccountSchema.index({ user: 1, type: 1 });
+AccountSchema.index({ user: 1, smsLastFour: 1 });
+AccountSchema.index({ user: 1, "creditMeta.lastFourDigits": 1 });
 
 export default models.Account || model("Account", AccountSchema, "accounts");

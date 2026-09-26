@@ -49,7 +49,10 @@ type LedgerBlockRecord = {
 };
 
 const GENESIS_HASH = "0".repeat(64);
-const MAX_APPEND_RETRIES = 5;
+// Concurrent appends for one user race on the unique {user, sequence} index;
+// the loser retries with a short random backoff so a burst (e.g. the phone
+// flushing its outbox after being offline) doesn't exhaust the retries.
+const MAX_APPEND_RETRIES = 25;
 const BACKFILL_VERSION = 1;
 
 export const LEDGER_SCOPES: LedgerScope[] = [
@@ -189,7 +192,10 @@ export async function appendLedgerBlock(input: AppendLedgerBlockInput) {
         });
         if (existing) return existing;
       }
-      if (isDuplicateKeyError(error) && attempt < MAX_APPEND_RETRIES - 1) continue;
+      if (isDuplicateKeyError(error) && attempt < MAX_APPEND_RETRIES - 1) {
+        await new Promise((resolve) => setTimeout(resolve, Math.random() * 10 * (attempt + 1)));
+        continue;
+      }
       throw error;
     }
   }

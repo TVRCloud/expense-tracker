@@ -30,6 +30,10 @@ function notificationHref(n: INotification): string | null {
       return "/loans";
     case "goal_reached":
       return "/goals";
+    case "system":
+      // Captured bank messages that need review (src/lib/capture/ingest.ts),
+      // plus older "Message needs review" rows from the old SMS queue.
+      return meta.captureId || meta.smsReviewItemId ? "/reconcile" : null;
     default:
       return null;
   }

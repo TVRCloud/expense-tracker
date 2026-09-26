@@ -6,7 +6,7 @@ import User from "@/models/User";
 import logger from "@/lib/logger";
 import type { AuthUser } from "@/lib/auth-guard";
 import { integrationError } from "@/lib/integrations/response";
-import { checkAuthFailureRateLimit } from "@/lib/integrations/rate-limit";
+import { checkAuthFailureRateLimit, clientIp, recordAuthFailure } from "@/lib/integrations/rate-limit";
 
 type VerifyResult = { user: AuthUser; apiKeyId: string } | { errorResponse: ReturnType<typeof integrationError> };
 
@@ -24,7 +24,8 @@ type VerifyResult = { user: AuthUser; apiKeyId: string } | { errorResponse: Retu
 //    response timing, so a DB-lookup comparison (unlike comparing two known
 //    short secrets) doesn't need an additional timingSafeEqual step.
 //  - Auth failures are rate-limited by client IP before the DB lookup even
-//    runs, to slow brute-force attempts against a key.
+//    runs, to slow brute-force attempts against a key. Only failures count
+//    toward the limit; successful requests don't.
 export async function verifyN8nAuth(req: NextRequest, requestId: string): Promise<VerifyResult> {
   const authFailLimit = await checkAuthFailureRateLimit(req);
   if (!authFailLimit.allowed) {
@@ -39,12 +40,14 @@ export async function verifyN8nAuth(req: NextRequest, requestId: string): Promis
   const header = req.headers.get("authorization");
   if (!header || !header.startsWith("Bearer ")) {
     logger.warn({ requestId }, "integration auth failed: missing or malformed Authorization header");
+    await recordAuthFailure(req);
     return { errorResponse: integrationError("UNAUTHORIZED", "Missing or malformed Authorization header", requestId) };
   }
 
   const suppliedKey = header.slice("Bearer ".length).trim();
   if (!suppliedKey) {
     logger.warn({ requestId }, "integration auth failed: empty API key");
+    await recordAuthFailure(req);
     return { errorResponse: integrationError("UNAUTHORIZED", "Invalid API key", requestId) };
   }
 
@@ -53,10 +56,20 @@ export async function verifyN8nAuth(req: NextRequest, requestId: string): Promis
   const apiKey = await ApiKey.findOne({ keyHash, revoked: false }).lean<{
     _id: { toString(): string };
     user: { toString(): string };
+    expiresAt?: Date | null;
   }>();
 
   if (!apiKey) {
     logger.warn({ requestId }, "integration auth failed: invalid or revoked API key");
+    await recordAuthFailure(req);
+    return { errorResponse: integrationError("UNAUTHORIZED", "Invalid API key", requestId) };
+  }
+
+  // Same generic message as an unknown key — an expired key's holder gets no
+  // extra signal beyond "this key doesn't work".
+  if (apiKey.expiresAt && apiKey.expiresAt.getTime() <= Date.now()) {
+    logger.warn({ requestId, apiKeyId: apiKey._id.toString() }, "integration auth failed: expired API key");
+    await recordAuthFailure(req);
     return { errorResponse: integrationError("UNAUTHORIZED", "Invalid API key", requestId) };
   }
 
@@ -72,10 +85,11 @@ export async function verifyN8nAuth(req: NextRequest, requestId: string): Promis
     // Never reveal whether the key's owning account exists — same generic
     // message as an invalid key.
     logger.warn({ requestId }, "integration auth failed: key's user not found or inactive");
+    await recordAuthFailure(req);
     return { errorResponse: integrationError("UNAUTHORIZED", "Invalid API key", requestId) };
   }
 
-  await ApiKey.updateOne({ _id: apiKey._id }, { $set: { lastUsedAt: new Date() } });
+  await ApiKey.updateOne({ _id: apiKey._id }, { $set: { lastUsedAt: new Date(), lastUsedIp: clientIp(req) } });
 
   logger.info({ requestId, userId: user._id.toString(), apiKeyId: apiKey._id.toString() }, "integration auth succeeded");
   return {

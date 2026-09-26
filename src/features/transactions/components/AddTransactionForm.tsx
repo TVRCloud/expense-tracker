@@ -63,7 +63,7 @@ function computeEndDate(start: Date, frequency: string, interval: number, count:
   }
 }
 
-const CATEGORIES: { icon: string; label: string; value: string }[] = [
+export const CATEGORIES: { icon: string; label: string; value: string }[] = [
   { icon: "🛒", label: "Groceries", value: "groceries" },
   { icon: "🚗", label: "Transport", value: "transport" },
   { icon: "🏠", label: "Rent", value: "rent" },

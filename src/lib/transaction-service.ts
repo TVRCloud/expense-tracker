@@ -87,9 +87,20 @@ export const transactionCreateSchema = z
     }
   });
 
+// Provenance for auto-captured transactions. Deliberately not part of
+// transactionCreateSchema, so browser and integration callers can't set it
+// from a request body; only server code (src/lib/capture/*) passes it.
+export type TransactionProvenance = {
+  source: "sms" | "notification" | "n8n" | "manual";
+  sourceCapture?: string;
+  captures?: string[];
+  reviewStatus?: "unreviewed" | "confirmed" | null;
+};
+
 export type CreateTransactionInput = z.infer<typeof transactionCreateSchema> & {
   userId: string;
   actor: AuthUser;
+  provenance?: TransactionProvenance;
 };
 
 export type CreateTransactionResult =
@@ -133,7 +144,7 @@ function hasRepaymentTag(tags?: unknown[]) {
   return (tags ?? []).some((tag) => typeof tag === "string" && tag.startsWith("repayment:"));
 }
 
-async function getLinkedTransactionBlocker(userId: string, transactionId: string, tags?: unknown[]) {
+export async function getLinkedTransactionBlocker(userId: string, transactionId: string, tags?: unknown[]) {
   const linkedStatement = await CreditStatement.findOne({
     user: userId,
     paymentTransactionId: transactionId,
@@ -154,7 +165,7 @@ async function invalidateStatsCache(userId: string, date: Date) {
   }
 }
 
-async function invalidateStatsCacheMany(userId: string, dates: Date[]) {
+export async function invalidateStatsCacheMany(userId: string, dates: Date[]) {
   if (!redis) return;
   const keys = new Set<string>();
   for (const d of dates) {
@@ -168,10 +179,10 @@ async function invalidateStatsCacheMany(userId: string, dates: Date[]) {
 }
 
 export async function createTransaction(input: CreateTransactionInput): Promise<CreateTransactionResult> {
-  const { userId, actor, accountId, transferToId, ...rest } = input;
+  const { userId, actor, accountId, transferToId, provenance, ...rest } = input;
   await connectDB();
 
-  const account = await Account.findOne({ _id: accountId, user: userId });
+  const account = await Account.findOne({ _id: accountId, user: userId, isArchived: { $ne: true } });
   if (!account) {
     throw new TransactionServiceError("ACCOUNT_NOT_FOUND", "Account not found");
   }
@@ -190,15 +201,20 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   if (rest.splits) {
     const splitGroupId = new Types.ObjectId();
     const accountBefore = account.toObject();
-    account.balance -= rest.amount;
-    await account.save();
+    // Atomic $inc (not read-modify-write + save) so concurrent captures on
+    // the same account can't overwrite each other's balance change.
+    const accountAfter = await Account.findOneAndUpdate(
+      { _id: account._id, user: userId },
+      { $inc: { balance: -rest.amount } },
+      { new: true }
+    );
     await appendLedgerBlock({
       userId,
       scope: "account",
       entityId: account._id.toString(),
       action: "update",
       before: accountBefore,
-      after: account,
+      after: accountAfter,
       actor,
     });
 
@@ -288,15 +304,18 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   // ── Single transaction (non-recurring or recurring count = 1) ───────────
   const accountBefore = account.toObject();
   const balanceDelta = rest.type === "income" ? rest.amount : -rest.amount;
-  account.balance += balanceDelta;
-  await account.save();
+  const accountAfter = await Account.findOneAndUpdate(
+    { _id: account._id, user: userId },
+    { $inc: { balance: balanceDelta } },
+    { new: true }
+  );
   await appendLedgerBlock({
     userId,
     scope: "account",
     entityId: account._id.toString(),
     action: "update",
     before: accountBefore,
-    after: account,
+    after: accountAfter,
     actor,
   });
 
@@ -322,6 +341,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
 
   const transaction = await Transaction.create({
     ...rest,
+    ...(provenance ?? {}),
     account: accountId,
     user: userId,
     date: startDate,

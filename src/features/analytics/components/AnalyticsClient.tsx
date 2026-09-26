@@ -4,7 +4,7 @@ import { useState, useMemo, useEffect } from "react";
 import { ChevronLeft, ChevronRight, TrendingUp } from "lucide-react";
 import { format, subMonths, getDaysInMonth } from "date-fns";
 import { AnalyticsBarChart } from "./AnalyticsBarChart";
-import { CategoryDonutChart } from "./CategoryDonutChart";
+import { CategoryRingGrid } from "./CategoryRingGrid";
 import { NetWorthTrendChart } from "./NetWorthTrendChart";
 import { IOCard } from "./IOCard";
 import { HistoryRow } from "./HistoryRow";
@@ -167,7 +167,7 @@ export function AnalyticsClient() {
         {/* Expenses tab — category breakdown */}
         {tab === "expense" && activeStats && activeStats.byCategory.length > 0 && (
           <div className="flex flex-col gap-5">
-            <CategoryDonutChart byCategory={activeStats.byCategory} total={activeStats.expense} />
+            <CategoryRingGrid byCategory={activeStats.byCategory} total={activeStats.expense} />
             <div className="flex flex-col gap-3">
               {activeStats.byCategory.map(({ category, total }) => {
                 const pct = activeStats.expense > 0 ? (total / activeStats.expense) * 100 : 0;

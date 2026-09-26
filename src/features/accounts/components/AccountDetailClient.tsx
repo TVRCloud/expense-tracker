@@ -30,7 +30,7 @@ export function AccountDetailClient({ id }: Props) {
   const { formatCurrency } = useCurrency();
   const { confirm, dialog } = useConfirm();
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ name: "", color: "" });
+  const [form, setForm] = useState({ name: "", color: "", smsLastFour: "" });
 
   const { data: account, isLoading, isError } = useQuery<IAccount>({
     queryKey: ["accounts", id],
@@ -47,6 +47,7 @@ export function AccountDetailClient({ id }: Props) {
     setForm({
       name: account.name ?? "",
       color: account.color ?? "",
+      smsLastFour: (account.smsLastFour ?? []).join(", "),
     });
   }, [account]);
 
@@ -55,6 +56,7 @@ export function AccountDetailClient({ id }: Props) {
       apiClient.patch(`/accounts/${id}`, {
         name: form.name,
         color: form.color || undefined,
+        smsLastFour: [...new Set(form.smsLastFour.split(/[\s,]+/).filter((d) => /^\d{4}$/.test(d)))],
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["accounts"] });
@@ -173,6 +175,19 @@ export function AccountDetailClient({ id }: Props) {
             <div className="flex flex-col gap-1.5">
               <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Color</Label>
               <Input value={form.color} onChange={(e) => setForm((f) => ({ ...f, color: e.target.value }))} placeholder="#6B46F5" />
+            </div>
+            <div className="flex flex-col gap-1.5 md:col-span-2">
+              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>SMS match digits</Label>
+              <Input
+                value={form.smsLastFour}
+                inputMode="numeric"
+                onChange={(e) => setForm((f) => ({ ...f, smsLastFour: e.target.value.replace(/[^\d,\s]/g, "") }))}
+                placeholder="e.g. 1234 (from “A/c XX1234”)"
+                aria-describedby="sms-digits-hint"
+              />
+              <span id="sms-digits-hint" className="text-xs" style={{ color: "var(--ink-3)" }}>
+                Last 4 digits your bank shows in SMS. Captured payments with these digits go to this account.
+              </span>
             </div>
             <Button
               type="button"

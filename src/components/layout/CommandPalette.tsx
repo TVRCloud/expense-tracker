@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   LayoutDashboard,
   ArrowLeftRight,
+  ClipboardCheck,
   BarChart2,
   Wallet,
   Plus,
@@ -29,6 +30,7 @@ import { useAccounts } from "@/features/dashboard/hooks/useDashboard";
 const NAV_COMMANDS = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/transactions", label: "Transactions", icon: ArrowLeftRight },
+  { href: "/reconcile", label: "Reconcile", icon: ClipboardCheck },
   { href: "/analytics", label: "Analytics", icon: BarChart2 },
   { href: "/accounts", label: "Accounts", icon: Wallet },
   { href: "/budgets", label: "Budgets", icon: PiggyBank },

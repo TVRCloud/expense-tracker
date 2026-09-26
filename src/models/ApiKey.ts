@@ -21,7 +21,15 @@ const ApiKeySchema = new Schema(
     lastFour: { type: String, required: true },
     revoked: { type: Boolean, default: false },
     revokedAt: { type: Date },
+    // Optional hard expiry — null means the key never expires. Checked on
+    // every request in src/lib/integrations/auth.ts. Expired and revoked keys
+    // are never deleted, so the settings page keeps a full record of them.
+    expiresAt: { type: Date, default: null },
     lastUsedAt: { type: Date },
+    lastUsedIp: { type: String },
+    // Where the key was minted: the settings page ("web") or the
+    // api-keys script ("cli").
+    createdVia: { type: String, enum: ["web", "cli"], default: "cli" },
   },
   { timestamps: true }
 );

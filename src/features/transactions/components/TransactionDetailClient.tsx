@@ -18,6 +18,7 @@ import { Input } from "@/components/_ui/Input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { DatePickerField } from "@/components/shared/DatePickerField";
+import { ProvenanceCard } from "@/features/reconcile/components/ProvenanceCard";
 
 interface Props {
   id: string;
@@ -318,6 +319,7 @@ export function TransactionDetailClient({ id }: Props) {
           </div>
         )}
       </Card>
+      <ProvenanceCard transactionId={id} />
       {dialog}
     </div>
   );

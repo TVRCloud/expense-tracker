@@ -19,6 +19,7 @@ import {
   Settings,
   Shield,
   KeyRound,
+  ClipboardCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Switch } from "@/components/_ui/Switch";
@@ -31,6 +32,7 @@ const NAV_GROUPS = [
     items: [
       { href: "/dashboard", label: "Home", icon: LayoutDashboard },
       { href: "/transactions", label: "Transactions", icon: ArrowLeftRight },
+      { href: "/reconcile", label: "Reconcile", icon: ClipboardCheck },
     ],
   },
   {
