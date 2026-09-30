@@ -42,7 +42,7 @@ export function useRecentTransactions(limit = 6) {
     queryKey: ["transactions", "recent", limit],
     queryFn: async () => {
       const res = await apiClient.get<{ data: ITransaction[] }>(
-        `/transactions?limit=${limit}&skip=0&hideFuture=true`
+        `/transactions?limit=${limit}&skip=0&hideFuture=true&total=false`
       );
       return res.data.data;
     },

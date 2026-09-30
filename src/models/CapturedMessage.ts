@@ -87,5 +87,8 @@ CapturedMessageSchema.index({ user: 1, status: 1, createdAt: -1 });
 CapturedMessageSchema.index({ user: 1, "eventKey.amount": 1, "eventKey.type": 1, "eventKey.at": -1 });
 CapturedMessageSchema.index({ outcome: 1, receivedAt: 1 });
 CapturedMessageSchema.index({ user: 1, transaction: 1 });
+// Held notifications per user (review "waiting for SMS" count and lazy
+// promotion of the stale ones).
+CapturedMessageSchema.index({ user: 1, outcome: 1, createdAt: 1 });
 
 export default models.CapturedMessage || model("CapturedMessage", CapturedMessageSchema, "captured_messages");

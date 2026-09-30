@@ -41,28 +41,38 @@ export async function getMonthlyStats(userId: string, year: number, month: numbe
     $nor: [{ recurringId: { $exists: true }, installmentStatus: { $nin: ["paid"] } }],
   };
 
-  const [agg, catAgg] = await Promise.all([
-    Transaction.aggregate([
-      { $match: { user: userObjectId, isDeleted: { $ne: true }, ...paidInstallmentsOnly } },
-      { $addFields: activityDateAddFields() },
-      { $match: { activityDate: { $gte: startDate, $lt: endDate } } },
-      {
-        $group: {
-          _id: "$type",
-          total: { $sum: "$amount" },
-        },
+  // The activity date is paidAt for paid installments, else date, so a row
+  // can only be in this month if one of the two is. Narrowing on those
+  // (both indexed) first means scanning this month's rows instead of the
+  // user's whole history; the exact test still runs after $addFields.
+  // One pass computes both the type totals and the category breakdown.
+  const inRange = { $gte: startDate, $lt: endDate };
+  const [result] = await Transaction.aggregate([
+    {
+      $match: {
+        user: userObjectId,
+        isDeleted: { $ne: true },
+        ...paidInstallmentsOnly,
+        $or: [{ date: inRange }, { paidAt: inRange }],
       },
-    ]),
-    Transaction.aggregate([
-      { $match: { user: userObjectId, isDeleted: { $ne: true }, type: "expense", ...paidInstallmentsOnly } },
-      { $addFields: activityDateAddFields() },
-      { $match: { activityDate: { $gte: startDate, $lt: endDate } } },
-      { $group: { _id: "$category", total: { $sum: "$amount" } } },
-      { $sort: { total: -1 } },
-      { $limit: 10 },
-      { $project: { _id: 0, category: "$_id", total: 1 } },
-    ]),
+    },
+    { $addFields: activityDateAddFields() },
+    { $match: { activityDate: inRange } },
+    {
+      $facet: {
+        byType: [{ $group: { _id: "$type", total: { $sum: "$amount" } } }],
+        byCategory: [
+          { $match: { type: "expense" } },
+          { $group: { _id: "$category", total: { $sum: "$amount" } } },
+          { $sort: { total: -1 } },
+          { $limit: 10 },
+          { $project: { _id: 0, category: "$_id", total: 1 } },
+        ],
+      },
+    },
   ]);
+  const agg: Array<{ _id: string; total: number }> = result?.byType ?? [];
+  const catAgg: Array<{ category: string; total: number }> = result?.byCategory ?? [];
 
   const income = agg.find((a) => a._id === "income")?.total ?? 0;
   const expense = agg.find((a) => a._id === "expense")?.total ?? 0;

@@ -5,6 +5,8 @@ import Session from "@/models/Session";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
+import { forgetUserSessions } from "@/lib/perf/session-cache";
+import { forgetUserKeys } from "@/lib/integrations/auth";
 
 const updateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
@@ -78,6 +80,8 @@ export async function DELETE() {
     // logins) — same mechanism admin-forced logout already relies on, see
     // the jwt() callback in auth-options.ts checking Session.isActive.
     await Session.updateMany({ user: user.id, isActive: true }, { $set: { isActive: false } });
+    forgetUserSessions(user.id);
+    forgetUserKeys(user.id);
 
     return NextResponse.json({ data: { message: "Account deleted" } });
   } catch (err) {

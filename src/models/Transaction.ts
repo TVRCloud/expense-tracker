@@ -76,5 +76,9 @@ TransactionSchema.index({ isDeleted: 1, recurrenceIsOpenEnded: 1, recurrenceCanc
 TransactionSchema.index({ user: 1, tags: 1 });
 TransactionSchema.index({ user: 1, isDeleted: 1, splitGroupId: 1 });
 TransactionSchema.index({ user: 1, isDeleted: 1, reviewStatus: 1, date: -1 });
+// Paid recurring installments count on their paidAt (see
+// transaction-activity.ts): lets the monthly stats and the recent list read
+// them by paidAt from an index instead of scanning every row.
+TransactionSchema.index({ user: 1, isDeleted: 1, paidAt: -1 });
 
 export default models.Transaction || model("Transaction", TransactionSchema, "transactions");
