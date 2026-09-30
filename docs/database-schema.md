@@ -203,6 +203,8 @@ Every bank message received from the phone (SMS / notification) or n8n. Nothing 
 | `parse` | Object | `{kind, parserId, version, confidence, fields}` |
 | `eventKey` | Object | `{account, type, amount, ref, at, hasTime}` for cross-channel matching |
 | `sourcePriority` | Number | sms 3, n8n 2, notification 1 |
+| `accountMatch` | String | `digits` or `bank`: how the account was picked (see docs/reconcile.md) |
+| `suggestedAccount` | ObjectId | ref: Account, likely account for an unmatched message |
 | `role` | String | `primary\|supporting` |
 | `outcome` | String | `processing\|created\|queued\|pending_sms\|duplicate\|ignored` |
 | `reason` | String | why queued/ignored |
