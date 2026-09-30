@@ -63,7 +63,17 @@ export async function DELETE() {
     if (errorResponse) return errorResponse;
 
     await connectDB();
-    await User.findByIdAndUpdate(user.id, { $set: { isActive: false, deletedAt: new Date() } });
+    const existing = await User.findById(user.id).select("email").lean<{ email: string }>();
+    if (!existing) return NextResponse.json({ error: "User not found" }, { status: 404 });
+    // Tombstone the email so the same address can register a fresh account.
+    await User.findByIdAndUpdate(user.id, {
+      $set: {
+        isActive: false,
+        deletedAt: new Date(),
+        deletedEmail: existing.email,
+        email: `deleted+${user.id}@deleted.invalid`,
+      },
+    });
     // Also terminate every active session immediately (not just future
     // logins) — same mechanism admin-forced logout already relies on, see
     // the jwt() callback in auth-options.ts checking Session.isActive.
