@@ -25,8 +25,14 @@ export async function POST(req: NextRequest) {
     const { name, email, password } = parsed.data;
     await connectDB();
 
-    const existing = await User.findOne({ email: email.toLowerCase() }).lean();
-    if (existing) {
+    const existing = await User.findOne({ email: email.toLowerCase() }).lean<{ _id: unknown; deletedAt?: Date }>();
+    if (existing?.deletedAt) {
+      // Account self-deleted before email tombstoning existed; release the address.
+      await User.updateOne(
+        { _id: existing._id },
+        { $set: { deletedEmail: email.toLowerCase(), email: `deleted+${String(existing._id)}@deleted.invalid` } }
+      );
+    } else if (existing) {
       return NextResponse.json({ error: "Email already registered" }, { status: 409 });
     }
 

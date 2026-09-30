@@ -10,6 +10,9 @@ const UserSchema = new Schema(
     currency: { type: String, default: "INR" },
     isActive: { type: Boolean, default: true },
     deletedAt: { type: Date },
+    // Original address of a self-deleted account; `email` itself is rewritten
+    // to a tombstone so the unique index frees the address for re-registration.
+    deletedEmail: { type: String, lowercase: true },
     preferences: {
       theme: { type: String, enum: ["light", "dark", "system"], default: "system" },
       glassIntensity: { type: String, enum: ["subtle", "full"], default: "subtle" },
