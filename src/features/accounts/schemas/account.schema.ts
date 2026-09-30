@@ -23,6 +23,9 @@ export const accountCreateSchema = z.object({
   color: z.string().optional(),
   icon: z.string().optional(),
   creditMeta: creditMetaSchema.optional(),
+  // Last 4 digits the bank shows in SMS ("A/c XX1234"): captured payments
+  // with these digits go to this account.
+  smsLastFour: z.array(z.string().regex(/^\d{4}$/, "Use 4 digits, like 1234")).max(10).optional(),
 });
 
 export type AccountCreateInput = z.infer<typeof accountCreateSchema>;

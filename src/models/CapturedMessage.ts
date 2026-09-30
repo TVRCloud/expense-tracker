@@ -50,6 +50,11 @@ const CapturedMessageSchema = new Schema(
       hasTime: { type: Boolean },
     },
     sourcePriority: { type: Number, required: true },
+    // How the account was picked (src/lib/capture/account-match.ts):
+    // saved digits, or bank name + instrument (confirming teaches digits).
+    accountMatch: { type: String, enum: ["digits", "bank"] },
+    // Likely account to preselect when the message is queued unmatched.
+    suggestedAccount: { type: Schema.Types.ObjectId, ref: "Account" },
     role: { type: String, enum: ["primary", "supporting"], default: "primary" },
     outcome: {
       type: String,

@@ -1,6 +1,5 @@
 import { Types } from "mongoose";
 import connectDB from "@/lib/mongodb";
-import Account from "@/models/Account";
 import CapturedMessage from "@/models/CapturedMessage";
 import Loan from "@/models/Loan";
 import Notification from "@/models/Notification";
@@ -21,6 +20,7 @@ import {
   type MoneyParse,
 } from "@/lib/capture/parsers";
 import { istDayKey } from "@/lib/capture/parsers/dates";
+import { matchAccountForMessage } from "@/lib/capture/account-match";
 import {
   MATCH_WINDOW_MS,
   NOTIFICATION_HOLD_MS,
@@ -103,20 +103,6 @@ const id = (v: { toString(): string } | null | undefined) => (v ? v.toString() :
 
 function isDuplicateKey(err: unknown) {
   return typeof err === "object" && err !== null && (err as { code?: number }).code === 11000;
-}
-
-async function matchAccount(userId: string, last4?: string): Promise<string | null> {
-  if (!last4) return null;
-  const accounts = await Account.find({
-    user: userId,
-    isArchived: { $ne: true },
-    $or: [{ smsLastFour: last4 }, { "creditMeta.lastFourDigits": last4 }],
-  })
-    .select("_id")
-    .limit(2)
-    .lean<{ _id: Types.ObjectId }[]>();
-  // Two accounts with the same last four digits: don't guess.
-  return accounts.length === 1 ? accounts[0]._id.toString() : null;
 }
 
 const QUEUE_COPY: Record<string, string> = {
@@ -493,7 +479,15 @@ export async function ingestCapture(input: IngestInput): Promise<IngestResult> {
 
   const parse = parseCapture(input.text, input.receivedAt);
   const money = parse.kind === "money" ? parse : null;
-  const accountId = money ? await matchAccount(input.user.id, money.last4) : null;
+  const match = money
+    ? await matchAccountForMessage(input.user.id, {
+        last4: money.last4,
+        bankName: money.bankName,
+        instrument: money.instrument,
+        sender: input.sender,
+      })
+    : null;
+  const accountId = match?.accountId ?? null;
 
   let capture: CaptureDoc;
   try {
@@ -512,6 +506,8 @@ export async function ingestCapture(input: IngestInput): Promise<IngestResult> {
         ? { account: accountId, type: money.type, amount: money.amountMinor, ref: money.ref, ...eventAt(money, input.receivedAt) }
         : undefined,
       sourcePriority: SOURCE_PRIORITY[input.channel],
+      accountMatch: match?.matchedBy ?? undefined,
+      suggestedAccount: match?.suggestedAccountId ?? undefined,
       outcome: "processing",
     });
     capture = doc.toObject() as CaptureDoc;

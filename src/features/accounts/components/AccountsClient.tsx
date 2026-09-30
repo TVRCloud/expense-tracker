@@ -176,6 +176,7 @@ export function AccountsClient() {
     setShowAdd(true);
   };
   const [creditMeta, setCreditMeta] = useState<Partial<ICreditMeta>>({});
+  const [smsDigits, setSmsDigits] = useState("");
 
   // Build per-card EMI commitment map: cardId → total remaining cents
   const emiByCard = (seriesData?.data ?? []).reduce<Record<string, number>>((map, sr) => {
@@ -206,6 +207,8 @@ export function AccountsClient() {
       if (form.type === "credit_card" && Object.keys(creditMeta).length > 0) {
         payload.creditMeta = creditMeta;
       }
+      const digits = smsDigits.split(/[,\s]+/).filter(Boolean);
+      if (digits.length) payload.smsLastFour = digits;
       // Same zod schema the server validates with — one shared source of truth.
       const parsed = accountCreateSchema.safeParse(payload);
       if (!parsed.success) {
@@ -218,6 +221,7 @@ export function AccountsClient() {
       setShowAdd(false);
       setForm({ name: "", type: "bank", currency });
       setCreditMeta({});
+      setSmsDigits("");
       toast.success("Account created");
     },
     onError: (err: Error) => toast.error(err.message),
@@ -379,6 +383,25 @@ export function AccountsClient() {
             <CreditCardForm value={creditMeta} onChange={setCreditMeta} />
           )}
 
+          {(form.type === "bank" || form.type === "savings") && (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="new-account-sms-digits" className="text-sm font-medium" style={{ color: "var(--ink-2)" }}>
+                SMS match digits <span style={{ color: "var(--ink-3)" }}>(optional)</span>
+              </Label>
+              <Input
+                id="new-account-sms-digits"
+                value={smsDigits}
+                inputMode="numeric"
+                onChange={(e) => setSmsDigits(e.target.value.replace(/[^\d,\s]/g, ""))}
+                placeholder="e.g. 6390"
+                aria-describedby="new-account-sms-digits-hint"
+              />
+              <span id="new-account-sms-digits-hint" className="text-xs" style={{ color: "var(--ink-3)" }}>
+                The last 4 digits your bank shows in SMS, like “A/C *6390”. Payments with them go to this account.
+              </span>
+            </div>
+          )}
+
           <div className="flex gap-3">
             <Button
               onClick={() => createAccount.mutate()}
@@ -390,7 +413,7 @@ export function AccountsClient() {
             <Button
               type="button"
               variant="secondary"
-              onClick={() => { setShowAdd(false); setCreditMeta({}); }}
+              onClick={() => { setShowAdd(false); setCreditMeta({}); setSmsDigits(""); }}
               className="h-auto px-5 py-2.5 rounded-(--r-sm) font-bold"
             >
               Cancel

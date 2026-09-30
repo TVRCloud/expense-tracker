@@ -45,6 +45,7 @@ type RawCapture = {
   transaction?: Types.ObjectId;
   duplicateOf?: Types.ObjectId;
   eventKey?: { account?: Types.ObjectId | null };
+  suggestedAccount?: Types.ObjectId | null;
   createdAt: Date;
 };
 
@@ -66,6 +67,8 @@ export function serializeCapture(c: RawCapture) {
     sender: c.sender ?? null,
     packageName: c.packageName ?? null,
     receivedAt: c.receivedAt,
+    // Likely account for an unmatched message, to preselect when resolving.
+    suggestedAccountId: c.suggestedAccount ? c.suggestedAccount.toString() : null,
     text: safeDecrypt(c.rawText),
     alsoSeenIn: c.alsoSeenIn ?? [],
     parsed: {

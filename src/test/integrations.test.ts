@@ -1294,3 +1294,67 @@ describe("integration auth cache and GET /api/integrations/home", () => {
     spy.mockRestore();
   });
 });
+
+describe("account matching by bank when no digits are saved", () => {
+  const SMS_6390 =
+    "Sent Rs.10.00 From HDFC Bank A/C *6390 To Amegh T T S On 30/09/26 Ref 700150778879 Not You? Call 18002586161/SMS BLOCK UPI to 7308080808";
+  const at = new Date("2026-09-30T06:00:00Z");
+
+  async function user() {
+    const { default: User } = await import("@/models/User");
+    const u = await User.create({ name: "M", email: `m${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    return { id: u._id.toString(), name: u.name, email: u.email, role: "user" };
+  }
+  async function account(userId: string, name: string, type: string, extra: Record<string, unknown> = {}) {
+    const { default: Account } = await import("@/models/Account");
+    return Account.create({ user: userId, name, type, balance: 100000, currency: "INR", ...extra });
+  }
+  async function ingest(actor: { id: string; name: string; email: string; role: string }, text: string, receivedAt = at) {
+    const { ingestCapture } = await import("@/lib/capture/ingest");
+    return ingestCapture({ user: actor, channel: "sms", text, receivedAt, sender: "VM-HDFCBK" });
+  }
+
+  it("uses the only HDFC bank account (not the HDFC card) and learns its digits on confirm", async () => {
+    const actor = await user();
+    const bank = await account(actor.id, "HDFC Bank", "bank");
+    await account(actor.id, "HDFC Credit Card", "credit_card", { creditMeta: { lastFourDigits: "4321" } });
+
+    const res = await ingest(actor, SMS_6390);
+    expect(res.body.status).toBe("created");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const txn = await Transaction.findOne({ user: actor.id }).lean<{ _id: unknown; account: unknown; reviewStatus: string }>();
+    expect(String(txn!.account)).toBe(bank._id.toString());
+    expect(txn!.reviewStatus).toBe("unreviewed");
+
+    const { confirmTransaction } = await import("@/lib/reconcile/correct");
+    await confirmTransaction(actor.id, String(txn!._id), actor);
+    const { default: Account } = await import("@/models/Account");
+    expect((await Account.findById(bank._id).lean<{ smsLastFour: string[] }>())!.smsLastFour).toEqual(["6390"]);
+
+    // The next message matches by digits.
+    const next = await ingest(actor, SMS_6390.replace("Rs.10.00", "Rs.20.00").replace("700150778879", "700150778880"), new Date(at.getTime() + 3_600_000));
+    expect(next.body.status).toBe("created");
+    const { default: CapturedMessage } = await import("@/models/CapturedMessage");
+    const last = await CapturedMessage.findOne({ user: actor.id }).sort({ createdAt: -1 }).lean<{ accountMatch: string }>();
+    expect(last!.accountMatch).toBe("digits");
+  });
+
+  it("doesn't guess between two HDFC bank accounts, but suggests one", async () => {
+    const actor = await user();
+    await account(actor.id, "HDFC Savings", "savings");
+    await account(actor.id, "HDFC Salary", "bank");
+    const res = await ingest(actor, SMS_6390);
+    expect(res.body.status).toBe("queued");
+    expect(res.body.reason).toBe("no_matching_account");
+    const { getReviewInbox } = await import("@/lib/reconcile/inbox");
+    const inbox = await getReviewInbox(actor.id);
+    expect(inbox.couldntMatch[0].suggestedAccountId).toBeTruthy();
+  });
+
+  it("doesn't use an HDFC account that already has other digits saved (a different account)", async () => {
+    const actor = await user();
+    await account(actor.id, "HDFC Bank", "bank", { smsLastFour: ["1234"] });
+    const res = await ingest(actor, SMS_6390);
+    expect(res.body.status).toBe("queued");
+  });
+});
