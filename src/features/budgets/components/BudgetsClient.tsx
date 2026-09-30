@@ -219,8 +219,8 @@ export function BudgetsClient() {
                 {editing && (
                   <div className="grid grid-cols-2 gap-3 mb-4">
                     <div className="flex flex-col gap-1.5">
-                      <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Limit</Label>
-                      <Input
+                      <Label htmlFor="budgets-client-limit-1" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Limit</Label>
+                      <Input id="budgets-client-limit-1"
                         type="number"
                         min="0"
                         step="0.01"
@@ -229,7 +229,7 @@ export function BudgetsClient() {
                       />
                     </div>
                     <div className="flex flex-col gap-1.5">
-                      <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Alert at {editAlert}%</Label>
+                      <Label className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Alert at {editAlert}%</Label>
                       <input
                         type="range"
                         min={50}
@@ -284,7 +284,7 @@ export function BudgetsClient() {
           <div className="text-sm font-bold" style={{ color: "var(--ink)" }}>New Budget</div>
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
-              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Category</Label>
+              <Label className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Category</Label>
               <Select value={addCategory} onValueChange={setAddCategory}>
                 <SelectTrigger className="capitalize">
                   <SelectValue />
@@ -295,8 +295,9 @@ export function BudgetsClient() {
               </Select>
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Limit ($)</Label>
+              <Label htmlFor="budget-limit" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Monthly limit</Label>
               <Input
+                id="budget-limit"
                 type="number"
                 min="0"
                 step="0.01"
@@ -307,7 +308,7 @@ export function BudgetsClient() {
             </div>
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Alert at {addAlert}%</Label>
+            <Label className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Alert at {addAlert}%</Label>
             <input
               type="range"
               min={50}

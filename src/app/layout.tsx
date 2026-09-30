@@ -5,8 +5,10 @@ import { ThemeProvider } from "@/components/providers/ThemeProvider";
 import { GlassIntensityProvider } from "@/components/providers/GlassIntensityProvider";
 import { SessionProvider } from "@/components/providers/SessionProvider";
 import { QueryProvider } from "@/components/providers/QueryProvider";
+import { MotionProvider } from "@/components/providers/MotionProvider";
 import { SocketProvider } from "@/components/providers/SocketProvider";
 import { Toaster } from "sonner";
+import { HydrationMarker } from "@/components/shared/hydration";
 
 const plusJakarta = Plus_Jakarta_Sans({
   subsets: ["latin"],
@@ -46,14 +48,19 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${plusJakarta.variable} ${jetbrainsMono.variable}`} suppressHydrationWarning>
       <body suppressHydrationWarning>
+        <HydrationMarker />
         <SessionProvider>
           <ThemeProvider>
             <GlassIntensityProvider>
               <QueryProvider>
-                <SocketProvider>
-                  {children}
-                </SocketProvider>
-                <Toaster position="top-right" richColors closeButton />
+                <MotionProvider>
+                  <SocketProvider>
+                    {children}
+                  </SocketProvider>
+                </MotionProvider>
+                {/* Bottom-centre, above the mobile tab bar: top-right sat under
+                    the sticky mobile header. */}
+                <Toaster position="bottom-center" offset={{ bottom: 96 }} mobileOffset={{ bottom: 96 }} richColors closeButton />
               </QueryProvider>
             </GlassIntensityProvider>
           </ThemeProvider>

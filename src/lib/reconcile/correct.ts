@@ -14,6 +14,7 @@ import {
   invalidateStatsCacheMany,
 } from "@/lib/transaction-service";
 import logger from "@/lib/logger";
+import { learnDigitsFromCapture } from "@/lib/capture/account-match";
 
 // Reconcile: confirm an auto-captured transaction, or fix it in place and
 // keep a permanent TransactionCorrection record of what changed. Shared by
@@ -286,6 +287,11 @@ export async function correctTransaction(input: CorrectInput) {
     { userId: input.userId, transactionId: input.transactionId, reason: input.reason, via: input.via, changedFields },
     "Transaction corrected"
   );
+  // Moving it to the account the user chose teaches that account the
+  // message's digits (unless another account already uses them).
+  if (input.changes.accountId) {
+    await learnDigitsFromCapture(input.userId, updated as { account?: Types.ObjectId; sourceCapture?: Types.ObjectId }, { force: true });
+  }
   return { transaction: updated, correction };
 }
 
@@ -346,7 +352,9 @@ export async function confirmTransaction(userId: string, transactionId: string, 
     { _id: transactionId, user: userId, isDeleted: { $ne: true } },
     { $set: { reviewStatus: "confirmed", reviewedAt: new Date(), reviewedBy: userId } },
     { new: true }
-  ).lean();
+  ).lean<{ account?: Types.ObjectId; sourceCapture?: Types.ObjectId }>();
   await appendLedgerBlock({ userId, scope: "transaction", entityId: transactionId, action: "update", before, after, actor });
+  // Confirming an account found by bank name teaches its digits.
+  if (after) await learnDigitsFromCapture(userId, after);
   return after;
 }

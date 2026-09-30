@@ -77,10 +77,10 @@ export function ForgotPasswordForm() {
 
           <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
             <div>
-              <Label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
+              <Label htmlFor="forgot-password-form-email-1" className="block text-[13px] font-medium mb-2" style={{ color: "var(--ink-2)" }}>
                 Email
               </Label>
-              <Input
+              <Input id="forgot-password-form-email-1"
                 type="email"
                 autoComplete="email"
                 placeholder="you@example.com"

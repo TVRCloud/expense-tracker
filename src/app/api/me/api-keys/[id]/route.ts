@@ -4,6 +4,7 @@ import connectDB from "@/lib/mongodb";
 import ApiKey from "@/models/ApiKey";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
+import { forgetApiKey } from "@/lib/integrations/auth";
 
 type Params = Promise<{ id: string }>;
 
@@ -32,6 +33,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Params }) 
       return NextResponse.json({ error: "API key not found or already revoked" }, { status: 404 });
     }
 
+    forgetApiKey(id);
     logger.info({ userId: user.id, apiKeyId: id }, "API key revoked");
     return NextResponse.json({ data: { message: "API key revoked" } });
   } catch (err) {

@@ -7,6 +7,7 @@ import { hashPassword, verifyPassword } from "@/utils/password";
 import logger from "@/lib/logger";
 import { z } from "zod";
 import { revokeAllLogUnlocks } from "@/lib/log-security";
+import { forgetUserSessions } from "@/lib/perf/session-cache";
 
 const schema = z.object({
   currentPassword: z.string().min(1),
@@ -43,6 +44,7 @@ export async function PATCH(req: NextRequest) {
       { user: user.id, isActive: true, jti: { $ne: user.jti ?? null } },
       { $set: { isActive: false } }
     );
+    forgetUserSessions(user.id);
 
     logger.info({ userId: user.id }, "Password changed");
     return NextResponse.json({ data: { message: "Password updated" } });

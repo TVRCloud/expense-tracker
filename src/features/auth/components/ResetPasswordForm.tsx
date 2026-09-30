@@ -78,7 +78,7 @@ export function ResetPasswordForm({ token }: Props) {
 
           <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
             <div>
-              <Label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
+              <Label className="block text-[13px] font-medium mb-2" style={{ color: "var(--ink-2)" }}>
                 New password
               </Label>
               <div className="relative">
@@ -110,7 +110,7 @@ export function ResetPasswordForm({ token }: Props) {
             </div>
 
             <div>
-              <Label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
+              <Label className="block text-[13px] font-medium mb-2" style={{ color: "var(--ink-2)" }}>
                 Confirm password
               </Label>
               <Input

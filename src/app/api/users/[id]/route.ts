@@ -5,6 +5,8 @@ import Session from "@/models/Session";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
+import { forgetUserSessions } from "@/lib/perf/session-cache";
+import { forgetUserKeys } from "@/lib/integrations/auth";
 
 const updateSchema = z.object({
   role: z.enum(["user", "admin"]).optional(),
@@ -66,6 +68,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
     const activeChanged = parsed.data.isActive !== undefined && parsed.data.isActive !== before.isActive;
     if (roleChanged || activeChanged) {
       await Session.updateMany({ user: id, isActive: true }, { $set: { isActive: false } });
+      forgetUserSessions(id);
+      forgetUserKeys(id);
     }
 
     logger.info({ adminId: user.id, targetId: id, changes: parsed.data }, "Admin updated user");

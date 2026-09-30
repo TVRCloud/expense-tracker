@@ -44,6 +44,13 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
+  // Per-process caches outlive the per-test DB wipe; start each test cold.
+  const { resetAuthCacheForTests } = await import("@/lib/integrations/auth");
+  const { resetRateLimitWindowsForTests } = await import("@/lib/integrations/rate-limit");
+  const { forgetAllSessionsForTests } = await import("@/lib/perf/session-cache");
+  resetAuthCacheForTests();
+  resetRateLimitWindowsForTests();
+  forgetAllSessionsForTests();
   const collections = mongoose.connection.collections;
   await Promise.all(Object.values(collections).map((c) => c.deleteMany({})));
 });
@@ -1125,5 +1132,229 @@ describe("capture ingest and reconcile", () => {
     const { default: TransactionCorrection } = await import("@/models/TransactionCorrection");
     expect(await TransactionCorrection.countDocuments({ transaction: id })).toBe(1);
     expect((await liveTxns(actor.id))[0].amount).toBe(27000);
+  });
+});
+
+// ── home/dashboard read paths (src/lib/transaction-query.ts, stats-service.ts, budget-service.ts) ──
+
+describe("home read paths", () => {
+  async function seed() {
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const user = await User.create({ name: "Home", email: `h${Date.now()}${Math.random()}@x.com`, password: "hash" });
+    const account = await Account.create({ user: user._id, name: "HDFC", type: "bank", balance: 0, currency: "INR" });
+    const now = new Date();
+    const day = (n: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate() - n, 12);
+    const base = { user: user._id, account: account._id, currency: "INR" };
+    const rid = new mongoose.Types.ObjectId();
+    await Transaction.create([
+      { ...base, type: "expense", amount: 100, category: "food", date: day(1), description: "a" },
+      { ...base, type: "income", amount: 5000, category: "salary", date: day(3), description: "b" },
+      { ...base, type: "expense", amount: 200, category: "food", date: day(5), description: "c" },
+      // Future-dated: hidden.
+      { ...base, type: "expense", amount: 999, category: "food", date: day(-3), description: "future" },
+      // Paid installment due long ago but paid yesterday: listed by paidAt.
+      { ...base, type: "expense", amount: 300, category: "emi", date: day(40), description: "emi-paid", recurringId: rid, installmentIndex: 1, installmentStatus: "paid", paidAt: day(0) },
+      // Paid installment without paidAt: listed by its date.
+      { ...base, type: "expense", amount: 310, category: "emi", date: day(2), description: "emi-nopaidat", recurringId: rid, installmentIndex: 2, installmentStatus: "paid" },
+      // Unpaid installment: hidden.
+      { ...base, type: "expense", amount: 320, category: "emi", date: day(4), description: "emi-unpaid", recurringId: rid, installmentIndex: 3, installmentStatus: "upcoming" },
+      { ...base, type: "expense", amount: 50, category: "food", date: day(6), description: "deleted", isDeleted: true },
+    ]);
+    return { userId: user._id.toString() };
+  }
+
+  it("lists newest activity first with the fast path, matching the full aggregation", async () => {
+    const { listTransactions } = await import("@/lib/transaction-query");
+    const { userId } = await seed();
+    const full = await listTransactions({ userId, skip: 0, limit: 50, hideFuture: true });
+    expect(full.data.map((t: { description: string }) => t.description)).toEqual(["emi-paid", "a", "emi-nopaidat", "b", "c"]);
+    expect(full.total).toBe(5);
+    const page = await listTransactions({ userId, skip: 1, limit: 2, hideFuture: true });
+    expect(page.data.map((t: { description: string }) => t.description)).toEqual(["a", "emi-nopaidat"]);
+    expect(page.total).toBe(5);
+    const noTotal = await listTransactions({ userId, skip: 0, limit: 3, hideFuture: true, includeTotal: false });
+    expect(noTotal.data).toHaveLength(3);
+    expect(noTotal.total).toBeNull();
+  });
+
+  it("counts a paid installment in the month it was paid", async () => {
+    const { getMonthlyStats } = await import("@/lib/stats-service");
+    const { userId } = await seed();
+    const now = new Date();
+    const stats = await getMonthlyStats(userId, now.getFullYear(), now.getMonth() + 1);
+    // Only rows whose activity date falls this month (fixture days are near today).
+    const { default: Transaction } = await import("@/models/Transaction");
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const rows = await Transaction.find({ user: userId, isDeleted: { $ne: true } }).lean<
+      Array<{ type: string; amount: number; date: Date; paidAt?: Date; installmentStatus?: string; recurringId?: unknown }>
+    >();
+    const expected = rows
+      .filter((t) => !(t.recurringId && t.installmentStatus !== "paid"))
+      .map((t) => ({ ...t, at: t.installmentStatus === "paid" && t.paidAt ? t.paidAt : t.date }))
+      .filter((t) => t.at >= start && t.at < end);
+    const sum = (type: string) => expected.filter((t) => t.type === type).reduce((a, t) => a + t.amount, 0);
+    expect(stats.income).toBe(sum("income"));
+    expect(stats.expense).toBe(sum("expense"));
+  });
+
+  it("computes budget spend and rollover in one pass", async () => {
+    const { listBudgetsWithSpend } = await import("@/lib/budget-service");
+    const { default: Budget } = await import("@/models/Budget");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const user = await User.create({ name: "B", email: `b${Date.now()}${Math.random()}@x.com`, password: "hash" });
+    const account = await Account.create({ user: user._id, name: "W", type: "cash", balance: 0, currency: "INR" });
+    const y = 2026;
+    const base = { user: user._id, account: account._id, currency: "INR", type: "expense" };
+    await Transaction.create([
+      { ...base, amount: 400, category: "food", date: new Date(y, 5, 10) }, // June
+      { ...base, amount: 100, category: "food", date: new Date(y, 4, 20) }, // May
+      { ...base, amount: 700, category: "fuel", date: new Date(y, 5, 2) },
+      { ...base, amount: 900, category: "food", date: new Date(y, 6, 1) }, // July: outside
+    ]);
+    await Budget.create([
+      { user: user._id, category: "food", month: 6, year: y, limitAmount: 1000, rollover: true },
+      { user: user._id, category: "food", month: 5, year: y, limitAmount: 500 },
+      { user: user._id, category: "fuel", month: 6, year: y, limitAmount: 600 },
+    ]);
+    const rows = await listBudgetsWithSpend(user._id.toString(), y, 6);
+    const food = rows.find((b) => b.category === "food")!;
+    const fuel = rows.find((b) => b.category === "fuel")!;
+    expect(food.spent).toBe(400);
+    expect(food.effectiveLimit).toBe(1000 + (500 - 100));
+    expect(fuel.spent).toBe(700);
+    expect(fuel.effectiveLimit).toBe(600);
+  });
+});
+
+describe("integration auth cache and GET /api/integrations/home", () => {
+  const KEY = "test-home-api-key-value";
+
+  async function setup() {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { default: Account } = await import("@/models/Account");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Home User", email: `hu${Date.now()}@x.com`, password: "hash", isActive: true });
+    const key = await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    const account = await Account.create({ user: user._id, name: "HDFC Bank", type: "bank", balance: 12345, currency: "INR" });
+    const now = new Date();
+    await Transaction.create(
+      [1, 2, 3, 4].map((n) => ({
+        user: user._id,
+        account: account._id,
+        type: "expense",
+        amount: n * 100,
+        currency: "INR",
+        category: "food",
+        description: `t${n}`,
+        date: new Date(now.getTime() - n * 60_000),
+      }))
+    );
+    return { user, key };
+  }
+
+  const req = () => new NextRequest("http://localhost/api/integrations/home", { headers: { authorization: `Bearer ${KEY}` } });
+
+  it("returns accounts, stats, the latest 3 and review counts in one response", async () => {
+    await setup();
+    const { GET } = await import("@/app/api/integrations/home/route");
+    const res = await GET(req(), undefined as never);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.user.name).toBe("Home User");
+    expect(body.data.accounts).toHaveLength(1);
+    expect(body.data.latest.map((t: { description: string }) => t.description)).toEqual(["t1", "t2", "t3"]);
+    expect(body.data.stats.expense).toBeGreaterThan(0);
+    expect(body.data.reviewCounts).toEqual({ needsReview: 0, couldntMatch: 0, waitingForSms: 0 });
+  });
+
+  it("serves a repeat request from the auth cache, and a revoke on this instance takes effect at once", async () => {
+    const { key } = await setup();
+    const { verifyN8nAuth, forgetApiKey } = await import("@/lib/integrations/auth");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const first = await verifyN8nAuth(req(), "r1");
+    expect("user" in first).toBe(true);
+
+    const spy = vi.spyOn(ApiKey, "findOne");
+    const second = await verifyN8nAuth(req(), "r2");
+    expect("user" in second).toBe(true);
+    expect(spy).not.toHaveBeenCalled();
+
+    await ApiKey.updateOne({ _id: key._id }, { $set: { revoked: true } });
+    forgetApiKey(key._id.toString());
+    const third = await verifyN8nAuth(req(), "r3");
+    expect("errorResponse" in third).toBe(true);
+    spy.mockRestore();
+  });
+});
+
+describe("account matching by bank when no digits are saved", () => {
+  const SMS_6390 =
+    "Sent Rs.10.00 From HDFC Bank A/C *6390 To Amegh T T S On 30/09/26 Ref 700150778879 Not You? Call 18002586161/SMS BLOCK UPI to 7308080808";
+  const at = new Date("2026-09-30T06:00:00Z");
+
+  async function user() {
+    const { default: User } = await import("@/models/User");
+    const u = await User.create({ name: "M", email: `m${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    return { id: u._id.toString(), name: u.name, email: u.email, role: "user" };
+  }
+  async function account(userId: string, name: string, type: string, extra: Record<string, unknown> = {}) {
+    const { default: Account } = await import("@/models/Account");
+    return Account.create({ user: userId, name, type, balance: 100000, currency: "INR", ...extra });
+  }
+  async function ingest(actor: { id: string; name: string; email: string; role: string }, text: string, receivedAt = at) {
+    const { ingestCapture } = await import("@/lib/capture/ingest");
+    return ingestCapture({ user: actor, channel: "sms", text, receivedAt, sender: "VM-HDFCBK" });
+  }
+
+  it("uses the only HDFC bank account (not the HDFC card) and learns its digits on confirm", async () => {
+    const actor = await user();
+    const bank = await account(actor.id, "HDFC Bank", "bank");
+    await account(actor.id, "HDFC Credit Card", "credit_card", { creditMeta: { lastFourDigits: "4321" } });
+
+    const res = await ingest(actor, SMS_6390);
+    expect(res.body.status).toBe("created");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const txn = await Transaction.findOne({ user: actor.id }).lean<{ _id: unknown; account: unknown; reviewStatus: string }>();
+    expect(String(txn!.account)).toBe(bank._id.toString());
+    expect(txn!.reviewStatus).toBe("unreviewed");
+
+    const { confirmTransaction } = await import("@/lib/reconcile/correct");
+    await confirmTransaction(actor.id, String(txn!._id), actor);
+    const { default: Account } = await import("@/models/Account");
+    expect((await Account.findById(bank._id).lean<{ smsLastFour: string[] }>())!.smsLastFour).toEqual(["6390"]);
+
+    // The next message matches by digits.
+    const next = await ingest(actor, SMS_6390.replace("Rs.10.00", "Rs.20.00").replace("700150778879", "700150778880"), new Date(at.getTime() + 3_600_000));
+    expect(next.body.status).toBe("created");
+    const { default: CapturedMessage } = await import("@/models/CapturedMessage");
+    const last = await CapturedMessage.findOne({ user: actor.id }).sort({ createdAt: -1 }).lean<{ accountMatch: string }>();
+    expect(last!.accountMatch).toBe("digits");
+  });
+
+  it("doesn't guess between two HDFC bank accounts, but suggests one", async () => {
+    const actor = await user();
+    await account(actor.id, "HDFC Savings", "savings");
+    await account(actor.id, "HDFC Salary", "bank");
+    const res = await ingest(actor, SMS_6390);
+    expect(res.body.status).toBe("queued");
+    expect(res.body.reason).toBe("no_matching_account");
+    const { getReviewInbox } = await import("@/lib/reconcile/inbox");
+    const inbox = await getReviewInbox(actor.id);
+    expect(inbox.couldntMatch[0].suggestedAccountId).toBeTruthy();
+  });
+
+  it("doesn't use an HDFC account that already has other digits saved (a different account)", async () => {
+    const actor = await user();
+    await account(actor.id, "HDFC Bank", "bank", { smsLastFour: ["1234"] });
+    const res = await ingest(actor, SMS_6390);
+    expect(res.body.status).toBe("queued");
   });
 });

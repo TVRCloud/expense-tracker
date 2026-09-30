@@ -22,6 +22,8 @@ export const GET = withIntegrationRoute("transactions", async ({ req, user, requ
   const dateTo = searchParams.get("dateTo");
   const hideFuture = searchParams.get("hideFuture") === "true";
   const includeUnpaidRecurring = searchParams.get("includeUnpaidRecurring") === "true";
+  // total=false skips the count (latest-N lists on home screens don't page).
+  const includeTotal = searchParams.get("total") !== "false";
 
   if (!isValidObjectId(accountId)) {
     return integrationError("VALIDATION_ERROR", "Invalid account", requestId);
@@ -38,6 +40,7 @@ export const GET = withIntegrationRoute("transactions", async ({ req, user, requ
     dateFrom,
     dateTo,
     hideFuture,
+    includeTotal,
     includeUnpaidRecurring,
   });
 

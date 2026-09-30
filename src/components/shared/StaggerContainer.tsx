@@ -2,6 +2,7 @@
 
 import { motion } from "motion/react";
 import { ReactNode, CSSProperties } from "react";
+import { hasHydrated } from "@/components/shared/hydration";
 
 interface StaggerContainerProps {
   children: ReactNode;
@@ -15,12 +16,13 @@ export function StaggerContainer({
   children,
   className = "",
   style,
-  staggerDelay = 0.06,
+  staggerDelay = 0.04,
   delayChildren = 0.02,
 }: StaggerContainerProps) {
   return (
     <motion.div
-      initial="hidden"
+      // Already in the server HTML: show at once, no stagger (hydration.tsx).
+      initial={hasHydrated() ? "hidden" : false}
       animate="show"
       exit="hidden"
       variants={{
@@ -55,10 +57,11 @@ export function StaggerItem({ children, className = "", style }: StaggerItemProp
           opacity: 1,
           y: 0,
           scale: 1,
+          // Critically damped (2·√350 ≈ 37): items settle, they don't bounce.
           transition: {
             type: "spring",
             stiffness: 350,
-            damping: 25,
+            damping: 38,
           },
         },
       }}

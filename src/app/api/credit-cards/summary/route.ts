@@ -8,6 +8,7 @@ import { getCardCycleBalances } from "@/lib/credit-balance";
 import { checkCreditDueNotifications } from "@/lib/credit-notifications";
 import { type ICreditMeta } from "@/types/models";
 import { redis } from "@/lib/redis";
+import { runInBackground } from "@/lib/perf/background";
 
 function cacheKey(userId: string) {
   return `credit-summary:${userId}`;
@@ -88,14 +89,14 @@ export async function GET() {
           config
         );
 
-        // Fire-and-forget notification check (non-blocking) — reuses the
-        // balances just computed above instead of redoing the same queries.
-        void checkCreditDueNotifications(
-          user.id,
-          String(card._id),
-          card.name,
-          meta as ICreditMeta,
-          { currentCycle: cycle, unbilledUsage, pastCycles: payableStatements }
+        // Notification check after the response — reuses the balances just
+        // computed above instead of redoing the same queries.
+        runInBackground("credit-due-notifications", () =>
+          checkCreditDueNotifications(user.id, String(card._id), card.name, meta as ICreditMeta, {
+            currentCycle: cycle,
+            unbilledUsage,
+            pastCycles: payableStatements,
+          })
         );
 
         const unpaidStatements = payableStatements

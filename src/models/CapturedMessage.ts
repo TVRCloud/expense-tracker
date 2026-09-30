@@ -50,6 +50,11 @@ const CapturedMessageSchema = new Schema(
       hasTime: { type: Boolean },
     },
     sourcePriority: { type: Number, required: true },
+    // How the account was picked (src/lib/capture/account-match.ts):
+    // saved digits, or bank name + instrument (confirming teaches digits).
+    accountMatch: { type: String, enum: ["digits", "bank"] },
+    // Likely account to preselect when the message is queued unmatched.
+    suggestedAccount: { type: Schema.Types.ObjectId, ref: "Account" },
     role: { type: String, enum: ["primary", "supporting"], default: "primary" },
     outcome: {
       type: String,
@@ -87,5 +92,8 @@ CapturedMessageSchema.index({ user: 1, status: 1, createdAt: -1 });
 CapturedMessageSchema.index({ user: 1, "eventKey.amount": 1, "eventKey.type": 1, "eventKey.at": -1 });
 CapturedMessageSchema.index({ outcome: 1, receivedAt: 1 });
 CapturedMessageSchema.index({ user: 1, transaction: 1 });
+// Held notifications per user (review "waiting for SMS" count and lazy
+// promotion of the stale ones).
+CapturedMessageSchema.index({ user: 1, outcome: 1, createdAt: 1 });
 
 export default models.CapturedMessage || model("CapturedMessage", CapturedMessageSchema, "captured_messages");

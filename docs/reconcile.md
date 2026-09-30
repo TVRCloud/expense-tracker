@@ -46,6 +46,8 @@ Every message is stored in `captured_messages`. The raw text is encrypted with `
 **Account matching:**
 - The message's last 4 digits (`A/c XX1234`, `card ending 1234`) are compared against `Account.smsLastFour` (set on the account page as "SMS match digits") and `creditMeta.lastFourDigits`.
 - If two accounts share the same digits, nothing is guessed.
+- No account has the digits: the bank (from the text, e.g. "HDFC Bank", or the sender code, e.g. `VM-HDFCBK`) and the instrument ("A/C" means a bank or savings account, "Card" a credit card) narrow the user's accounts by name and type. If exactly one account of that bank and kind is left and it has no other digits saved, it is used (`accountMatch: "bank"` on the capture). Otherwise the message is queued as `no_matching_account` with a `suggestedAccountId` to preselect. See `src/lib/capture/account-match.ts`.
+- Confirming a bank-matched transaction, or correcting its account, saves the digits on that account (unless another account already uses them), so the next message matches by digits. Digits can also be entered when creating a bank or savings account.
 
 ## Corrections
 

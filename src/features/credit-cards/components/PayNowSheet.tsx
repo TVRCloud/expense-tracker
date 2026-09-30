@@ -161,9 +161,9 @@ export function PayNowSheet({ statement, account, open, onOpenChange }: PayNowSh
 
         {/* Source account */}
         <div className="flex flex-col gap-1.5 mb-4">
-          <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Pay From</Label>
+          <Label htmlFor="pay-now-sheet-pay-from-1" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Pay From</Label>
           <Select value={sourceAccountId} onValueChange={setSourceAccountId} disabled={sourceAccounts.length === 0}>
-            <SelectTrigger>
+            <SelectTrigger id="pay-now-sheet-pay-from-1">
               <SelectValue placeholder="No eligible accounts" />
             </SelectTrigger>
             <SelectContent>

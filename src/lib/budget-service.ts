@@ -12,18 +12,25 @@ export { budgetCreateSchema };
 // Shared budget-listing + spend calculation, used by GET /api/budgets
 // (browser) and GET /api/integrations/budgets (n8n) so both report the same
 // numbers from one aggregation pipeline.
-async function categorySpend(userObjectId: Types.ObjectId, category: string, year: number, month: number) {
-  const spent = await Transaction.aggregate([
+// Spend per category per month for the given categories and months, in one
+// aggregation (it used to be one query per budget, plus two more per
+// rollover budget). Key: `${year}-${month}:${category}`.
+async function spendByCategoryMonth(
+  userObjectId: Types.ObjectId,
+  categories: string[],
+  months: Array<{ year: number; month: number }>
+) {
+  const out = new Map<string, number>();
+  if (categories.length === 0 || months.length === 0) return out;
+  const ranges = months.map(({ year, month }) => ({ $gte: new Date(year, month - 1, 1), $lt: new Date(year, month, 1) }));
+  const rows = await Transaction.aggregate<{ _id: { b: number; category: string }; total: number }>([
     {
       $match: {
         user: userObjectId,
         isDeleted: { $ne: true },
-        category,
+        category: { $in: categories },
         type: "expense",
-        date: {
-          $gte: new Date(year, month - 1, 1),
-          $lt: new Date(year, month, 1),
-        },
+        $or: ranges.map((date) => ({ date })),
         $nor: [
           {
             recurringId: { $exists: true },
@@ -32,43 +39,76 @@ async function categorySpend(userObjectId: Types.ObjectId, category: string, yea
         ],
       },
     },
-    { $group: { _id: null, total: { $sum: "$amount" } } },
+    // Month boundaries are local (new Date(y, m, 1) above), so bucket by the
+    // same ranges rather than by $month, which would use UTC.
+    {
+      $addFields: {
+        bucket: {
+          $switch: {
+            branches: ranges.map((r, i) => ({
+              case: { $and: [{ $gte: ["$date", r.$gte] }, { $lt: ["$date", r.$lt] }] },
+              then: i,
+            })),
+            default: -1,
+          },
+        },
+      },
+    },
+    { $group: { _id: { b: "$bucket", category: "$category" }, total: { $sum: "$amount" } } },
   ]);
-  return spent[0]?.total ?? 0;
+  for (const r of rows) {
+    const m = months[r._id.b];
+    if (m) out.set(`${m.year}-${m.month}:${r._id.category}`, r.total);
+  }
+  return out;
 }
 
 export async function listBudgetsWithSpend(userId: string, year: number, month: number) {
   await connectDB();
   const userObjectId = new Types.ObjectId(userId);
   const budgets = await Budget.find({ user: userId, month, year, isDeleted: { $ne: true } }).lean();
+  if (budgets.length === 0) return [];
 
-  return Promise.all(
-    budgets.map(async (b) => {
-      const spent = await categorySpend(userObjectId, b.category, year, month);
+  const prevDate = new Date(year, month - 2, 1);
+  const prevMonth = prevDate.getMonth() + 1;
+  const prevYear = prevDate.getFullYear();
+  const rolloverCategories = budgets.filter((b) => b.rollover).map((b) => b.category);
 
-      // `limitAmount` stays exactly what the user set — the source of
-      // truth. Rollover computes a separate `effectiveLimit` that adds the
-      // previous month's unspent amount for the same category, so a
-      // rollover-enabled budget's carried-forward headroom is always
-      // derived, never baked into the stored limit.
-      let effectiveLimit = b.limitAmount;
-      if (b.rollover) {
-        const prevDate = new Date(year, month - 2, 1);
-        const prevMonth = prevDate.getMonth() + 1;
-        const prevYear = prevDate.getFullYear();
-        const prevBudget = await Budget.findOne({
-          user: userId, category: b.category, month: prevMonth, year: prevYear, isDeleted: { $ne: true },
-        }).lean();
-        if (prevBudget) {
-          const prevSpent = await categorySpend(userObjectId, b.category, prevYear, prevMonth);
-          const unspent = Math.max(prevBudget.limitAmount - prevSpent, 0);
-          effectiveLimit = b.limitAmount + unspent;
-        }
-      }
+  const [prevBudgets, spend] = await Promise.all([
+    rolloverCategories.length
+      ? Budget.find({
+          user: userId,
+          category: { $in: rolloverCategories },
+          month: prevMonth,
+          year: prevYear,
+          isDeleted: { $ne: true },
+        }).lean()
+      : Promise.resolve([]),
+    spendByCategoryMonth(
+      userObjectId,
+      budgets.map((b) => b.category),
+      rolloverCategories.length ? [{ year, month }, { year: prevYear, month: prevMonth }] : [{ year, month }]
+    ),
+  ]);
+  const prevByCategory = new Map(prevBudgets.map((b) => [b.category, b]));
 
-      return { ...b, spent, effectiveLimit };
-    })
-  );
+  return budgets.map((b) => {
+    const spent = spend.get(`${year}-${month}:${b.category}`) ?? 0;
+
+    // `limitAmount` stays exactly what the user set — the source of
+    // truth. Rollover computes a separate `effectiveLimit` that adds the
+    // previous month's unspent amount for the same category, so a
+    // rollover-enabled budget's carried-forward headroom is always
+    // derived, never baked into the stored limit.
+    let effectiveLimit = b.limitAmount;
+    const prevBudget = b.rollover ? prevByCategory.get(b.category) : undefined;
+    if (prevBudget) {
+      const prevSpent = spend.get(`${prevYear}-${prevMonth}:${b.category}`) ?? 0;
+      effectiveLimit = b.limitAmount + Math.max(prevBudget.limitAmount - prevSpent, 0);
+    }
+
+    return { ...b, spent, effectiveLimit };
+  });
 }
 
 export type CreateBudgetInput = z.infer<typeof budgetCreateSchema> & { userId: string; actor: AuthUser };

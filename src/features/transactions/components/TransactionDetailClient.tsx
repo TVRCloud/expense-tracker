@@ -262,16 +262,16 @@ export function TransactionDetailClient({ id }: Props) {
           <div className="p-5 flex flex-col gap-4">
             <div className="grid md:grid-cols-2 gap-3">
               <div className="flex flex-col gap-1.5 md:col-span-2">
-                <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Description</Label>
-                <Input value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
+                <Label htmlFor="transaction-detail-client-description-1" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Description</Label>
+                <Input id="transaction-detail-client-description-1" value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Category</Label>
-                <Input value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))} />
+                <Label htmlFor="transaction-detail-client-category-2" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Category</Label>
+                <Input id="transaction-detail-client-category-2" value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))} />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Subcategory</Label>
-                <Input value={form.subcategory} onChange={(e) => setForm((f) => ({ ...f, subcategory: e.target.value }))} />
+                <Label htmlFor="transaction-detail-client-subcategory-3" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Subcategory</Label>
+                <Input id="transaction-detail-client-subcategory-3" value={form.subcategory} onChange={(e) => setForm((f) => ({ ...f, subcategory: e.target.value }))} />
               </div>
               <div className="flex flex-col gap-1.5">
                 <DatePickerField
@@ -283,12 +283,12 @@ export function TransactionDetailClient({ id }: Props) {
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Tags</Label>
-                <Input value={form.tags} onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))} placeholder="comma separated" />
+                <Label htmlFor="transaction-detail-client-tags-4" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Tags</Label>
+                <Input id="transaction-detail-client-tags-4" value={form.tags} onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))} placeholder="comma separated" />
               </div>
               <div className="flex flex-col gap-1.5 md:col-span-2">
-                <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Note</Label>
-                <Textarea value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} rows={4} className="resize-none" />
+                <Label htmlFor="transaction-detail-client-note-5" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Note</Label>
+                <Textarea id="transaction-detail-client-note-5" value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} rows={4} className="resize-none" />
               </div>
             </div>
             <Button

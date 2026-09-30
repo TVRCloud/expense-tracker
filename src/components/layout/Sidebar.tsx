@@ -20,6 +20,9 @@ import {
   Shield,
   KeyRound,
   ClipboardCheck,
+  PiggyBank,
+  Target,
+  Landmark,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Switch } from "@/components/_ui/Switch";
@@ -30,7 +33,7 @@ const NAV_GROUPS = [
   {
     label: "Main",
     items: [
-      { href: "/dashboard", label: "Home", icon: LayoutDashboard },
+      { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
       { href: "/transactions", label: "Transactions", icon: ArrowLeftRight },
       { href: "/reconcile", label: "Reconcile", icon: ClipboardCheck },
     ],
@@ -41,6 +44,14 @@ const NAV_GROUPS = [
       { href: "/analytics", label: "Analytics", icon: BarChart2 },
       { href: "/accounts", label: "Accounts", icon: Wallet },
       { href: "/notifications", label: "Notifications", icon: Bell },
+    ],
+  },
+  {
+    label: "Planning",
+    items: [
+      { href: "/budgets", label: "Budgets", icon: PiggyBank },
+      { href: "/goals", label: "Goals", icon: Target },
+      { href: "/loans", label: "Loans", icon: Landmark },
     ],
   },
   {
@@ -109,7 +120,7 @@ export function Sidebar() {
         {groups.map(({ label, items }) => (
           <div key={label}>
             <div
-              className="text-[9.5px] font-bold uppercase tracking-widest px-4 mb-1"
+              className="text-[11px] font-semibold uppercase px-4 mb-1"
               style={{ color: "var(--ink-3)", letterSpacing: "0.1em" }}
             >
               {label}
@@ -121,13 +132,14 @@ export function Sidebar() {
                   <Link
                     key={href}
                     href={href}
+                    aria-current={active ? "page" : undefined}
                     className={cn(
-                      "relative flex items-center gap-3 px-4 py-2.5 rounded-[14px] font-semibold text-[14.5px] transition-all duration-200 active:scale-[0.98]",
+                      "relative flex items-center gap-3 px-4 py-2.5 rounded-[14px] font-medium text-[14.5px] transition-all duration-200 active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-(--violet)",
                       active ? "text-(--ink)" : "hover:text-(--ink) hover:bg-(--card-2)/50"
                     )}
                     style={
                       active
-                        ? { background: "var(--card-2)", color: "var(--ink)", fontWeight: 700 }
+                        ? { background: "var(--card-2)", color: "var(--ink)", fontWeight: 600 }
                         : { color: "var(--ink-2)" }
                     }
                   >
@@ -136,7 +148,7 @@ export function Sidebar() {
                         layoutId="sidebar-active-indicator"
                         className="absolute left-0 rounded-r-full"
                         style={{ width: 3, top: 8, bottom: 8, background: "var(--amber)" }}
-                        transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                        transition={{ type: "spring", stiffness: 380, damping: 39 }}
                       />
                     )}
                     <Icon size={20} className="transition-transform duration-200 group-hover:scale-105" />

@@ -5,6 +5,7 @@ import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { Types } from "mongoose";
 import { checkEmiDueNotifications } from "@/lib/emi-notifications";
+import { runInBackground } from "@/lib/perf/background";
 
 export async function GET(req: NextRequest) {
   try {
@@ -19,8 +20,8 @@ export async function GET(req: NextRequest) {
 
     const userId = new Types.ObjectId(user.id);
 
-    // Fire-and-forget EMI due notifications
-    void checkEmiDueNotifications(user.id);
+    // EMI due notifications, after the response (doesn't slow the list).
+    runInBackground("emi-due-notifications", () => checkEmiDueNotifications(user.id));
 
     // ?upcoming=N → return next N unpaid installments due within the next 7 days.
     if (upcoming) {

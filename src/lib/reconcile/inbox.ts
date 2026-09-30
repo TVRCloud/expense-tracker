@@ -45,6 +45,7 @@ type RawCapture = {
   transaction?: Types.ObjectId;
   duplicateOf?: Types.ObjectId;
   eventKey?: { account?: Types.ObjectId | null };
+  suggestedAccount?: Types.ObjectId | null;
   createdAt: Date;
 };
 
@@ -66,6 +67,8 @@ export function serializeCapture(c: RawCapture) {
     sender: c.sender ?? null,
     packageName: c.packageName ?? null,
     receivedAt: c.receivedAt,
+    // Likely account for an unmatched message, to preselect when resolving.
+    suggestedAccountId: c.suggestedAccount ? c.suggestedAccount.toString() : null,
     text: safeDecrypt(c.rawText),
     alsoSeenIn: c.alsoSeenIn ?? [],
     parsed: {
@@ -128,28 +131,61 @@ function serializeTxn(t: RawTxn, names: Map<string, string>) {
   };
 }
 
+const unreviewedFilter = (userId: string) => ({ user: userId, isDeleted: { $ne: true }, reviewStatus: "unreviewed" });
+const queuedFilter = (userId: string) => ({ user: userId, status: "pending", outcome: "queued" });
+const waitingFilter = (userId: string) => ({ user: userId, outcome: "pending_sms" });
+
+/** Lazy promotion of held notifications (see promoteStalePendingSms). */
+async function promoteLazily(userId: string) {
+  try {
+    return (await promoteStalePendingSms({ userId })).promoted;
+  } catch (err) {
+    logger.error({ err, userId }, "lazy promotion failed");
+    return 0;
+  }
+}
+
+async function readInboxRows(userId: string) {
+  return Promise.all([
+    Transaction.find(unreviewedFilter(userId)).sort({ date: -1 }).limit(100).lean<RawTxn[]>(),
+    CapturedMessage.find(queuedFilter(userId)).sort({ createdAt: -1 }).limit(100).lean<RawCapture[]>(),
+    CapturedMessage.countDocuments(waitingFilter(userId)),
+  ]);
+}
+
+/**
+ * Just the three numbers, for badges and the home screen: counts only, no
+ * documents fetched or decrypted.
+ */
+export async function getReviewCounts(userId: string) {
+  await connectDB();
+  const promoting = promoteLazily(userId);
+  const read = () =>
+    Promise.all([
+      Transaction.countDocuments(unreviewedFilter(userId)),
+      CapturedMessage.countDocuments(queuedFilter(userId)),
+      CapturedMessage.countDocuments(waitingFilter(userId)),
+    ]);
+  let [[needsReview, couldntMatch, waitingForSms], promoted] = await Promise.all([read(), promoting]);
+  if (promoted > 0) [needsReview, couldntMatch, waitingForSms] = await read();
+  return { needsReview: Math.min(needsReview, 100), couldntMatch: Math.min(couldntMatch, 100), waitingForSms };
+}
+
 export async function getReviewInbox(userId: string) {
   await connectDB();
-  await promoteStalePendingSms({ userId }).catch((err) => logger.error({ err, userId }, "lazy promotion failed"));
-
-  const [txns, queued, pendingSms] = await Promise.all([
-    Transaction.find({ user: userId, isDeleted: { $ne: true }, reviewStatus: "unreviewed" })
-      .sort({ date: -1 })
-      .limit(100)
-      .lean<RawTxn[]>(),
-    CapturedMessage.find({ user: userId, status: "pending", outcome: "queued" })
-      .sort({ createdAt: -1 })
-      .limit(100)
-      .lean<RawCapture[]>(),
-    CapturedMessage.countDocuments({ user: userId, outcome: "pending_sms" }),
-  ]);
+  // Promotion (the only way held notifications become transactions on
+  // serverless hosts) runs alongside the reads instead of before them; in
+  // the rare case it promoted something, read again so the result has it.
+  let [[txns, queued, pendingSms], promoted] = await Promise.all([readInboxRows(userId), promoteLazily(userId)]);
+  if (promoted > 0) [txns, queued, pendingSms] = await readInboxRows(userId);
 
   const captureIds = txns.flatMap((t) => [t.sourceCapture, ...(t.captures ?? [])]).filter(Boolean);
-  const captures = await CapturedMessage.find({ _id: { $in: captureIds }, user: userId }).lean<RawCapture[]>();
-  const captureById = new Map(captures.map((c) => [c._id.toString(), c]));
-
   const relatedTxnIds = queued.map((c) => c.transaction).filter(Boolean);
-  const relatedTxns = await Transaction.find({ _id: { $in: relatedTxnIds }, user: userId }).lean<RawTxn[]>();
+  const [captures, relatedTxns] = await Promise.all([
+    CapturedMessage.find({ _id: { $in: captureIds }, user: userId }).lean<RawCapture[]>(),
+    Transaction.find({ _id: { $in: relatedTxnIds }, user: userId }).lean<RawTxn[]>(),
+  ]);
+  const captureById = new Map(captures.map((c) => [c._id.toString(), c]));
   const names = await accountNames(userId, [...txns, ...relatedTxns].map((t) => t.account));
   const relatedById = new Map(relatedTxns.map((t) => [t._id.toString(), serializeTxn(t, names)]));
 

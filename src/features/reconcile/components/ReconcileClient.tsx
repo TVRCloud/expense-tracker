@@ -118,7 +118,7 @@ function CreateFromCapture({ capture, onDone }: { capture: InboxCapture; onDone:
   const amountMinor = Math.round(Number.parseFloat(form.amount || "0") * 100);
   const valid = form.accountId && amountMinor > 0;
   const label = (t: string) => (
-    <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>{t}</Label>
+    <Label className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>{t}</Label>
   );
 
   return (

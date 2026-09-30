@@ -108,8 +108,8 @@ function LoanEditPanel({ loan, onDone }: { loan: ILoan; onDone: () => void }) {
     <Card surface="card-2" radius="md" className="mt-4 p-4 flex flex-col gap-3">
       <div className="grid md:grid-cols-2 gap-3">
         <div className="flex flex-col gap-1.5">
-          <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Name</Label>
-          <Input value={form.counterparty} onChange={(e) => setForm((f) => ({ ...f, counterparty: e.target.value }))} />
+          <Label htmlFor="loans-client-name-1" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Name</Label>
+          <Input id="loans-client-name-1" value={form.counterparty} onChange={(e) => setForm((f) => ({ ...f, counterparty: e.target.value }))} />
         </div>
         <DatePickerField
           label="Due date"
@@ -118,16 +118,16 @@ function LoanEditPanel({ loan, onDone }: { loan: ILoan; onDone: () => void }) {
           clearable
         />
         <div className="flex flex-col gap-1.5">
-          <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Interest rate (% p.a., optional)</Label>
-          <Input type="number" min="0" max="100" step="0.01" value={form.interestRate} onChange={(e) => setForm((f) => ({ ...f, interestRate: e.target.value }))} placeholder="0" />
+          <Label htmlFor="loans-client-interest-rate-p-a-optional-2" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Interest rate (% p.a., optional)</Label>
+          <Input id="loans-client-interest-rate-p-a-optional-2" type="number" min="0" max="100" step="0.01" value={form.interestRate} onChange={(e) => setForm((f) => ({ ...f, interestRate: e.target.value }))} placeholder="0" />
         </div>
         <div className="flex flex-col gap-1.5 md:col-span-2">
-          <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Note</Label>
-          <Input value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="Optional note" />
+          <Label htmlFor="loans-client-note-3" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Note</Label>
+          <Input id="loans-client-note-3" value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="Optional note" />
         </div>
         <div className="flex flex-col gap-1.5 md:col-span-2">
-          <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Loan account number (optional)</Label>
-          <Input
+          <Label htmlFor="loans-client-loan-account-number-optional-4" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Loan account number (optional)</Label>
+          <Input id="loans-client-loan-account-number-optional-4"
             value={form.externalLoanId}
             onChange={(e) => setForm((f) => ({ ...f, externalLoanId: e.target.value }))}
             placeholder="e.g. 010021753351"
@@ -472,7 +472,7 @@ export function LoansClient() {
 
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5 col-span-2">
-              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
+              <Label className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
                 {form.direction === "given" ? "Lent to" : "Borrowed from"}
               </Label>
               <Input
@@ -482,8 +482,8 @@ export function LoansClient() {
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Amount ($)</Label>
-              <Input
+              <Label htmlFor="loans-client-amount-5" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Amount</Label>
+              <Input id="loans-client-amount-5"
                 type="number"
                 min="0"
                 step="0.01"
@@ -501,8 +501,8 @@ export function LoansClient() {
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Interest rate (% p.a., optional)</Label>
-              <Input
+              <Label htmlFor="loans-client-interest-rate-p-a-optional-6" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Interest rate (% p.a., optional)</Label>
+              <Input id="loans-client-interest-rate-p-a-optional-6"
                 type="number"
                 min="0"
                 max="100"
@@ -514,8 +514,8 @@ export function LoansClient() {
             </div>
             {form.direction === "received" && (
               <div className="flex flex-col gap-1.5 col-span-2">
-                <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Loan account number (optional)</Label>
-                <Input
+                <Label htmlFor="loans-client-loan-account-number-optional-7" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Loan account number (optional)</Label>
+                <Input id="loans-client-loan-account-number-optional-7"
                   value={form.externalLoanId}
                   onChange={e => setForm(f => ({ ...f, externalLoanId: e.target.value }))}
                   placeholder="e.g. 010021753351"
@@ -526,7 +526,7 @@ export function LoansClient() {
               </div>
             )}
             <div className="flex flex-col gap-1.5 col-span-2">
-              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Account impact</Label>
+              <Label className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Account impact</Label>
               <Select value={form.accountId} onValueChange={(value) => setForm(f => ({ ...f, accountId: value }))}>
                 <SelectTrigger>
                   <SelectValue placeholder="Track loan only" />

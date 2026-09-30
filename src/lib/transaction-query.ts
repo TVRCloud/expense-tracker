@@ -20,6 +20,9 @@ export type ListTransactionsParams = {
   dateTo?: string | null;
   hideFuture?: boolean;
   includeUnpaidRecurring?: boolean;
+  /** Count all matches for paging (default true). Dashboards showing the
+   *  latest few rows skip it: the count is the expensive part. */
+  includeTotal?: boolean;
 };
 
 export function isValidObjectId(value: string | null | undefined) {
@@ -39,6 +42,7 @@ export async function listTransactions(params: ListTransactionsParams) {
     dateTo,
     hideFuture,
     includeUnpaidRecurring,
+    includeTotal = true,
   } = params;
 
   const query: Record<string, unknown> = { user: userId, isDeleted: { $ne: true } };
@@ -92,10 +96,54 @@ export async function listTransactions(params: ListTransactionsParams) {
       ...query,
       user: new Types.ObjectId(userId),
       ...(accountId ? { account: new Types.ObjectId(accountId) } : {}),
+    };
+
+    // Fast path. Rows are ordered by "activity date": paidAt for paid
+    // recurring installments, date for everything else. Sorting on that
+    // computed field used to mean matching, sorting and counting the user's
+    // whole history in an aggregation on every dashboard load. The two kinds
+    // of row can each be read from an index in their own order and merged;
+    // they don't overlap (one has paidAt, the other doesn't).
+    // Text search keeps the aggregation: $text can't sit under these $ors.
+    if (!search) {
+      const take = skip + limit;
+      const dated = {
+        ...aggregateQuery,
+        $and: [
+          ...((query.$and as Record<string, unknown>[]) ?? []),
+          {
+            $or: [
+              { recurringId: { $exists: false }, date: { $lte: endOfToday } },
+              { recurringId: { $exists: true }, installmentStatus: "paid", paidAt: { $exists: false }, date: { $lte: endOfToday } },
+            ],
+          },
+        ],
+      };
+      const paid = {
+        ...aggregateQuery,
+        $and: [
+          ...((query.$and as Record<string, unknown>[]) ?? []),
+          { recurringId: { $exists: true }, installmentStatus: "paid", paidAt: { $exists: true, $lte: now } },
+        ],
+      };
+      const [datedRows, paidRows, datedCount, paidCount] = await Promise.all([
+        Transaction.find(dated).sort({ date: -1, _id: -1 }).limit(take).lean(),
+        Transaction.find(paid).sort({ paidAt: -1, _id: -1 }).limit(take).lean(),
+        includeTotal ? Transaction.countDocuments(dated) : Promise.resolve(0),
+        includeTotal ? Transaction.countDocuments(paid) : Promise.resolve(0),
+      ]);
+      const data = [...datedRows, ...paidRows]
+        .sort(compareByActivityDesc)
+        .slice(skip, take);
+      return { data, total: includeTotal ? datedCount + paidCount : null, skip, limit };
+    }
+
+    const searchQuery = {
+      ...aggregateQuery,
       $and: [...((query.$and as Record<string, unknown>[]) ?? []), visibilityFilter],
     };
     const pipeline: PipelineStage[] = [
-      { $match: aggregateQuery },
+      { $match: searchQuery },
       {
         $addFields: {
           ...activityDateAddFields(),
@@ -123,4 +171,20 @@ export async function listTransactions(params: ListTransactionsParams) {
   ]);
 
   return { data: transactions, total, skip, limit };
+}
+
+type ActivityRow = { _id: unknown; date: Date; paidAt?: Date | null; installmentStatus?: string };
+
+// Same rule as activityDateAddFields(): paidAt when paid and set, else date.
+function activityTime(t: ActivityRow) {
+  return (t.installmentStatus === "paid" && t.paidAt ? new Date(t.paidAt) : new Date(t.date)).getTime();
+}
+
+/** Activity date, then date, then _id, all newest first (the list order). */
+export function compareByActivityDesc(a: ActivityRow, b: ActivityRow) {
+  return (
+    activityTime(b) - activityTime(a) ||
+    new Date(b.date).getTime() - new Date(a.date).getTime() ||
+    String(b._id).localeCompare(String(a._id))
+  );
 }

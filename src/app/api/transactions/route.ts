@@ -23,6 +23,8 @@ export async function GET(req: NextRequest) {
     const dateTo = searchParams.get("dateTo");
     const hideFuture = searchParams.get("hideFuture") === "true";
     const includeUnpaidRecurring = searchParams.get("includeUnpaidRecurring") === "true";
+    // total=false skips the count (latest-N lists on home screens don't page).
+    const includeTotal = searchParams.get("total") !== "false";
     const splitGroupId = searchParams.get("splitGroupId");
 
     if (!isValidObjectId(accountId)) {
@@ -85,6 +87,7 @@ export async function GET(req: NextRequest) {
       dateFrom,
       dateTo,
       hideFuture,
+      includeTotal,
       includeUnpaidRecurring,
     });
 

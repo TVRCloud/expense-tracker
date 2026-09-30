@@ -1,5 +1,6 @@
 import { type AuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
+import { cachedSessionActive, rememberSession } from "@/lib/perf/session-cache";
 import connectDB from "@/lib/mongodb";
 import User from "@/models/User";
 import Session from "@/models/Session";
@@ -76,11 +77,19 @@ export const authOptions: AuthOptions = {
         }
       } else if (token.jti && !token.error) {
         try {
-          await connectDB();
-          const s = await Session.findOne({ jti: token.jti }, { isActive: 1 }).lean<{
-            isActive: boolean;
-          }>();
-          if (s && !s.isActive) token.error = "SessionTerminated";
+          const known = cachedSessionActive(token.jti);
+          if (known === false) {
+            token.error = "SessionTerminated";
+          } else if (known === undefined) {
+            await connectDB();
+            const s = await Session.findOne({ jti: token.jti }, { isActive: 1 }).lean<{
+              isActive: boolean;
+            }>();
+            // A missing row counts as active, as before.
+            const active = !s || s.isActive;
+            if (!active) token.error = "SessionTerminated";
+            if (token.id) rememberSession(token.jti, String(token.id), active);
+          }
         } catch (err) {
           console.error("[NextAuth] session validation error:", err);
         }

@@ -169,16 +169,16 @@ export function AccountDetailClient({ id }: Props) {
         {editing && (
           <div className="grid md:grid-cols-3 gap-3 mt-5">
             <div className="flex flex-col gap-1.5 md:col-span-3">
-              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Name</Label>
-              <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+              <Label htmlFor="account-detail-client-name-1" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Name</Label>
+              <Input id="account-detail-client-name-1" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Color</Label>
-              <Input value={form.color} onChange={(e) => setForm((f) => ({ ...f, color: e.target.value }))} placeholder="#6B46F5" />
+              <Label htmlFor="account-detail-client-color-2" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Color</Label>
+              <Input id="account-detail-client-color-2" value={form.color} onChange={(e) => setForm((f) => ({ ...f, color: e.target.value }))} placeholder="#6B46F5" />
             </div>
             <div className="flex flex-col gap-1.5 md:col-span-2">
-              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>SMS match digits</Label>
-              <Input
+              <Label htmlFor="account-detail-client-sms-match-digits-3" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>SMS match digits</Label>
+              <Input id="account-detail-client-sms-match-digits-3"
                 value={form.smsLastFour}
                 inputMode="numeric"
                 onChange={(e) => setForm((f) => ({ ...f, smsLastFour: e.target.value.replace(/[^\d,\s]/g, "") }))}

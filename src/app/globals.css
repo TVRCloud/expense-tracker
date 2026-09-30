@@ -8,7 +8,10 @@
    ============================================================ */
 
 :root {
-  --font: "Plus Jakarta Sans", system-ui, sans-serif;
+  /* next/font exposes the loaded face only through this variable (its
+     family name is hashed), so the literal name alone never matched and
+     every page fell back to system-ui. */
+  --font: var(--font-plus-jakarta), "Plus Jakarta Sans", system-ui, sans-serif;
   --font-mono: var(--font-jetbrains-mono), "JetBrains Mono", ui-monospace, monospace;
 
   /* type scale — money figures render in --font-mono (ledger precision,
@@ -16,11 +19,13 @@
      Labels are sentence case by convention: weight/size carry hierarchy,
      not uppercase+tracking. */
   --text-display: 800 clamp(28px, 8vw, 44px)/1 var(--font-mono);
-  --text-h2: 800 18px/1.2 var(--font);
+  --text-h2: 700 18px/1.2 var(--font);
   --text-stat: 800 23px/1.1 var(--font-mono);
   --text-figure-sm: 700 14px/1.2 var(--font-mono); /* inline money figures below stat scale */
-  --text-body: 700 15px/1.3 var(--font);
-  --text-label: 600 13px/1.3 var(--font);
+  /* Body is regular weight: bold is for titles and figures, so it can
+     still mean something. */
+  --text-body: 500 15px/1.4 var(--font);
+  --text-label: 500 13px/1.35 var(--font);
   --text-micro: 600 11px/1.3 var(--font);
 
   /* backgrounds — clean neutral white */
@@ -285,8 +290,8 @@ body {
    ties). */
 @layer utilities {
 @media (prefers-reduced-motion: no-preference) {
-  /* Buttons — press scale-down + a bounded diagonal shine sweep on
-     hover, confined to the button's own surface (not page bg).
+  /* Buttons — press scale-down only (feedback on pointer-down; no hover
+     shine or ripple competing for attention).
      `position`/`overflow` go through :where() (specificity 0) so any
      Tailwind utility on the call site still wins — otherwise this would
      override `absolute` on overlay buttons like the password eye toggle.
@@ -300,43 +305,8 @@ body {
   .btn-interactive {
     transition: scale 120ms ease, box-shadow 120ms ease;
   }
-  .btn-interactive::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(
-      115deg,
-      transparent 40%,
-      color-mix(in srgb, var(--violet-fg) 22%, transparent) 50%,
-      transparent 60%
-    );
-    background-size: 250% 100%;
-    background-position: 150% 0;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 150ms ease;
-  }
-  .btn-interactive:hover::after {
-    opacity: 1;
-    animation: btn-shine 900ms ease;
-  }
   .btn-interactive:active {
     scale: 0.97;
-  }
-
-  /* Ripple — one expanding/fading circle spawned at pointerdown,
-     positioned via --ripple-x/--ripple-y set inline by the wrapper. */
-  .btn-ripple {
-    position: absolute;
-    border-radius: 9999px;
-    background: color-mix(in srgb, var(--violet-fg) 35%, transparent);
-    left: var(--ripple-x, 50%);
-    top: var(--ripple-y, 50%);
-    width: 8px;
-    height: 8px;
-    transform: translate(-50%, -50%) scale(0);
-    pointer-events: none;
-    animation: ripple 550ms ease-out forwards;
   }
 
   /* Cards — hover lift, shadow-tier bump, subtle border brighten.
@@ -354,14 +324,13 @@ body {
     scale: 0.99;
   }
 
-  /* Inputs — animated focus glow ring. */
+  /* Inputs — a steady focus ring (it used to pulse forever while focused). */
   .focus-glow {
     transition: box-shadow 150ms ease, border-color 150ms ease;
   }
   .focus-glow:focus,
   .focus-glow:focus-visible {
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--violet) 22%, transparent);
-    animation: pulse-glow 1600ms ease-in-out infinite;
   }
   .focus-glow[aria-invalid="true"] {
     animation: input-shake 350ms ease;
@@ -386,22 +355,6 @@ body {
 }
 } /* @layer utilities */
 
-@keyframes btn-shine {
-  from { background-position: 150% 0; }
-  to { background-position: -50% 0; }
-}
-@keyframes ripple {
-  to {
-    width: 320px;
-    height: 320px;
-    opacity: 0;
-    transform: translate(-50%, -50%) scale(1);
-  }
-}
-@keyframes pulse-glow {
-  0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--violet) 22%, transparent); }
-  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--violet) 12%, transparent); }
-}
 @keyframes input-shake {
   0%, 100% { translate: 0; }
   25% { translate: -4px 0; }
@@ -515,4 +468,25 @@ body {
   --radius-md: var(--r-sm);
   --radius-lg: var(--r-md);
   --radius-xl: var(--r-lg);
+}
+
+/* Reduce transparency: solid surfaces, no blur. */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --card: #ffffff;
+    --card-2: #f0f0f4;
+    --glass-blur: none;
+  }
+  .dark {
+    --card: #121214;
+    --card-2: #1c1c20;
+  }
+}
+
+/* Increased contrast: defined borders on surfaces. */
+@media (prefers-contrast: more) {
+  :root {
+    --line: #71717a;
+    --glass-blur: none;
+  }
 }
