@@ -2,9 +2,8 @@ import { forwardRef } from "react";
 import { Switch as SwitchRoot } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 
-// Thin wrapper — tunes the thumb's transition to a snappier, slightly
-// bouncy easing than the vendored `ui/switch.tsx` default, so toggles
-// (notifications, appearance) feel more responsive. Never edit that file
+// Thin wrapper — a quick ease-out thumb: a tap has no momentum, so the
+// thumb settles without overshoot. Never edit the vendored `ui/switch.tsx`
 // directly; extend here.
 export const Switch = forwardRef<
   React.ElementRef<typeof SwitchRoot>,
@@ -13,7 +12,7 @@ export const Switch = forwardRef<
   return (
     <SwitchRoot
       ref={ref}
-      className={cn("[&>span]:transition-transform [&>span]:duration-300 [&>span]:ease-[cubic-bezier(0.34,1.56,0.64,1)]", className)}
+      className={cn("[&>span]:transition-transform [&>span]:duration-200 [&>span]:ease-[cubic-bezier(0.22,1,0.36,1)]", className)}
       {...props}
     />
   );

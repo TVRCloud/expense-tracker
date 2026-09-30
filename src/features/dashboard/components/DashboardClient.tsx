@@ -13,6 +13,9 @@ import { StaggerContainer, StaggerItem } from "@/components/shared/StaggerContai
 import { Card } from "@/components/_ui/Card";
 import { Progress } from "@/components/_ui/Progress";
 import { Skeleton } from "@/components/_ui/Skeleton";
+import { Button } from "@/components/_ui/Button";
+import { Receipt, Wallet } from "lucide-react";
+import type { ReactNode } from "react";
 
 export function DashboardClient() {
   const { formatCurrency } = useCurrency();
@@ -24,6 +27,7 @@ export function DashboardClient() {
   const accountBalance = accounts
     ?.filter((account) => account.type !== "credit_card")
     .reduce((sum, account) => sum + account.balance, 0) ?? 0;
+  const barScale = stats ? Math.max(stats.income, stats.expense) : 0;
   const primaryAccount = accounts?.[0] as (IAccount & { creditMeta?: { lastFourDigits?: string } }) | undefined;
 
   return (
@@ -46,7 +50,7 @@ export function DashboardClient() {
           <h2 className="tracking-tight" style={{ font: "var(--text-h2)", color: "var(--ink)" }}>
             Accounts{accounts?.length ? ` · ${accounts.length}` : ""}
           </h2>
-          <Link href="/accounts" className="font-bold text-sm" style={{ color: "var(--violet)" }}>
+          <Link href="/accounts" className="font-semibold text-sm" style={{ color: "var(--violet)" }}>
             See all
           </Link>
         </div>
@@ -69,12 +73,13 @@ export function DashboardClient() {
             ))}
           </StaggerContainer>
         ) : (
-          <Card radius="md" className="p-8 text-center font-semibold text-sm" style={{ color: "var(--ink-2)" }}>
-            No accounts yet.{" "}
-            <Link href="/accounts" style={{ color: "var(--violet)" }}>
-              Add one
-            </Link>
-          </Card>
+          <EmptyCard
+            icon={<Wallet size={22} />}
+            title="No accounts yet"
+            body="Add a bank account, card or cash wallet to start tracking."
+            href="/accounts"
+            action="Add an account"
+          />
         )}
       </div>
 
@@ -91,7 +96,7 @@ export function DashboardClient() {
             <h2 className="tracking-tight" style={{ font: "var(--text-h2)", color: "var(--ink)" }}>
               Recent transactions
             </h2>
-            <Link href="/transactions" className="font-bold text-sm" style={{ color: "var(--violet)" }}>
+            <Link href="/transactions" className="font-semibold text-sm" style={{ color: "var(--violet)" }}>
               See all
             </Link>
           </div>
@@ -111,12 +116,13 @@ export function DashboardClient() {
               ))}
             </StaggerContainer>
           ) : (
-            <Card radius="md" className="p-8 text-center font-semibold text-sm" style={{ color: "var(--ink-2)" }}>
-              No transactions yet.{" "}
-              <Link href="/transactions/add" style={{ color: "var(--violet)" }}>
-                Add one
-              </Link>
-            </Card>
+            <EmptyCard
+              icon={<Receipt size={22} />}
+              title="No transactions yet"
+              body="Add one, or connect the phone app to capture bank SMS automatically."
+              href="/transactions/add"
+              action="Add a transaction"
+            />
           )}
 
           {creditCardAccounts.length > 0 && (
@@ -137,6 +143,7 @@ export function DashboardClient() {
                 {new Date().toLocaleString("en-US", { month: "long" })} breakdown
               </div>
               <div className="flex flex-col gap-4">
+                {/* Both bars on one scale, so their lengths compare. */}
                 <div>
                   <div className="flex justify-between mb-2" style={{ font: "var(--text-label)" }}>
                     <span style={{ color: "var(--ink-2)" }}>Income</span>
@@ -144,7 +151,7 @@ export function DashboardClient() {
                       {formatCurrency(stats.income)}
                     </span>
                   </div>
-                  <Progress value={100} color="var(--violet)" height={3} />
+                  <Progress value={barScale ? (stats.income / barScale) * 100 : 0} color="var(--green)" height={3} />
                 </div>
                 <div>
                   <div className="flex justify-between mb-2" style={{ font: "var(--text-label)" }}>
@@ -153,21 +160,21 @@ export function DashboardClient() {
                       {formatCurrency(stats.expense)}
                     </span>
                   </div>
-                  <Progress
-                    value={stats.income > 0 ? (stats.expense / stats.income) * 100 : 0}
-                    color="var(--green)"
-                    height={3}
-                  />
+                  <Progress value={barScale ? (stats.expense / barScale) * 100 : 0} color="var(--red)" height={3} />
                 </div>
                 <div
                   className="flex items-center justify-between pt-4"
                   style={{ borderTop: "1px solid var(--line)" }}
                 >
                   <span style={{ font: "var(--text-label)", color: "var(--ink-2)" }}>
-                    Net saved
+                    {stats.net >= 0 ? "Net saved" : "Overspent"}
                   </span>
-                  <span className="tnum" style={{ font: "var(--text-stat)", fontSize: 18, color: "var(--green)" }}>
-                    +{formatCurrency(Math.max(0, stats.net))}
+                  <span
+                    className="tnum"
+                    style={{ font: "var(--text-stat)", fontSize: 18, color: stats.net >= 0 ? "var(--green)" : "var(--red)" }}
+                  >
+                    {stats.net >= 0 ? "+" : "−"}
+                    {formatCurrency(Math.abs(stats.net))}
                   </span>
                 </div>
               </div>
@@ -176,5 +183,21 @@ export function DashboardClient() {
         </div>
       </div>
     </div>
+  );
+}
+
+/** Empty state: what's missing, why it matters, one clear next step. */
+function EmptyCard({ icon, title, body, href, action }: { icon: ReactNode; title: string; body: string; href: string; action: string }) {
+  return (
+    <Card radius="md" className="p-8 flex flex-col items-center text-center gap-2">
+      <div className="w-12 h-12 rounded-full grid place-items-center mb-1" style={{ background: "var(--card-2)", color: "var(--ink-2)" }} aria-hidden>
+        {icon}
+      </div>
+      <div className="font-semibold" style={{ color: "var(--ink)" }}>{title}</div>
+      <p className="text-sm max-w-xs" style={{ color: "var(--ink-2)" }}>{body}</p>
+      <Button asChild className="mt-2">
+        <Link href={href}>{action}</Link>
+      </Button>
+    </Card>
   );
 }

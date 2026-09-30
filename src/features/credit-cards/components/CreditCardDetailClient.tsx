@@ -19,7 +19,6 @@ import { type IAccount, type ICreditMeta } from "@/types/models";
 import { Skeleton } from "@/components/_ui/Skeleton";
 import { Card } from "@/components/_ui/Card";
 import { Button } from "@/components/_ui/Button";
-import { useConfirm } from "@/components/_ui/ConfirmDialog";
 import { Input } from "@/components/_ui/Input";
 import { Label } from "@/components/ui/label";
 
@@ -30,7 +29,6 @@ interface Props {
 export function CreditCardDetailClient({ id }: Props) {
   const router = useRouter();
   const qc = useQueryClient();
-  const { confirm, dialog } = useConfirm();
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ name: "", color: "", icon: "" });
   const [creditMeta, setCreditMeta] = useState<Partial<ICreditMeta>>({});
@@ -71,11 +69,21 @@ export function CreditCardDetailClient({ id }: Props) {
     onError: (err: Error) => toast.error(err.message),
   });
 
+  // Reversible: archive at once, Undo in the toast (no confirm dialog).
   const archiveAccount = useMutation({
     mutationFn: () => apiClient.delete(`/accounts/${id}`),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["accounts"] });
-      toast.success("Card archived");
+      toast.success(`Archived ${account?.name ?? "card"}`, {
+        action: {
+          label: "Undo",
+          onClick: () =>
+            void apiClient
+              .patch(`/accounts/${id}`, { isArchived: false })
+              .then(() => qc.invalidateQueries({ queryKey: ["accounts"] }))
+              .catch((err: Error) => toast.error(err.message)),
+        },
+      });
       router.push("/accounts");
     },
     onError: (err: Error) => toast.error(err.message),
@@ -169,18 +177,10 @@ export function CreditCardDetailClient({ id }: Props) {
           variant="ghost"
           size="icon"
           aria-label={`Archive ${account.name}`}
-          onClick={async () => {
-            const ok = await confirm({
-              title: `Archive "${account.name}"?`,
-              description: "You can restore it later. Statement and repayment history stay intact.",
-              confirmLabel: "Archive",
-              destructive: true,
-            });
-            if (ok) archiveAccount.mutate();
-          }}
+          onClick={() => archiveAccount.mutate()}
           disabled={archiveAccount.isPending}
           className="px-4 py-2 rounded-(--r-sm)"
-          style={{ background: "rgba(235,87,87,.1)", color: "var(--red)" }}
+          style={{ background: "color-mix(in srgb, var(--red) 10%, transparent)", color: "var(--red)" }}
         >
           <Archive size={14} />
         </Button>
@@ -190,8 +190,8 @@ export function CreditCardDetailClient({ id }: Props) {
         <Card radius="lg" elevation="floating" className="p-5 flex flex-col gap-4">
           <div className="text-sm font-bold" style={{ color: "var(--ink)" }}>Edit Card</div>
           <div className="flex flex-col gap-1.5">
-            <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Name</Label>
-            <Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+            <Label htmlFor="credit-card-detail-client-name-1" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Name</Label>
+            <Input id="credit-card-detail-client-name-1" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
           </div>
           <CreditCardForm value={creditMeta} onChange={setCreditMeta} />
           <Button
@@ -231,7 +231,6 @@ export function CreditCardDetailClient({ id }: Props) {
           </div>
         )}
       </section>
-      {dialog}
     </div>
   );
 }

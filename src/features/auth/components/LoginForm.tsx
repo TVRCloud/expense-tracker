@@ -67,10 +67,10 @@ export function LoginForm() {
 
       <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
         <div>
-          <Label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
+          <Label htmlFor="login-form-email-1" className="block text-[13px] font-medium mb-2" style={{ color: "var(--ink-2)" }}>
             Email
           </Label>
-          <Input
+          <Input id="login-form-email-1"
             type="email"
             autoComplete="email"
             placeholder="you@example.com"
@@ -86,11 +86,12 @@ export function LoginForm() {
         </div>
 
         <div>
-          <Label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
+          <Label htmlFor="login-password" className="block text-[13px] font-medium mb-2" style={{ color: "var(--ink-2)" }}>
             Password
           </Label>
           <div className="relative">
             <Input
+              id="login-password"
               type={showPw ? "text" : "password"}
               autoComplete="current-password"
               placeholder="••••••••"

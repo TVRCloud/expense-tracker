@@ -26,14 +26,16 @@ export function DayGroup({ date, transactions }: Props) {
     <div className="flex flex-col gap-2">
       {/* Day label row */}
       <div className="flex items-center justify-between px-1">
-        <span className="text-[13px] font-bold" style={{ color: "var(--ink-2)" }}>
+        <h3 className="text-[13px] font-semibold" style={{ color: "var(--ink-2)" }}>
           {formatDayLabel(date)}
-        </span>
+        </h3>
+        {/* Always signed: colour alone doesn't say "net spent". */}
         <span
-          className="text-[13px] font-bold tnum"
+          className="text-[13px] font-semibold tnum"
           style={{ color: isPositive ? "var(--green)" : "var(--red)" }}
+          aria-label={`Day total ${isPositive ? "plus" : "minus"} ${formatCurrency(Math.abs(dayTotal))}`}
         >
-          {isPositive ? "+" : ""}
+          {isPositive ? "+" : "−"}
           {formatCurrency(Math.abs(dayTotal))}
         </span>
       </div>
@@ -41,7 +43,7 @@ export function DayGroup({ date, transactions }: Props) {
       {/* Transaction rows */}
       <div className="flex flex-col gap-2">
         {transactions.map((t) => (
-          <TransactionRow key={String(t._id)} transaction={t} />
+          <TransactionRow key={String(t._id)} transaction={t} hideDate />
         ))}
       </div>
     </div>

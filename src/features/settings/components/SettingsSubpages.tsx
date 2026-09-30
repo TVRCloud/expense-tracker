@@ -103,12 +103,12 @@ export function ProfileFields() {
         </div>
       </div>
       <div className="flex flex-col gap-1.5">
-        <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Name</Label>
-        <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+        <Label htmlFor="settings-subpages-name-1" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Name</Label>
+        <Input id="settings-subpages-name-1" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
       </div>
       <div className="flex flex-col gap-1.5">
-        <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Avatar URL</Label>
-        <Input value={form.avatar} onChange={(e) => setForm((f) => ({ ...f, avatar: e.target.value }))} placeholder="https://..." />
+        <Label htmlFor="settings-subpages-avatar-url-2" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Avatar URL</Label>
+        <Input id="settings-subpages-avatar-url-2" value={form.avatar} onChange={(e) => setForm((f) => ({ ...f, avatar: e.target.value }))} placeholder="https://..." />
       </div>
       <Button
         onClick={() => updateProfile.mutate({ name: form.name, avatar: form.avatar || undefined })}
@@ -137,16 +137,16 @@ export function SecurityFields() {
   return (
     <>
       <div className="flex flex-col gap-1.5">
-        <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Current password</Label>
-        <Input type="password" value={form.currentPassword} onChange={(e) => setForm((f) => ({ ...f, currentPassword: e.target.value }))} />
+        <Label htmlFor="settings-subpages-current-password-3" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Current password</Label>
+        <Input id="settings-subpages-current-password-3" type="password" value={form.currentPassword} onChange={(e) => setForm((f) => ({ ...f, currentPassword: e.target.value }))} />
       </div>
       <div className="flex flex-col gap-1.5">
-        <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>New password</Label>
-        <Input type="password" value={form.newPassword} onChange={(e) => setForm((f) => ({ ...f, newPassword: e.target.value }))} />
+        <Label htmlFor="settings-subpages-new-password-4" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>New password</Label>
+        <Input id="settings-subpages-new-password-4" type="password" value={form.newPassword} onChange={(e) => setForm((f) => ({ ...f, newPassword: e.target.value }))} />
       </div>
       <div className="flex flex-col gap-1.5">
-        <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Confirm new password</Label>
-        <Input type="password" value={form.confirm} onChange={(e) => setForm((f) => ({ ...f, confirm: e.target.value }))} />
+        <Label htmlFor="settings-subpages-confirm-new-password-5" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Confirm new password</Label>
+        <Input id="settings-subpages-confirm-new-password-5" type="password" value={form.confirm} onChange={(e) => setForm((f) => ({ ...f, confirm: e.target.value }))} />
       </div>
       <Button
         onClick={() => {
@@ -222,7 +222,7 @@ export function PreferencesFields() {
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
+        <Label className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
           Week starts on
         </Label>
         <Select value={weekStart} onValueChange={(v) => updatePreferences.mutate({ weekStartsOn: Number(v) })}>

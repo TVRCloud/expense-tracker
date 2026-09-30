@@ -1,85 +1,25 @@
-"use client";
-
-import { forwardRef, useCallback, useRef, useState, type PointerEvent } from "react";
+import { forwardRef } from "react";
 import { Button as ButtonRoot, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 // Thin wrapper so feature code never imports `@/components/ui/button`
-// directly — keeps a single seam for future project-specific tweaks without
-// ever hand-editing the CLI-vendored file in `ui/`. Colors already resolve
-// correctly through globals.css's --primary/--secondary/--destructive
-// mappings onto --violet/--card-2/--red, so no visual override is needed
-// for that. On top of the vendored component, this adds the shared
-// press/shine micro-interaction (`.btn-interactive` in globals.css) plus a
-// one-shot ripple spawned at the pointer's down position — purely visual,
-// `asChild` still forwards straight to Slot with no ripple wrapper markup.
+// directly — keeps a single seam for project-specific tweaks without ever
+// hand-editing the CLI-vendored file in `ui/`. Colors resolve through
+// globals.css's --primary/--secondary/--destructive mappings. Adds the
+// shared press feedback (`.btn-interactive`: a small scale on pointer-down)
+// and, on touch screens, a 44px minimum hit area.
 export { buttonVariants };
 // The vendored button no longer exports a props type (shadcn's React 19
 // version is a plain function component), so derive it here.
 export type ButtonProps = React.ComponentProps<typeof ButtonRoot>;
 
-let rippleId = 0;
-
-export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { className, onPointerDown, asChild, children, ...props },
-  ref
-) {
-  const [ripples, setRipples] = useState<{ id: number; x: string; y: string }[]>([]);
-  const hostRef = useRef<HTMLButtonElement | null>(null);
-
-  const setRefs = useCallback(
-    (node: HTMLButtonElement | null) => {
-      hostRef.current = node;
-      if (typeof ref === "function") ref(node);
-      else if (ref) (ref as React.MutableRefObject<HTMLButtonElement | null>).current = node;
-    },
-    [ref]
-  );
-
-  const handlePointerDown = useCallback(
-    (e: PointerEvent<HTMLButtonElement>) => {
-      const el = hostRef.current;
-      if (el) {
-        const rect = el.getBoundingClientRect();
-        const id = rippleId++;
-        setRipples((prev) => [
-          ...prev,
-          { id, x: `${e.clientX - rect.left}px`, y: `${e.clientY - rect.top}px` },
-        ]);
-        window.setTimeout(() => {
-          setRipples((prev) => prev.filter((r) => r.id !== id));
-        }, 600);
-      }
-      onPointerDown?.(e);
-    },
-    [onPointerDown]
-  );
-
-  // `asChild` renders whatever child was passed via Slot — no room to inject
-  // ripple spans without breaking that contract, so skip the effect there.
-  if (asChild) {
-    return (
-      <ButtonRoot ref={setRefs} className={className} asChild {...props}>
-        {children}
-      </ButtonRoot>
-    );
-  }
-
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button({ className, asChild, ...props }, ref) {
   return (
     <ButtonRoot
-      ref={setRefs}
-      className={cn("btn-interactive", className)}
-      onPointerDown={handlePointerDown}
+      ref={ref}
+      asChild={asChild}
+      className={cn(!asChild && "btn-interactive", "pointer-coarse:min-h-11 pointer-coarse:min-w-11", className)}
       {...props}
-    >
-      {children}
-      {ripples.map((r) => (
-        <span
-          key={r.id}
-          className="btn-ripple"
-          style={{ "--ripple-x": r.x, "--ripple-y": r.y } as React.CSSProperties}
-        />
-      ))}
-    </ButtonRoot>
+    />
   );
 });

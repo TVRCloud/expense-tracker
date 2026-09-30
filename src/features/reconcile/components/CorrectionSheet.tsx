@@ -36,7 +36,7 @@ type Props = {
 
 function fieldLabel(text: string) {
   return (
-    <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>{text}</Label>
+    <Label className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>{text}</Label>
   );
 }
 

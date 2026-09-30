@@ -435,7 +435,7 @@ export function AddTransactionForm() {
 
         {/* Account selector */}
         <div className="flex flex-col gap-1.5">
-          <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
+          <Label htmlFor="add-transaction-account" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
             Account
           </Label>
           <Controller
@@ -443,7 +443,7 @@ export function AddTransactionForm() {
             name="accountId"
             render={({ field }) => (
               <Select value={field.value} onValueChange={field.onChange}>
-                <SelectTrigger className="h-auto w-full rounded-(--r-sm) px-4 py-3 text-sm font-semibold" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }}>
+                <SelectTrigger id="add-transaction-account" className="h-auto w-full rounded-(--r-sm) px-4 py-3 text-sm font-semibold" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }}>
                   <SelectValue placeholder="Select an account" />
                 </SelectTrigger>
                 <SelectContent>
@@ -570,7 +570,7 @@ export function AddTransactionForm() {
 
               {/* Label */}
               <div className="flex flex-col gap-1.5">
-                <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Label</Label>
+                <Label className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Label</Label>
                 <Input
                   value={recurrenceLabel}
                   onChange={(e) => setRecurrenceLabel(e.target.value)}
@@ -614,10 +614,10 @@ export function AddTransactionForm() {
 
         {/* Description */}
         <div className="flex flex-col gap-1.5">
-          <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
+          <Label htmlFor="add-transaction-form-description-1" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
             Description
           </Label>
-          <Input
+          <Input id="add-transaction-form-description-1"
             {...register("description")}
             placeholder="What was this for?"
             style={{
@@ -630,10 +630,10 @@ export function AddTransactionForm() {
 
         {/* Note */}
         <div className="flex flex-col gap-1.5">
-          <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
+          <Label htmlFor="add-transaction-form-note-optional-2" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
             Note (optional)
           </Label>
-          <Textarea
+          <Textarea id="add-transaction-form-note-optional-2"
             {...register("note")}
             placeholder="Add a note..."
             rows={2}
@@ -646,14 +646,27 @@ export function AddTransactionForm() {
           />
         </div>
 
-        {/* Save button */}
-        <Button
-          type="submit"
-          disabled={isPending || amountInCents <= 0 || (splitEnabled && !splitValid)}
-          className="mt-auto h-auto rounded-(--r-md) py-3.5 sm:py-4 font-extrabold text-sm tracking-wide"
+        {/* Save button — pinned above the mobile tab bar so it stays in
+            thumb reach under the number pad; says why when it can't save. */}
+        <div
+          className="sticky bottom-[calc(96px+env(safe-area-inset-bottom,0px))] md:static mt-auto pt-2 flex flex-col gap-1.5"
+          style={{ background: "linear-gradient(to bottom, transparent, var(--card) 30%)" }}
         >
-          {isPending ? "Saving..." : "Save Transaction"}
-        </Button>
+          {!isPending && amountInCents <= 0 && (
+            <p className="text-xs text-center" style={{ color: "var(--ink-3)" }}>Enter an amount to save.</p>
+          )}
+          {!isPending && amountInCents > 0 && splitEnabled && !splitValid && (
+            <p className="text-xs text-center" style={{ color: "var(--ink-3)" }}>The split parts must add up to the total.</p>
+          )}
+          <Button
+            type="submit"
+            disabled={isPending || amountInCents <= 0 || (splitEnabled && !splitValid)}
+            aria-busy={isPending}
+            className="h-auto rounded-(--r-md) py-3.5 sm:py-4 font-bold text-sm"
+          >
+            {isPending ? "Saving…" : "Save transaction"}
+          </Button>
+        </div>
       </Card>
     </div>
   );

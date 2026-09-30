@@ -6,11 +6,12 @@ import { LayoutDashboard, ArrowLeftRight, Plus, BarChart2, Wallet } from "lucide
 import { motion } from "motion/react";
 
 const ITEMS = [
-  { href: "/dashboard", label: "Home", icon: LayoutDashboard },
-  { href: "/transactions", label: "History", icon: ArrowLeftRight },
+  // Same names as the sidebar, so a place is called one thing everywhere.
+  { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
+  { href: "/transactions", label: "Transactions", icon: ArrowLeftRight },
   { href: "/transactions/add", label: "Add", icon: Plus, fab: true },
   { href: "/analytics", label: "Analytics", icon: BarChart2 },
-  { href: "/accounts", label: "Wallet", icon: Wallet },
+  { href: "/accounts", label: "Accounts", icon: Wallet },
 ];
 
 export function BottomNav() {
@@ -53,7 +54,8 @@ export function BottomNav() {
             <Link
               key={href}
               href={href}
-              className="relative flex flex-col items-center justify-center py-2 px-3 min-w-[60px] text-[10.5px] font-bold transition-transform active:scale-95"
+              aria-current={active ? "page" : undefined}
+              className="relative flex flex-col items-center justify-center py-2 px-2 min-w-[64px] min-h-11 text-[10.5px] font-semibold transition-transform active:scale-95 outline-none focus-visible:ring-2 focus-visible:ring-(--violet) rounded-[20px]"
               style={{ color: active ? "var(--ink)" : "var(--ink-3)" }}
             >
               {active && (
@@ -61,7 +63,8 @@ export function BottomNav() {
                   layoutId="mobile-floating-pill"
                   className="absolute inset-0 rounded-[20px]"
                   style={{ background: "color-mix(in srgb, var(--violet) 12%, transparent)" }}
-                  transition={{ type: "spring", stiffness: 420, damping: 30 }}
+                  // Critically damped (2·√420 ≈ 41): a tap has no momentum.
+                  transition={{ type: "spring", stiffness: 420, damping: 41 }}
                 />
               )}
               <Icon size={20} className="relative z-10 mb-0.5" />

@@ -15,7 +15,6 @@ import { type IAccount, type ICreditMeta } from "@/types/models";
 import { Skeleton } from "@/components/_ui/Skeleton";
 import { Card } from "@/components/_ui/Card";
 import { Button } from "@/components/_ui/Button";
-import { useConfirm } from "@/components/_ui/ConfirmDialog";
 import { Progress } from "@/components/_ui/Progress";
 import { Input } from "@/components/_ui/Input";
 import { Label } from "@/components/ui/label";
@@ -166,7 +165,6 @@ export function AccountsClient() {
   const { data: accounts, isLoading } = useAccounts();
   const { data: seriesData } = useRecurringSeriesList();
   const { data: creditSummary } = useCreditSummary();
-  const { confirm, dialog } = useConfirm();
   const [filter, setFilter] = useState<FilterKey>("all");
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ name: "", type: "bank" as IAccount["type"], currency });
@@ -227,23 +225,26 @@ export function AccountsClient() {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  const archiveAccount = useMutation({
-    mutationFn: (id: string) => apiClient.delete(`/accounts/${id}`),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["accounts"] });
-      toast.success("Account archived");
-    },
+  // Archiving is reversible, so it happens at once with Undo in the toast
+  // instead of asking first.
+  const restoreAccount = useMutation({
+    mutationFn: (id: string) => apiClient.patch(`/accounts/${id}`, { isArchived: false }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["accounts"] }),
+    onError: (err: Error) => toast.error(err.message),
   });
 
-  const requestArchive = async (acc: IAccount) => {
-    const ok = await confirm({
-      title: `Archive "${acc.name}"?`,
-      description: "You can restore it later. Its transaction history stays intact.",
-      confirmLabel: "Archive",
-      destructive: true,
-    });
-    if (ok) archiveAccount.mutate(String(acc._id));
-  };
+  const archiveAccount = useMutation({
+    mutationFn: (acc: IAccount) => apiClient.delete(`/accounts/${acc._id}`),
+    onSuccess: (_res, acc) => {
+      void qc.invalidateQueries({ queryKey: ["accounts"] });
+      toast.success(`Archived ${acc.name}`, {
+        action: { label: "Undo", onClick: () => restoreAccount.mutate(String(acc._id)) },
+      });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const requestArchive = (acc: IAccount) => archiveAccount.mutate(acc);
 
   const nonCreditBalance = (accounts ?? [])
     .filter(a => a.type !== "credit_card")
@@ -338,15 +339,15 @@ export function AccountsClient() {
           <div className="text-sm font-bold" style={{ color: "var(--ink)" }}>New Account</div>
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5 col-span-2">
-              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Account name</Label>
-              <Input
+              <Label htmlFor="accounts-client-account-name-1" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Account name</Label>
+              <Input id="accounts-client-account-name-1"
                 value={form.name}
                 onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                 placeholder="e.g. Chase Sapphire"
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Type</Label>
+              <Label htmlFor="new-account-type" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Type</Label>
               <Select
                 value={form.type}
                 onValueChange={(value) => {
@@ -354,7 +355,7 @@ export function AccountsClient() {
                   if (value !== "credit_card") setCreditMeta({});
                 }}
               >
-                <SelectTrigger className="capitalize">
+                <SelectTrigger id="new-account-type" className="capitalize">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -365,9 +366,9 @@ export function AccountsClient() {
               </Select>
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Currency</Label>
+              <Label htmlFor="new-account-currency" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Currency</Label>
               <Select value={form.currency} onValueChange={(value) => setForm(f => ({ ...f, currency: value }))}>
-                <SelectTrigger>
+                <SelectTrigger id="new-account-currency">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -434,7 +435,6 @@ export function AccountsClient() {
           Add Account
         </Button>
       )}
-      {dialog}
     </div>
   );
 }

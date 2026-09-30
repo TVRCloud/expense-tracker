@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import apiClient from "@/lib/api-client";
 import { type ITransaction } from "@/types/models";
 import { toast } from "sonner";
@@ -41,6 +41,9 @@ export function useTransactions(filters: TransactionFilters = {}) {
 
   return useQuery<{ data: ITransaction[]; total: number }>({
     queryKey: ["transactions", filters],
+    // Keep showing the current rows while the next filter/page loads,
+    // instead of blanking the list back to skeletons.
+    placeholderData: keepPreviousData,
     queryFn: async () => {
       const res = await apiClient.get<{ data: ITransaction[]; total: number }>(
         `/transactions?${params}`

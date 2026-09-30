@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { dehydrate, HydrationBoundary } from "@tanstack/react-query";
 import { getServerSession } from "next-auth";
+import { unstable_rethrow } from "next/navigation";
 import { DashboardClient } from "@/features/dashboard/components/DashboardClient";
 import { authOptions } from "@/lib/auth-options";
 import connectDB from "@/lib/mongodb";
@@ -12,6 +13,8 @@ import { makeQueryClient } from "@/lib/query-client";
 import logger from "@/lib/logger";
 
 export const metadata: Metadata = { title: "Dashboard" };
+// Per-user data on every request: never prerender.
+export const dynamic = "force-dynamic";
 
 // The same values the API routes return, in the same JSON shape (ObjectIds
 // and Dates as strings), so the cache the client hydrates from is exactly
@@ -46,6 +49,8 @@ export default async function DashboardPage() {
       if (me) qc.setQueryData(["me"], asJson(me));
     }
   } catch (err) {
+    // Next's own control-flow errors (dynamic usage, redirects) must pass.
+    unstable_rethrow(err);
     logger.error({ err }, "dashboard prefetch failed; client will fetch");
   }
 

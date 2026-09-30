@@ -1,8 +1,11 @@
 export { cn } from "cn";
 
 /** Format integer cents to a display string: 484500 → "₹4,845.00" */
+// Rupees read in lakh/crore grouping (₹1,23,456.00), not 123,456.
+const localeFor = (currency: string) => (currency === "INR" ? "en-IN" : "en-US");
+
 export function formatCurrency(cents: number, currency = "INR"): string {
-  return new Intl.NumberFormat("en-US", {
+  return new Intl.NumberFormat(localeFor(currency), {
     style: "currency",
     currency,
     minimumFractionDigits: 2,
@@ -12,7 +15,7 @@ export function formatCurrency(cents: number, currency = "INR"): string {
 
 /** Format a compact amount for display: 484500 → "₹4.8k" */
 export function formatCurrencyCompact(cents: number, currency = "INR"): string {
-  return new Intl.NumberFormat("en-US", {
+  return new Intl.NumberFormat(localeFor(currency), {
     style: "currency",
     currency,
     notation: "compact",

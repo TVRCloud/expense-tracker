@@ -105,12 +105,12 @@ function GoalEditPanel({ goal, onDone }: { goal: IGoal; onDone: () => void }) {
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div className="flex flex-col gap-1.5 col-span-2">
-          <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Goal name</Label>
-          <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+          <Label htmlFor="goals-client-goal-name-1" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Goal name</Label>
+          <Input id="goals-client-goal-name-1" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Target ($)</Label>
-          <Input type="number" min="0" step="0.01" value={form.targetAmount} onChange={(e) => setForm((f) => ({ ...f, targetAmount: e.target.value }))} />
+          <Label htmlFor="goals-client-target-amount-2" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Target amount</Label>
+          <Input id="goals-client-target-amount-2" type="number" min="0" step="0.01" value={form.targetAmount} onChange={(e) => setForm((f) => ({ ...f, targetAmount: e.target.value }))} />
         </div>
         <DatePickerField
           label="Target date"
@@ -397,16 +397,16 @@ export function GoalsClient() {
 
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5 col-span-2">
-              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Goal name</Label>
-              <Input
+              <Label htmlFor="goals-client-goal-name-3" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Goal name</Label>
+              <Input id="goals-client-goal-name-3"
                 value={form.name}
                 onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                 placeholder="e.g. Emergency fund"
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Target ($)</Label>
-              <Input
+              <Label htmlFor="goals-client-target-amount-4" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Target amount</Label>
+              <Input id="goals-client-target-amount-4"
                 type="number"
                 min="0"
                 step="0.01"

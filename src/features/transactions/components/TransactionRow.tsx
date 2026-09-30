@@ -1,7 +1,6 @@
 import { ChevronRight, ArrowLeftRight, Repeat, SplitSquareHorizontal } from "lucide-react";
 import { SourceBadge, ReviewBadge } from "@/features/reconcile/components/SourceBadge";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useCurrency } from "@/hooks/useCurrency";
 import { type ITransaction } from "@/types/models";
 import { format } from "date-fns";
@@ -11,10 +10,11 @@ import { getCategoryColor as getAvatarColor, canonicalizeCategory } from "@/lib/
 
 interface Props {
   transaction: ITransaction;
+  /** Inside a day group, whose header already says the date. */
+  hideDate?: boolean;
 }
 
-export function TransactionRow({ transaction }: Props) {
-  const router = useRouter();
+export function TransactionRow({ transaction, hideDate = false }: Props) {
   const { formatCurrency } = useCurrency();
   const isIncome = transaction.type === "income";
   const isTransfer = transaction.type === "transfer";
@@ -25,24 +25,29 @@ export function TransactionRow({ transaction }: Props) {
   const avatarHex = isTransfer ? null : getAvatarColor(transaction.category);
   const activityDate = getTransactionActivityDate(transaction);
   const paidRecurring = isPaidRecurringTransaction(transaction);
+  const day = hideDate ? null : format(activityDate, "d MMM yyyy");
   const meta = paidRecurring
     ? `Paid ${format(activityDate, "d MMM yyyy")} · Due ${format(new Date(transaction.date), "d MMM yyyy")} · ${transaction.category}`
-    : isTransfer
-      ? `${format(activityDate, "d MMM yyyy")} · Transfer`
-      : `${format(activityDate, "d MMM yyyy")} · ${transaction.category}`;
+    : [day, isTransfer ? "Transfer" : transaction.category].filter(Boolean).join(" · ");
+  const title = transaction.description ?? transaction.category;
+  const href = `/transactions/${transaction._id}`;
 
   return (
+    // A real link covers the row (so it works with the keyboard, middle
+    // click and screen readers); the recurring chip sits above it, since
+    // links can't nest.
     <div
-      role="link"
-      tabIndex={0}
-      onClick={() => router.push(`/transactions/${transaction._id}`)}
-      onKeyDown={e => e.key === "Enter" && router.push(`/transactions/${transaction._id}`)}
-      className="group flex items-center gap-3.5 sm:gap-4 rounded-(--r-md) px-3.5 sm:px-4 py-3 sm:py-3.5 transition-transform duration-150 active:scale-[0.98] cursor-pointer"
+      className="group relative flex items-center gap-3.5 sm:gap-4 rounded-(--r-md) px-3.5 sm:px-4 py-3 sm:py-3.5 transition-transform duration-150 has-[a:active]:scale-[0.98]"
       style={{
         background: "var(--card)",
         border: "1px solid var(--line)",
       }}
     >
+      <Link
+        href={href}
+        aria-label={`${title}, ${isTransfer ? "transfer" : isIncome ? "received" : "spent"} ${formatCurrency(transaction.amount)}`}
+        className="absolute inset-0 rounded-(--r-md) outline-none focus-visible:ring-2 focus-visible:ring-(--violet) focus-visible:ring-offset-2"
+      />
       {/* Avatar — category icon with tinted bg */}
       {isTransfer ? (
         <div
@@ -70,16 +75,15 @@ export function TransactionRow({ transaction }: Props) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 flex-wrap">
           <div
-            className="font-bold text-[15px] truncate"
+            className="font-semibold text-[15px] truncate"
             style={{ color: "var(--ink)" }}
           >
-            {transaction.description ?? transaction.category}
+            {title}
           </div>
           {transaction.isRecurring && transaction.recurringId && (
             <Link
               href={`/transactions/recurring/${transaction.recurringId}`}
-              onClick={e => e.stopPropagation()}
-              className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-none"
+              className="relative z-10 inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full flex-none"
               style={{ background: "color-mix(in srgb, var(--violet) 10%, transparent)", color: "var(--violet)" }}
             >
               <Repeat size={9} className="inline" />
@@ -88,7 +92,7 @@ export function TransactionRow({ transaction }: Props) {
           )}
           {transaction.splitGroupId && (
             <span
-              className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-none"
+              className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full flex-none"
               style={{ background: "color-mix(in srgb, var(--amber) 12%, transparent)", color: "var(--amber)" }}
             >
               <SplitSquareHorizontal size={9} className="inline" />
@@ -98,7 +102,7 @@ export function TransactionRow({ transaction }: Props) {
           <SourceBadge source={transaction.source} />
           <ReviewBadge status={transaction.reviewStatus} />
         </div>
-        <div className="text-xs font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>
+        <div className="text-xs mt-0.5 truncate" style={{ color: "var(--ink-3)" }}>
           {meta}
         </div>
       </div>
@@ -118,7 +122,7 @@ export function TransactionRow({ transaction }: Props) {
       >
         {sign}{formatCurrency(transaction.amount)}
       </div>
-      <ChevronRight size={19} style={{ color: "var(--ink-3)", flexShrink: 0 }} />
+      <ChevronRight size={19} aria-hidden style={{ color: "var(--ink-3)", flexShrink: 0 }} />
     </div>
   );
 }

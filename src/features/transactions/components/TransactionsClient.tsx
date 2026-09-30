@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { startOfDay } from "date-fns";
 import { Search, X, Download } from "lucide-react";
 import Link from "next/link";
@@ -50,7 +50,13 @@ export function TransactionsClient({ accountId }: { accountId?: string }) {
   const [searchInput, setSearchInput] = useState("");
   const [limit, setLimit] = useState(50);
 
-  const { data, isLoading } = useTransactions({
+  // Live search, debounced — no Enter needed.
+  useEffect(() => {
+    const t = window.setTimeout(() => setSearch(searchInput.trim()), 300);
+    return () => window.clearTimeout(t);
+  }, [searchInput]);
+
+  const { data, isLoading, isFetching } = useTransactions({
     type: typeFilter || undefined,
     category: catFilter || undefined,
     accountId,
@@ -103,8 +109,9 @@ export function TransactionsClient({ accountId }: { accountId?: string }) {
           placeholder="Search transactions..."
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
+          aria-label="Search transactions"
           onKeyDown={(e) => {
-            if (e.key === "Enter") setSearch(searchInput);
+            if (e.key === "Enter") setSearch(searchInput.trim());
             if (e.key === "Escape") {
               setSearchInput("");
               setSearch("");
@@ -116,7 +123,7 @@ export function TransactionsClient({ accountId }: { accountId?: string }) {
             type="button"
             variant="ghost"
             size="icon"
-            className="h-6 w-6"
+            className="h-8 w-8"
             aria-label="Clear search"
             onClick={() => {
               setSearchInput("");
@@ -160,8 +167,21 @@ export function TransactionsClient({ accountId }: { accountId?: string }) {
             <Search size={24} style={{ color: "var(--ink-3)" }} />
           </div>
           <p className="text-sm font-medium" style={{ color: "var(--ink-2)" }}>
-            No transactions found
+            {search || typeFilter || catFilter ? "Nothing matches these filters" : "No transactions yet"}
           </p>
+          {(search || typeFilter || catFilter) && (
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setSearchInput("");
+                setSearch("");
+                setTypeFilter("");
+                setCatFilter("");
+              }}
+            >
+              Clear filters
+            </Button>
+          )}
         </Card>
       ) : (
         <div className="flex flex-col gap-6">
@@ -172,10 +192,12 @@ export function TransactionsClient({ accountId }: { accountId?: string }) {
             <Button
               variant="secondary"
               onClick={() => setLimit((current) => current + 50)}
+              disabled={isFetching}
+              aria-busy={isFetching}
               className="w-full h-auto py-3 rounded-(--r-md) font-semibold"
               style={{ color: "var(--violet)" }}
             >
-              Load more ({data.total - (data.data?.length ?? 0)} remaining)
+              {isFetching ? "Loading…" : `Load more (${data.total - (data.data?.length ?? 0)} remaining)`}
             </Button>
           )}
         </div>

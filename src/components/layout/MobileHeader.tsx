@@ -46,9 +46,10 @@ export function MobileHeader() {
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => router.back()}
+            // A PWA opened on a deep link has nothing to go back to.
+            onClick={() => (window.history.length > 1 ? router.back() : router.push("/dashboard"))}
             aria-label="Go back"
-            className="w-10 h-10 rounded-full active:scale-95"
+            className="w-11 h-11 rounded-full active:scale-95"
             style={{ background: "var(--card-2)", color: "var(--ink)" }}
           >
             <ChevronLeft size={20} />

@@ -68,10 +68,10 @@ export function RegisterForm() {
 
       <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
         <div>
-          <Label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
+          <Label htmlFor="register-form-full-name-1" className="block text-[13px] font-medium mb-2" style={{ color: "var(--ink-2)" }}>
             Full name
           </Label>
-          <Input
+          <Input id="register-form-full-name-1"
             type="text"
             autoComplete="name"
             placeholder="Alex Rivera"
@@ -87,10 +87,10 @@ export function RegisterForm() {
         </div>
 
         <div>
-          <Label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
+          <Label htmlFor="register-form-email-2" className="block text-[13px] font-medium mb-2" style={{ color: "var(--ink-2)" }}>
             Email
           </Label>
-          <Input
+          <Input id="register-form-email-2"
             type="email"
             autoComplete="email"
             placeholder="you@example.com"
@@ -106,11 +106,12 @@ export function RegisterForm() {
         </div>
 
         <div>
-          <Label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
+          <Label htmlFor="register-password" className="block text-[13px] font-medium mb-2" style={{ color: "var(--ink-2)" }}>
             Password
           </Label>
           <div className="relative">
             <Input
+              id="register-password"
               type={showPw ? "text" : "password"}
               autoComplete="new-password"
               placeholder="Min. 8 characters"
@@ -138,10 +139,11 @@ export function RegisterForm() {
         </div>
 
         <div>
-          <Label className="block text-xs font-bold mb-2" style={{ color: "var(--ink-2)" }}>
+          <Label htmlFor="register-confirm-password" className="block text-[13px] font-medium mb-2" style={{ color: "var(--ink-2)" }}>
             Confirm password
           </Label>
           <Input
+            id="register-confirm-password"
             type={showPw ? "text" : "password"}
             autoComplete="new-password"
             placeholder="Repeat password"
