@@ -77,26 +77,31 @@ export function AccountDetailClient({ id }: Props) {
     onError: (err: Error) => toast.error(err.message),
   });
 
+  const labelStyle = { font: "var(--text-label)", color: "var(--ink-2)" } as const;
+
   if (isLoading) {
     return (
-      <div className="flex flex-col gap-4">
-        <Skeleton className="h-12 w-28 rounded-(--r-sm)" />
-        <Skeleton className="h-48 rounded-(--r-lg)" />
-        <Skeleton className="h-72 rounded-(--r-lg)" />
+      <div className="page-stack">
+        <Skeleton className="h-9 w-32 rounded-(--r-sm)" />
+        <Skeleton className="h-44 rounded-(--r-lg)" />
+        <div className="grid-split">
+          <Skeleton className="h-72 rounded-(--r-lg)" />
+          <Skeleton className="h-56 rounded-(--r-lg) rail" />
+        </div>
       </div>
     );
   }
 
   if (isError || !account) {
     return (
-      <div className="flex flex-col gap-4">
-        <Link href="/accounts" className="inline-flex items-center gap-2 text-sm font-bold" style={{ color: "var(--violet)" }}>
+      <div className="page-stack">
+        <Link href="/accounts" className="inline-flex items-center gap-1.5 min-h-11 w-max" style={{ font: "var(--text-label)", fontWeight: 600, color: "var(--ink-2)" }}>
           <ArrowLeft size={16} />
-          Back to accounts
+          Accounts
         </Link>
-        <Card radius="lg" className="p-8 text-center">
-          <div className="font-bold" style={{ color: "var(--ink)" }}>Account not found</div>
-          <p className="text-sm mt-1" style={{ color: "var(--ink-3)" }}>It may have been archived or deleted.</p>
+        <Card radius="lg" className="p-10 text-center">
+          <div style={{ font: "var(--text-body)", fontWeight: 600, color: "var(--ink)" }}>Account not found</div>
+          <p className="mt-1" style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>It may have been archived or deleted.</p>
         </Card>
       </div>
     );
@@ -107,39 +112,36 @@ export function AccountDetailClient({ id }: Props) {
     return <CreditCardDetailClient id={id} />;
   }
 
+  const TypeIcon = ACCOUNT_TYPE_ICONS[account.type] ?? CreditCard;
+  const txs = transactions?.data ?? [];
+
   return (
-    <div className="flex flex-col gap-5">
-      <Link href="/accounts" className="inline-flex items-center gap-2 text-sm font-bold" style={{ color: "var(--violet)" }}>
+    <div className="page-stack">
+      <Link href="/accounts" className="inline-flex items-center gap-1.5 min-h-11 w-max active:opacity-60 transition-opacity" style={{ font: "var(--text-label)", fontWeight: 600, color: "var(--ink-2)" }}>
         <ArrowLeft size={16} />
-        Back to accounts
+        Accounts
       </Link>
 
-      <Card radius="lg" elevation="floating" className="p-5">
-        <div className="flex items-start gap-4">
+      <Card radius="lg" elevation="floating" className="p-5 sm:p-7">
+        <div className="flex flex-wrap items-start gap-4">
           <div
             className="w-14 h-14 rounded-2xl grid place-items-center flex-none"
-            style={{ background: account.color || "var(--card-2)", color: account.color ? "var(--violet-fg)" : "var(--violet)" }}
+            style={{ background: account.color || "var(--card-2)", color: account.color ? "var(--violet-fg)" : "var(--ink-2)" }}
           >
-            {(() => {
-              const TypeIcon = ACCOUNT_TYPE_ICONS[account.type] ?? CreditCard;
-              return <TypeIcon size={26} />;
-            })()}
+            <TypeIcon size={26} />
           </div>
-          <div className="min-w-0">
-            <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
+          <div className="min-w-0 flex-1">
+            <div className="capitalize" style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>
               {account.type.replace("_", " ")} · {account.currency}
             </div>
-            <h2 className="text-2xl font-extrabold truncate" style={{ color: "var(--ink)" }}>{account.name}</h2>
-            <div className="text-[34px] font-extrabold tnum mt-2" style={{ color: account.balance >= 0 ? "var(--ink)" : "var(--red)" }}>
-              {formatCurrency(account.balance)}
-            </div>
+            <h1 className="truncate" style={{ font: "var(--text-h2)", letterSpacing: "var(--track-h2)", color: "var(--ink)" }}>{account.name}</h1>
           </div>
-          <div className="ml-auto flex gap-2">
+          <div className="flex gap-2 flex-none">
             <Button
               type="button"
               variant="secondary"
               onClick={() => setEditing((value) => !value)}
-              className="h-auto px-4 py-2 rounded-(--r-sm) font-bold"
+              className="h-11 px-5 rounded-full font-semibold btn-interactive"
             >
               {editing ? "Cancel" : "Edit"}
             </Button>
@@ -158,72 +160,98 @@ export function AccountDetailClient({ id }: Props) {
                 if (ok) archiveAccount.mutate();
               }}
               disabled={archiveAccount.isPending}
-              className="w-10 h-10 rounded-(--r-sm)"
-              style={{ background: "rgba(235,87,87,.12)", color: "var(--red)" }}
+              className="w-11 h-11 rounded-full active:scale-[0.96] transition"
+              style={{ background: "color-mix(in srgb, var(--red) 12%, transparent)", color: "var(--red)" }}
             >
               <Archive size={16} />
             </Button>
           </div>
         </div>
-
-        {editing && (
-          <div className="grid md:grid-cols-3 gap-3 mt-5">
-            <div className="flex flex-col gap-1.5 md:col-span-3">
-              <Label htmlFor="account-detail-client-name-1" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Name</Label>
-              <Input id="account-detail-client-name-1" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="account-detail-client-color-2" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Color</Label>
-              <Input id="account-detail-client-color-2" value={form.color} onChange={(e) => setForm((f) => ({ ...f, color: e.target.value }))} placeholder="#6B46F5" />
-            </div>
-            <div className="flex flex-col gap-1.5 md:col-span-2">
-              <Label htmlFor="account-detail-client-sms-match-digits-3" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>SMS match digits</Label>
-              <Input id="account-detail-client-sms-match-digits-3"
-                value={form.smsLastFour}
-                inputMode="numeric"
-                onChange={(e) => setForm((f) => ({ ...f, smsLastFour: e.target.value.replace(/[^\d,\s]/g, "") }))}
-                placeholder="e.g. 1234 (from “A/c XX1234”)"
-                aria-describedby="sms-digits-hint"
-              />
-              <span id="sms-digits-hint" className="text-xs" style={{ color: "var(--ink-3)" }}>
-                Last 4 digits your bank shows in SMS. Captured payments with these digits go to this account.
-              </span>
-            </div>
-            <Button
-              type="button"
-              onClick={() => updateAccount.mutate()}
-              disabled={updateAccount.isPending || !form.name}
-              className="h-auto rounded-(--r-sm) font-bold"
-            >
-              <Save size={16} />
-              {updateAccount.isPending ? "Saving..." : "Save"}
-            </Button>
+        <div className="mt-6">
+          <div style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>Balance</div>
+          <div className="tnum truncate" style={{ font: "var(--text-display)", letterSpacing: "var(--track-title)", color: account.balance >= 0 ? "var(--ink)" : "var(--red)" }}>
+            {formatCurrency(account.balance)}
           </div>
-        )}
+        </div>
       </Card>
 
-      <section className="flex flex-col gap-3">
-        <div className="flex items-center justify-between px-1">
-          <h3 className="text-sm font-bold" style={{ color: "var(--ink)" }}>Recent transactions</h3>
-          <Link href={`/transactions?accountId=${id}`} className="text-sm font-bold" style={{ color: "var(--violet)" }}>View all</Link>
-        </div>
-        {txLoading ? (
-          <div className="flex flex-col gap-2">
-            {[0, 1, 2].map((i) => <Skeleton key={i} className="h-16 rounded-(--r-md)" />)}
+      <div className="grid-split">
+        <section>
+          <div className="section-head">
+            <h2>Recent transactions</h2>
+            <Link href={`/transactions?accountId=${id}`} style={{ font: "var(--text-label)", fontWeight: 600, color: "var(--ink-2)" }}>View all</Link>
           </div>
-        ) : (transactions?.data ?? []).length === 0 ? (
-          <Card radius="lg" className="p-8 text-center">
-            <div className="font-bold" style={{ color: "var(--ink)" }}>No transactions yet</div>
-            <p className="text-sm mt-1" style={{ color: "var(--ink-3)" }}>Transactions linked to this account will appear here.</p>
-          </Card>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {(transactions?.data ?? []).map((transaction) => (
-              <TransactionRow key={String(transaction._id)} transaction={transaction} />
-            ))}
-          </div>
-        )}
-      </section>
+          {txLoading ? (
+            <div className="flex flex-col gap-2">
+              {[0, 1, 2].map((i) => <Skeleton key={i} className="h-16 rounded-(--r-md)" />)}
+            </div>
+          ) : txs.length === 0 ? (
+            <Card radius="lg" className="p-10 text-center">
+              <div style={{ font: "var(--text-body)", fontWeight: 600, color: "var(--ink)" }}>No transactions yet</div>
+              <p className="mt-1" style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>Transactions linked to this account will appear here.</p>
+            </Card>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {txs.map((transaction) => (
+                <TransactionRow key={String(transaction._id)} transaction={transaction} />
+              ))}
+            </div>
+          )}
+        </section>
+
+        <aside className="rail">
+          <div className="section-head"><h2>Details</h2></div>
+          {editing ? (
+            <Card radius="lg" className="p-5 flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="account-detail-client-name-1" style={labelStyle}>Name</Label>
+                <Input id="account-detail-client-name-1" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} className="h-11" />
+                {!form.name.trim() && <span style={{ font: "var(--text-micro)", color: "var(--red)" }}>Name is required</span>}
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="account-detail-client-color-2" style={labelStyle}>Color</Label>
+                <Input id="account-detail-client-color-2" value={form.color} onChange={(e) => setForm((f) => ({ ...f, color: e.target.value }))} placeholder="#6B46F5" className="h-11" />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="account-detail-client-sms-match-digits-3" style={labelStyle}>SMS match digits</Label>
+                <Input id="account-detail-client-sms-match-digits-3"
+                  value={form.smsLastFour}
+                  inputMode="numeric"
+                  onChange={(e) => setForm((f) => ({ ...f, smsLastFour: e.target.value.replace(/[^\d,\s]/g, "") }))}
+                  placeholder="e.g. 1234 (from “A/c XX1234”)"
+                  aria-describedby="sms-digits-hint"
+                  className="h-11"
+                />
+                <span id="sms-digits-hint" style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>
+                  Last 4 digits your bank shows in SMS. Captured payments with these digits go to this account.
+                </span>
+              </div>
+              <Button
+                type="button"
+                onClick={() => updateAccount.mutate()}
+                disabled={updateAccount.isPending || !form.name}
+                className="h-11 rounded-full font-semibold btn-interactive"
+              >
+                <Save size={16} />
+                {updateAccount.isPending ? "Saving..." : "Save changes"}
+              </Button>
+            </Card>
+          ) : (
+            <div className="inset-group" style={{ "--inset": "16px" } as React.CSSProperties}>
+              {[
+                { k: "Type", v: account.type.replace("_", " "), cap: true },
+                { k: "Currency", v: account.currency },
+                { k: "SMS match digits", v: (account.smsLastFour ?? []).join(", ") || "None" },
+              ].map((row) => (
+                <div key={row.k} className="flex items-center justify-between gap-4 px-4 min-h-12">
+                  <span style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>{row.k}</span>
+                  <span className={row.cap ? "capitalize truncate" : "truncate tnum"} style={{ font: "var(--text-label)", fontWeight: 600, color: "var(--ink)" }}>{row.v}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </aside>
+      </div>
       {dialog}
     </div>
   );

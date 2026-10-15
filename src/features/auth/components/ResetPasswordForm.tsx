@@ -6,13 +6,12 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import Link from "next/link";
-import { Eye, EyeOff, Wallet, CheckCircle } from "lucide-react";
+import { Eye, EyeOff, Check } from "lucide-react";
 import { resetPasswordSchema, type ResetPasswordInput } from "@/features/auth/schemas/auth.schema";
 import apiClient from "@/lib/api-client";
-import { Card } from "@/components/_ui/Card";
 import { Button } from "@/components/_ui/Button";
 import { Input } from "@/components/_ui/Input";
-import { Label } from "@/components/ui/label";
+import { AuthCard, AuthField, AuthNotice, AUTH_INPUT, AUTH_SUBMIT, AUTH_LINK } from "./AuthShell";
 
 interface Props {
   token: string;
@@ -43,108 +42,70 @@ export function ResetPasswordForm({ token }: Props) {
     }
   };
 
-  return (
-    <Card radius="lg" elevation="floating" className="p-8">
-      <div className="flex items-center gap-3 mb-8">
-        <div
-          className="w-10 h-10 rounded-[12px] grid place-items-center text-white"
-          style={{ background: "linear-gradient(150deg,var(--violet),var(--violet-2))" }}
-        >
-          <Wallet size={20} />
-        </div>
-        <span className="font-extrabold text-xl tracking-tight">
-          exp<span style={{ color: "var(--violet)" }}>s</span>
-        </span>
-      </div>
-
-      {done ? (
-        <div className="text-center py-4">
-          <CheckCircle size={48} className="mx-auto mb-4" style={{ color: "var(--green)" }} />
-          <h2 className="font-extrabold text-xl mb-2" style={{ color: "var(--ink)" }}>
-            Password updated!
-          </h2>
-          <p className="text-sm font-medium" style={{ color: "var(--ink-2)" }}>
+  if (done) {
+    return (
+      <AuthCard title="All set">
+        <AuthNotice icon={<Check size={26} />} title="Password updated">
+          <p className="mt-2" style={{ font: "var(--text-body)", color: "var(--ink-2)" }}>
             Redirecting you to sign in…
           </p>
-        </div>
-      ) : (
-        <>
-          <h1 className="font-extrabold text-2xl tracking-tight mb-1" style={{ color: "var(--ink)" }}>
-            New password
-          </h1>
-          <p className="text-sm font-medium mb-7" style={{ color: "var(--ink-2)" }}>
-            Choose a strong password for your account.
-          </p>
+        </AuthNotice>
+      </AuthCard>
+    );
+  }
 
-          <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
-            <div>
-              <Label className="block text-[13px] font-medium mb-2" style={{ color: "var(--ink-2)" }}>
-                New password
-              </Label>
-              <div className="relative">
-                <Input
-                  type={showPw ? "text" : "password"}
-                  autoComplete="new-password"
-                  placeholder="Min. 8 characters"
-                  className="rounded-[14px] py-3 px-4 pr-12 h-auto font-semibold"
-                  style={{ background: "var(--card-2)", border: "1.5px solid var(--line-2)" }}
-                  {...register("password")}
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setShowPw((v) => !v)}
-                  aria-label={showPw ? "Hide password" : "Show password"}
-                  className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8"
-                  style={{ color: "var(--ink-3)" }}
-                >
-                  {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
-                </Button>
-              </div>
-              {errors.password && (
-                <p className="mt-1 text-xs font-semibold" style={{ color: "var(--red)" }}>
-                  {errors.password.message}
-                </p>
-              )}
-            </div>
-
-            <div>
-              <Label className="block text-[13px] font-medium mb-2" style={{ color: "var(--ink-2)" }}>
-                Confirm password
-              </Label>
-              <Input
-                type={showPw ? "text" : "password"}
-                autoComplete="new-password"
-                placeholder="Repeat password"
-                className="rounded-[14px] py-3 px-4 h-auto font-semibold"
-                style={{ background: "var(--card-2)", border: "1.5px solid var(--line-2)" }}
-                {...register("confirmPassword")}
-              />
-              {errors.confirmPassword && (
-                <p className="mt-1 text-xs font-semibold" style={{ color: "var(--red)" }}>
-                  {errors.confirmPassword.message}
-                </p>
-              )}
-            </div>
-
-            <Button
-              type="submit"
-              disabled={loading}
-              className="w-full h-auto py-4 rounded-[15px] font-bold text-base mt-1"
-              style={{ background: "var(--fab)", color: "var(--fab-ink)" }}
-            >
-              {loading ? "Updating…" : "Update password"}
-            </Button>
-          </form>
-
-          <div className="mt-6 flex justify-center">
-            <Link href="/login" className="text-sm font-bold" style={{ color: "var(--ink-2)" }}>
-              Back to sign in
-            </Link>
+  return (
+    <AuthCard
+      title="New password"
+      subtitle="Choose a strong password for your account."
+      footer={
+        <Link href="/login" className={AUTH_LINK} style={{ color: "var(--ink-2)" }}>
+          Back to sign in
+        </Link>
+      }
+    >
+      <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-5" noValidate>
+        <AuthField label="New password" htmlFor="reset-password" error={errors.password?.message}>
+          <div className="relative">
+            <Input
+              id="reset-password"
+              type={showPw ? "text" : "password"}
+              autoComplete="new-password"
+              placeholder="Min. 8 characters"
+              className={`${AUTH_INPUT} pr-12`}
+              aria-invalid={!!errors.password}
+              {...register("password")}
+            />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => setShowPw((v) => !v)}
+                aria-label={showPw ? "Hide password" : "Show password"}
+                className="absolute right-1.5 top-1/2 size-9 -translate-y-1/2 rounded-full"
+                style={{ color: "var(--ink-3)" }}
+              >
+                {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
+              </Button>
           </div>
-        </>
-      )}
-    </Card>
+        </AuthField>
+
+        <AuthField label="Confirm password" htmlFor="reset-confirm-password" error={errors.confirmPassword?.message}>
+          <Input
+            id="reset-confirm-password"
+            type={showPw ? "text" : "password"}
+            autoComplete="new-password"
+            placeholder="Repeat password"
+            className={AUTH_INPUT}
+            aria-invalid={!!errors.confirmPassword}
+            {...register("confirmPassword")}
+          />
+        </AuthField>
+
+        <Button type="submit" disabled={loading} className={AUTH_SUBMIT}>
+          {loading ? "Updating…" : "Update password"}
+        </Button>
+      </form>
+    </AuthCard>
   );
 }

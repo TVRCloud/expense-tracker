@@ -10,6 +10,7 @@ interface Props {
   isActive?: boolean;
 }
 
+/** Row inside an .inset-group; active month gets a quiet tint and an ink marker. */
 export function HistoryRow({ history, onClick, isActive }: Props) {
   const { formatCurrency } = useCurrency();
   const monthDate = new Date(history.year, history.month - 1, 1);
@@ -18,79 +19,27 @@ export function HistoryRow({ history, onClick, isActive }: Props) {
 
   return (
     <button
+      type="button"
       onClick={onClick}
-      className="flex items-center gap-4 w-full text-left rounded-[var(--r-md)] px-4 py-3.5 transition-all hover:opacity-90"
-      style={
-        isActive
-          ? { background: "var(--violet)", boxShadow: "0 4px 14px rgba(0,0,0,.25)" }
-          : { background: "var(--card)", boxShadow: "var(--shadow-sm)" }
-      }
+      aria-current={isActive ? "true" : undefined}
+      className="flex items-center gap-3 w-full text-left px-4 py-3 min-h-14 transition-colors active:scale-[0.99] hover:bg-(--card-2) focus-visible:outline-none focus-visible:bg-(--card-2)"
+      style={isActive ? { background: "var(--card-2)" } : undefined}
     >
-      {/* Month */}
-      <div className="w-12 text-center flex-none">
-        <div
-          className="text-[11px] font-extrabold uppercase tracking-wider"
-          style={{ color: isActive ? "rgba(255,255,255,.7)" : "var(--ink-3)" }}
-        >
-          {format(monthDate, "MMM")}
-        </div>
-        <div
-          className="text-lg font-extrabold tnum"
-          style={{ color: isActive ? "#fff" : "var(--ink)" }}
-        >
-          {format(monthDate, "yy")}
-        </div>
-      </div>
-
-      {/* Divider */}
-      <div className="h-9 w-px flex-none" style={{ background: isActive ? "rgba(255,255,255,.25)" : "var(--line)" }} />
-
-      {/* Income */}
+      <span
+        className="w-1 h-8 rounded-full flex-none"
+        style={{ background: isActive ? "var(--ink)" : "transparent" }}
+        aria-hidden
+      />
       <div className="flex-1 min-w-0">
-        <div
-          className="text-[11px] font-bold uppercase tracking-wider"
-          style={{ color: isActive ? "rgba(255,255,255,.7)" : "var(--ink-3)" }}
-        >
-          Income
-        </div>
-        <div
-          className="text-sm font-bold tnum"
-          style={{ color: isActive ? "#fff" : "var(--green)" }}
-        >
-          +{formatCurrency(history.stats.income)}
+        <div style={{ font: "var(--text-body)", color: "var(--ink)", fontWeight: 600 }}>{format(monthDate, "MMMM yyyy")}</div>
+        <div className="tnum truncate" style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>
+          <span style={{ color: "var(--green)" }}>+{formatCurrency(history.stats.income)}</span>
+          {"  "}
+          <span style={{ color: "var(--red)" }}>−{formatCurrency(history.stats.expense)}</span>
         </div>
       </div>
-
-      {/* Expense */}
-      <div className="flex-1 min-w-0">
-        <div
-          className="text-[11px] font-bold uppercase tracking-wider"
-          style={{ color: isActive ? "rgba(255,255,255,.7)" : "var(--ink-3)" }}
-        >
-          Expense
-        </div>
-        <div
-          className="text-sm font-bold tnum"
-          style={{ color: isActive ? "#fff" : "var(--red)" }}
-        >
-          -{formatCurrency(history.stats.expense)}
-        </div>
-      </div>
-
-      {/* Net */}
-      <div className="text-right flex-none">
-        <div
-          className="text-[11px] font-bold uppercase tracking-wider"
-          style={{ color: isActive ? "rgba(255,255,255,.7)" : "var(--ink-3)" }}
-        >
-          Net
-        </div>
-        <div
-          className="text-sm font-extrabold tnum"
-          style={{ color: isActive ? "#fff" : (isPositive ? "var(--green)" : "var(--red)") }}
-        >
-          {isPositive ? "+" : ""}{formatCurrency(Math.abs(net))}
-        </div>
+      <div className="text-right flex-none tnum" style={{ font: "var(--text-figure-sm)", color: isPositive ? "var(--green)" : "var(--red)" }}>
+        {isPositive ? "+" : "−"}{formatCurrency(Math.abs(net))}
       </div>
     </button>
   );

@@ -18,6 +18,8 @@ import { Switch } from "@/components/_ui/Switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DatePickerField } from "@/components/shared/DatePickerField";
 import { goalCreateSchema } from "@/features/goals/schemas/goal.schema";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { PageHeader } from "@/components/shared/PageHeader";
 import { toast } from "sonner";
 
 function useGoals() {
@@ -86,7 +88,7 @@ function GoalEditPanel({ goal, onDone }: { goal: IGoal; onDone: () => void }) {
   });
 
   return (
-    <Card surface="card-2" radius="md" className="mt-4 p-4 flex flex-col gap-3">
+    <Card surface="card-2" radius="md" className="p-4 flex flex-col gap-3">
       <div className="flex gap-2 flex-wrap">
         {GOAL_ICONS.map(icon => (
           <Button
@@ -96,8 +98,8 @@ function GoalEditPanel({ goal, onDone }: { goal: IGoal; onDone: () => void }) {
             aria-label={`Use ${icon} icon`}
             aria-pressed={form.icon === icon}
             onClick={() => setForm(f => ({ ...f, icon }))}
-            className="w-9 h-9 rounded-[10px] text-lg p-0"
-            style={{ background: form.icon === icon ? "var(--violet)" : "var(--card)" }}
+            className="w-10 h-10 rounded-[11px] text-lg p-0"
+            style={{ background: "var(--card)", boxShadow: form.icon === icon ? "inset 0 0 0 2px var(--ink)" : undefined }}
           >
             {icon}
           </Button>
@@ -148,12 +150,12 @@ function GoalEditPanel({ goal, onDone }: { goal: IGoal; onDone: () => void }) {
         <Button
           onClick={() => updateGoal.mutate()}
           disabled={updateGoal.isPending || !form.name || !form.targetAmount}
-          className="h-auto rounded-(--r-sm) px-3 py-2 font-bold"
+          className="h-11 rounded-full px-5 font-semibold btn-interactive"
         >
           <Save size={14} />
           {updateGoal.isPending ? "Saving..." : "Save"}
         </Button>
-        <Button type="button" variant="secondary" onClick={onDone} className="h-auto rounded-(--r-sm) px-3 py-2 font-bold">
+        <Button type="button" variant="ghost" onClick={onDone} className="h-11 rounded-full px-5 font-semibold">
           Cancel
         </Button>
       </div>
@@ -225,197 +227,207 @@ export function GoalsClient() {
     onError: (err: Error) => toast.error(err.message),
   });
 
+  const goalList = goals ?? [];
+  const totalSaved = goalList.reduce((n, g) => n + g.savedAmount, 0);
+  const totalTarget = goalList.reduce((n, g) => n + g.targetAmount, 0);
+  const doneCount = goalList.filter((g) => g.isCompleted).length;
+  const overallPct = totalTarget > 0 ? Math.min((totalSaved / totalTarget) * 100, 100) : 0;
+  const nameMissing = form.name.trim() === "";
+  const amountInvalid = !form.targetAmount || !(parseFloat(form.targetAmount) > 0);
+  const closeAdd = () => { setShowAdd(false); setForm(emptyGoalForm); };
+  const labelStyle = { font: "var(--text-label)", color: "var(--ink-2)" } as const;
+
   return (
-    <div className="flex flex-col gap-5">
-      {isLoading ? (
-        <div className="grid md:grid-cols-2 gap-4">
-          {[0, 1, 2, 3].map(i => <Skeleton key={i} className="h-44 rounded-(--r-lg)" />)}
-        </div>
-      ) : (goals ?? []).length === 0 && !showAdd ? (
-        <Card radius="lg" className="flex flex-col items-center justify-center gap-3 py-16">
-          <Target size={40} style={{ color: "var(--ink-3)" }} />
-          <p className="text-sm font-medium" style={{ color: "var(--ink-2)" }}>No savings goals yet</p>
-          <Button onClick={() => setShowAdd(true)} className="h-auto text-sm px-4 py-2 rounded-full">
-            Create goal
+    <div className="page-stack">
+      <PageHeader
+        title="Goals"
+        subtitle="Save toward the things that matter."
+        actions={
+          <Button type="button" onClick={() => setShowAdd(true)} className="h-11 px-5 rounded-full font-semibold btn-interactive">
+            <Plus size={16} />
+            New goal
           </Button>
+        }
+      />
+
+      {!isLoading && goalList.length > 0 && (
+        <Card radius="lg" className="p-5 sm:p-6 flex flex-col gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-4">
+            <div className="min-w-0">
+              <div style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>Total saved</div>
+              <div className="tnum truncate mt-1" style={{ font: "var(--text-stat)", letterSpacing: "-0.02em", color: "var(--green)" }}>{formatCurrency(totalSaved)}</div>
+            </div>
+            <div className="min-w-0">
+              <div style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>Across targets</div>
+              <div className="tnum truncate mt-1" style={{ font: "var(--text-stat)", letterSpacing: "-0.02em", color: "var(--ink)" }}>{formatCurrency(totalTarget)}</div>
+            </div>
+            <div className="min-w-0 col-span-2 sm:col-span-1">
+              <div style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>Completed</div>
+              <div className="tnum mt-1" style={{ font: "var(--text-stat)", letterSpacing: "-0.02em", color: "var(--ink)" }}>{doneCount} of {goalList.length}</div>
+            </div>
+          </div>
+          <Progress value={overallPct} color="var(--green)" trackColor="var(--line)" height={6} aria-label="Overall savings progress" />
+        </Card>
+      )}
+
+      {isLoading ? (
+        <div className="grid-cards" style={{ "--card-min": "320px" } as React.CSSProperties}>
+          {[0, 1, 2, 3].map(i => <Skeleton key={i} className="h-52 rounded-(--r-lg)" />)}
+        </div>
+      ) : goalList.length === 0 ? (
+        <Card radius="lg" className="flex flex-col items-center justify-center gap-3 py-20 text-center px-6">
+          <div className="w-14 h-14 rounded-2xl grid place-items-center" style={{ background: "var(--card-2)" }}>
+            <Target size={26} style={{ color: "var(--ink-2)" }} />
+          </div>
+          <p style={{ font: "var(--text-body)", fontWeight: 600, color: "var(--ink)" }}>No savings goals yet</p>
+          <p style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>Pick a target and watch it fill up.</p>
+          <Button onClick={() => setShowAdd(true)} className="h-11 px-5 rounded-full font-semibold btn-interactive">Create goal</Button>
         </Card>
       ) : (
-        <div className="grid md:grid-cols-2 gap-4">
-          {(goals ?? []).map((g) => {
+        <div className="grid-cards" style={{ "--card-min": "320px" } as React.CSSProperties}>
+          {goalList.map((g) => {
             const pct = g.targetAmount > 0 ? Math.min((g.savedAmount / g.targetAmount) * 100, 100) : 0;
+            const remaining = Math.max(0, g.targetAmount - g.savedAmount);
+            const daysLeft = g.targetDate ? Math.ceil((new Date(g.targetDate).getTime() - Date.now()) / 86400000) : null;
+            const id = String(g._id);
             return (
               <Card
-                key={String(g._id)}
+                key={id}
                 radius="lg"
-                elevation="floating"
-                className="p-5"
-                style={{
-                  background: g.isCompleted
-                    ? "linear-gradient(135deg, #4FC07E15 0%, #4FC07E08 100%)"
-                    : undefined,
-                  border: g.isCompleted ? "1.5px solid var(--green)" : "1.5px solid transparent",
-                }}
+                className="p-5 flex flex-col gap-4 min-w-0"
+                style={{ boxShadow: g.isCompleted ? "inset 0 0 0 1.5px var(--green), var(--shadow-sm)" : undefined }}
               >
-                {/* Header */}
-                <div className="flex items-start justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <div
-                      className="w-12 h-12 rounded-[14px] grid place-items-center text-2xl"
-                      style={{ background: "var(--card-2)" }}
-                    >
-                      {g.icon ?? "🎯"}
-                    </div>
-                    <div>
-                      <div className="font-extrabold text-sm" style={{ color: "var(--ink)" }}>{g.name}</div>
-                      {g.targetDate && (
-                        <div className="text-xs font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>
-                          By {format(new Date(g.targetDate), "d MMM yyyy")}
-                        </div>
+                <div className="flex items-start gap-3 min-w-0">
+                  <div className="w-12 h-12 rounded-[14px] grid place-items-center text-2xl flex-none" style={{ background: "var(--card-2)" }}>
+                    {g.icon ?? "🎯"}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="truncate" style={{ font: "var(--text-body)", fontWeight: 600, color: "var(--ink)" }}>{g.name}</div>
+                    <div className="mt-0.5 flex items-center gap-1.5 flex-wrap" style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>
+                      {g.targetDate ? <span>By {format(new Date(g.targetDate), "d MMM yyyy")}</span> : <span>No deadline</span>}
+                      {g.isCompleted && (
+                        <span className="rounded-full px-2 py-0.5" style={{ background: "color-mix(in srgb, var(--green) 15%, transparent)", color: "var(--green)" }}>Done</span>
+                      )}
+                      {g.roundUpEnabled && !g.isCompleted && (
+                        <span className="rounded-full px-2 py-0.5" style={{ background: "var(--card-2)", color: "var(--ink-2)" }}>Round-up</span>
                       )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {g.isCompleted && (
-                      <span
-                        className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-full"
-                        style={{ background: "rgba(79,192,126,.15)", color: "var(--green)" }}
-                      >
-                        Done
-                      </span>
-                    )}
-                    {g.roundUpEnabled && !g.isCompleted && (
-                      <span
-                        className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-full"
-                        style={{ background: "color-mix(in srgb, var(--violet) 15%, transparent)", color: "var(--violet)" }}
-                      >
-                        Round-up
-                      </span>
-                    )}
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      aria-label={`Edit ${g.name} goal`}
-                      onClick={() => setEditingId(editingId === String(g._id) ? null : String(g._id))}
-                    >
+                  <div className="flex items-center flex-none -mr-1.5">
+                    <Button type="button" variant="ghost" size="icon" className="h-9 w-9 rounded-full" aria-label={`Edit ${g.name} goal`} onClick={() => setEditingId(editingId === id ? null : id)}>
                       <Pencil size={14} style={{ color: "var(--ink-3)" }} />
                     </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      aria-label={`Delete ${g.name} goal`}
-                      onClick={() => requestDelete(g)}
-                    >
+                    <Button type="button" variant="ghost" size="icon" className="h-9 w-9 rounded-full" aria-label={`Delete ${g.name} goal`} onClick={() => requestDelete(g)}>
                       <Trash2 size={14} style={{ color: "var(--ink-3)" }} />
                     </Button>
                   </div>
                 </div>
 
-                {/* Amount */}
-                <div className="flex items-end justify-between mb-3">
-                  <div>
-                    <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Saved</div>
-                    <div className="text-xl font-extrabold tnum" style={{ color: "var(--green)" }}>
+                <div className="flex items-end justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="tnum truncate" style={{ font: "var(--text-stat)", letterSpacing: "-0.02em", color: g.isCompleted ? "var(--green)" : "var(--ink)" }}>
                       {formatCurrency(g.savedAmount)}
                     </div>
+                    <div className="tnum mt-1" style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>of {formatCurrency(g.targetAmount)}</div>
                   </div>
-                  <div className="text-right">
-                    <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Goal</div>
-                    <div className="text-xl font-extrabold tnum" style={{ color: "var(--ink)" }}>
-                      {formatCurrency(g.targetAmount)}
+                  <div className="tnum" style={{ font: "var(--text-figure-sm)", color: "var(--ink-2)" }}>{Math.round(pct)}%</div>
+                </div>
+
+                <div>
+                  <Progress value={pct} color={g.isCompleted ? "var(--green)" : "var(--violet)"} trackColor="var(--line)" height={8} aria-label={`${g.name} progress`} />
+                  {!g.isCompleted && (
+                    <div className="flex justify-between mt-2 tnum" style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>
+                      <span>{formatCurrency(remaining)} to go</span>
+                      {daysLeft !== null && <span>{daysLeft > 0 ? `${daysLeft} days left` : daysLeft === 0 ? "Due today" : "Past due"}</span>}
                     </div>
-                  </div>
+                  )}
                 </div>
 
-                {/* Progress bar */}
-                <Progress value={pct} color={g.isCompleted ? "var(--green)" : "var(--violet)"} trackColor="var(--line)" height={10} />
-                <div className="text-right text-[11px] font-semibold mt-1.5" style={{ color: "var(--ink-3)" }}>
-                  {Math.round(pct)}%
-                </div>
-
-                {!g.isCompleted && editingId !== String(g._id) && (
-                  <div className="flex gap-2 mt-4">
+                {!g.isCompleted && editingId !== id && (
+                  <div className="flex gap-2">
                     <Input
                       type="number"
                       min="0"
                       step="0.01"
-                      value={progressInputs[String(g._id)] ?? ""}
-                      onChange={(e) => setProgressInputs((current) => ({ ...current, [String(g._id)]: e.target.value }))}
+                      value={progressInputs[id] ?? ""}
+                      onChange={(e) => setProgressInputs((current) => ({ ...current, [id]: e.target.value }))}
                       placeholder="Add saved amount"
-                      className="flex-1"
+                      aria-label={`Add saved amount to ${g.name}`}
+                      className="flex-1 h-11"
                     />
                     <Button
                       onClick={() => {
-                        const amount = Math.round(parseFloat(progressInputs[String(g._id)] ?? "0") * 100);
+                        const amount = Math.round(parseFloat(progressInputs[id] ?? "0") * 100);
                         if (amount > 0) updateProgress.mutate({ goal: g, amount });
                       }}
-                      disabled={updateProgress.isPending || !progressInputs[String(g._id)]}
-                      className="h-auto rounded-(--r-sm) px-3 py-2 font-bold"
+                      disabled={updateProgress.isPending || !progressInputs[id]}
+                      className="h-11 rounded-full px-5 font-semibold btn-interactive"
                     >
-                      <Save size={14} />
                       Add
                     </Button>
                   </div>
                 )}
 
-                {editingId === String(g._id) && (
-                  <GoalEditPanel goal={g} onDone={() => setEditingId(null)} />
-                )}
+                {editingId === id && <GoalEditPanel goal={g} onDone={() => setEditingId(null)} />}
               </Card>
             );
           })}
         </div>
       )}
 
-      {/* Add goal form */}
-      {showAdd && (
-        <Card radius="lg" elevation="floating" className="p-5 flex flex-col gap-4">
-          <div className="text-sm font-bold" style={{ color: "var(--ink)" }}>New Goal</div>
-
-          {/* Icon picker */}
-          <div className="flex gap-2 flex-wrap">
-            {GOAL_ICONS.map(icon => (
-              <Button
-                key={icon}
-                type="button"
-                variant="ghost"
-                aria-label={`Use ${icon} icon`}
-                aria-pressed={form.icon === icon}
-                onClick={() => setForm(f => ({ ...f, icon }))}
-                className="w-10 h-10 rounded-[10px] text-xl p-0"
-                style={{
-                  background: form.icon === icon ? "var(--violet)" : "var(--card-2)",
-                }}
-              >
-                {icon}
-              </Button>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1.5 col-span-2">
-              <Label htmlFor="goals-client-goal-name-3" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Goal name</Label>
+      <Dialog open={showAdd} onOpenChange={(o) => { if (!o) closeAdd(); }}>
+        <DialogContent className="max-h-[90dvh] overflow-y-auto p-0 gap-0 border-0 sm:max-w-lg" style={{ background: "var(--card)", borderRadius: "var(--r-lg)", boxShadow: "var(--shadow-lg)" }}>
+          <DialogHeader className="px-6 pt-6 pb-2">
+            <DialogTitle style={{ font: "var(--text-h2)", letterSpacing: "var(--track-h2)", color: "var(--ink)" }}>New goal</DialogTitle>
+            <DialogDescription style={{ color: "var(--ink-3)" }}>Choose an icon, name it and set a target.</DialogDescription>
+          </DialogHeader>
+          <form
+            className="flex flex-col gap-5 px-6 pb-6 pt-3"
+            onSubmit={(e) => { e.preventDefault(); if (!nameMissing && !amountInvalid) createGoal.mutate(); }}
+          >
+            <div className="flex gap-2 flex-wrap">
+              {GOAL_ICONS.map(icon => (
+                <Button
+                  key={icon}
+                  type="button"
+                  variant="ghost"
+                  aria-label={`Use ${icon} icon`}
+                  aria-pressed={form.icon === icon}
+                  onClick={() => setForm(f => ({ ...f, icon }))}
+                  className="w-11 h-11 rounded-[12px] text-xl p-0 active:scale-[0.96] transition"
+                  style={{
+                    background: "var(--card-2)",
+                    boxShadow: form.icon === icon ? "inset 0 0 0 2px var(--ink)" : undefined,
+                  }}
+                >
+                  {icon}
+                </Button>
+              ))}
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="goals-client-goal-name-3" style={labelStyle}>Goal name</Label>
               <Input id="goals-client-goal-name-3"
                 value={form.name}
                 onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                 placeholder="e.g. Emergency fund"
+                autoFocus
+                className="h-11"
               />
             </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="goals-client-target-amount-4" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Target amount</Label>
-              <Input id="goals-client-target-amount-4"
-                type="number"
-                min="0"
-                step="0.01"
-                value={form.targetAmount}
-                onChange={e => setForm(f => ({ ...f, targetAmount: e.target.value }))}
-                placeholder="e.g. 5000"
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="goals-client-target-amount-4" style={labelStyle}>Target amount</Label>
+                <Input id="goals-client-target-amount-4"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={form.targetAmount}
+                  onChange={e => setForm(f => ({ ...f, targetAmount: e.target.value }))}
+                  placeholder="e.g. 5000"
+                  className="h-11"
+                />
+                {form.targetAmount !== "" && amountInvalid && <span style={{ font: "var(--text-micro)", color: "var(--red)" }}>Enter an amount above zero</span>}
+              </div>
               <DatePickerField
                 label="Target date (optional)"
                 value={form.targetDate}
@@ -423,40 +435,15 @@ export function GoalsClient() {
                 clearable
               />
             </div>
-          </div>
-
-          <div className="flex gap-3">
-            <Button
-              onClick={() => createGoal.mutate()}
-              disabled={createGoal.isPending || !form.name || !form.targetAmount}
-              className="flex-1 h-auto py-2.5 rounded-(--r-sm) font-bold"
-            >
-              {createGoal.isPending ? "Saving..." : "Create Goal"}
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setShowAdd(false)}
-              className="h-auto px-5 py-2.5 rounded-(--r-sm) font-bold"
-            >
-              Cancel
-            </Button>
-          </div>
-        </Card>
-      )}
-
-      {!showAdd && (goals ?? []).length > 0 && (
-        <Button
-          type="button"
-          variant="secondary"
-          onClick={() => setShowAdd(true)}
-          className="h-auto flex items-center justify-center gap-2 rounded-(--r-md) py-3.5 font-bold"
-          style={{ color: "var(--violet)" }}
-        >
-          <Plus size={17} />
-          Add Goal
-        </Button>
-      )}
+            <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end pt-1">
+              <Button type="button" variant="ghost" onClick={closeAdd} className="h-11 px-5 rounded-full font-semibold">Cancel</Button>
+              <Button type="submit" disabled={createGoal.isPending || nameMissing || amountInvalid} className="h-11 px-6 rounded-full font-semibold btn-interactive">
+                {createGoal.isPending ? "Saving..." : "Create goal"}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
       {dialog}
     </div>
   );

@@ -49,7 +49,7 @@ export function CreditCardBanner({
       dueColor = "var(--red)";
       dueLabel = `Overdue by ${Math.abs(dueStatus.daysUntilDue)}d`;
     } else if (dueStatus.daysUntilDue <= 7) {
-      dueColor = "#f59e0b";
+      dueColor = "var(--amber)";
       dueLabel = `Due in ${dueStatus.daysUntilDue}d`;
     } else {
       dueColor = "var(--ink-3)";
@@ -59,20 +59,20 @@ export function CreditCardBanner({
 
   return (
     <div
-      className="rounded-[var(--r-lg)] p-5 flex flex-col gap-4"
-      style={{ background: "var(--card)", boxShadow: "var(--shadow)" }}
+      className="rounded-(--r-lg) p-5 sm:p-6 flex flex-col gap-5"
+      style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
     >
       {/* Card header row */}
       <div className="flex items-start gap-3">
         <div
-          className="w-12 h-12 rounded-[14px] grid place-items-center flex-none"
-          style={{ background: "var(--violet)", color: "#fff" }}
+          className="w-12 h-12 rounded-full grid place-items-center flex-none"
+          style={{ background: "var(--card-2)", color: "var(--ink)" }}
         >
           <CreditCard size={22} />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <h2 className="text-lg font-extrabold truncate" style={{ color: "var(--ink)" }}>{account.name}</h2>
+            <h2 className="text-lg font-semibold truncate" style={{ color: "var(--ink)" }}>{account.name}</h2>
             {meta?.network && (
               <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: "var(--card-2)", color: "var(--ink-3)" }}>
                 {NETWORK_LABELS[meta.network] ?? meta.network.toUpperCase()}
@@ -102,29 +102,29 @@ export function CreditCardBanner({
       {/* Balance row */}
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <div className="text-[10px] font-bold uppercase tracking-wider mb-0.5" style={{ color: "var(--ink-3)" }}>Total Exposure</div>
-          <div className="text-[26px] font-extrabold tnum leading-none" style={{ color: currentBalance > 0 ? "var(--red)" : "var(--ink)" }}>
+          <div className="mb-1" style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>Total Exposure</div>
+          <div className="tnum leading-none" style={{ font: "var(--text-stat)", fontSize: 28, color: currentBalance > 0 ? "var(--red)" : "var(--ink)" }}>
             {formatCurrency(currentBalance)}
           </div>
         </div>
         <div>
-          <div className="text-[10px] font-bold uppercase tracking-wider mb-0.5" style={{ color: "var(--ink-3)" }}>Available Credit</div>
-          <div className="text-[26px] font-extrabold tnum leading-none" style={{ color: available > 0 ? "var(--green)" : "var(--red)" }}>
+          <div className="mb-1" style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>Available Credit</div>
+          <div className="tnum leading-none" style={{ font: "var(--text-stat)", fontSize: 28, color: available > 0 ? "var(--green)" : "var(--red)" }}>
             {formatCurrency(available)}
           </div>
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <div className="rounded-[var(--r-sm)] p-3" style={{ background: "var(--card-2)" }}>
-          <div className="text-[10px] font-bold uppercase tracking-wider mb-0.5" style={{ color: "var(--ink-3)" }}>Unbilled Usage</div>
-          <div className="text-[16px] font-extrabold tnum" style={{ color: unbilledUsage > 0 ? "var(--red)" : "var(--ink)" }}>
+        <div className="rounded-(--r-sm) p-3.5" style={{ background: "var(--card-2)" }}>
+          <div className="mb-1" style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>Unbilled Usage</div>
+          <div className="tnum" style={{ font: "var(--text-figure-sm)", fontSize: 16, color: unbilledUsage > 0 ? "var(--red)" : "var(--ink)" }}>
             {formatCurrency(unbilledUsage)}
           </div>
         </div>
-        <div className="rounded-[var(--r-sm)] p-3" style={{ background: "var(--card-2)" }}>
-          <div className="text-[10px] font-bold uppercase tracking-wider mb-0.5" style={{ color: "var(--ink-3)" }}>Payable Due</div>
-          <div className="text-[16px] font-extrabold tnum" style={{ color: payableStatementDue > 0 ? dueColor : "var(--ink)" }}>
+        <div className="rounded-(--r-sm) p-3.5" style={{ background: "var(--card-2)" }}>
+          <div className="mb-1" style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>Payable Due</div>
+          <div className="tnum" style={{ font: "var(--text-figure-sm)", fontSize: 16, color: payableStatementDue > 0 ? dueColor : "var(--ink)" }}>
             {formatCurrency(payableStatementDue)}
           </div>
         </div>

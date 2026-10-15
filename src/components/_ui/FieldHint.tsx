@@ -21,7 +21,7 @@ export function FieldHint({ text }: FieldHintProps) {
         tabIndex={0}
         role="button"
         aria-label="More information"
-        className="inline-flex items-center justify-center cursor-default select-none outline-none"
+        className="inline-flex items-center justify-center cursor-default select-none outline-none focus-visible:ring-2 focus-visible:ring-(--violet)"
         style={{
           width: 14,
           height: 14,

@@ -16,8 +16,8 @@ interface Props {
 }
 
 const chartConfig = {
-  income: { label: "Income", color: "var(--violet)" },
-  expense: { label: "Expense", color: "var(--green)" },
+  income: { label: "Income", color: "var(--green)" },
+  expense: { label: "Expense", color: "var(--violet)" },
 } satisfies ChartConfig;
 
 export function AnalyticsBarChart({ data }: Props) {
@@ -31,9 +31,9 @@ export function AnalyticsBarChart({ data }: Props) {
     }));
 
   return (
-    <ChartContainer config={chartConfig} className="h-55 w-full">
-      <BarChart data={chartData} barCategoryGap="28%" barGap={4}>
-        <CartesianGrid vertical={false} strokeDasharray="4 4" stroke="var(--line)" />
+    <ChartContainer config={chartConfig} className="h-64 w-full lg:h-80">
+      <BarChart data={chartData} barCategoryGap="32%" barGap={4}>
+        <CartesianGrid vertical={false} strokeDasharray="3 6" stroke="var(--line)" strokeOpacity={0.6} />
         <XAxis
           dataKey="label"
           axisLine={false}
@@ -55,7 +55,7 @@ export function AnalyticsBarChart({ data }: Props) {
           dataKey="income"
           fill="var(--color-income)"
           radius={[6, 6, 0, 0]}
-          maxBarSize={32}
+          maxBarSize={36}
           isAnimationActive
           animationDuration={700}
           animationEasing="ease-out"
@@ -64,7 +64,7 @@ export function AnalyticsBarChart({ data }: Props) {
           dataKey="expense"
           fill="var(--color-expense)"
           radius={[6, 6, 0, 0]}
-          maxBarSize={32}
+          maxBarSize={36}
           isAnimationActive
           animationDuration={700}
           animationEasing="ease-out"

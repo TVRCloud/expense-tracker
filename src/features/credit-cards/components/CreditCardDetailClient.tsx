@@ -135,10 +135,45 @@ export function CreditCardDetailClient({ id }: Props) {
   const currentBalance = unbilledUsage + payableStatementDue + emiCommitment;
 
   return (
-    <div className="flex flex-col gap-5">
-      <Link href="/accounts" className="inline-flex items-center gap-2 text-sm font-bold" style={{ color: "var(--violet)" }}>
-        <ArrowLeft size={16} /> Back to accounts
-      </Link>
+    <div className="page-stack">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <Link href="/accounts" className="inline-flex items-center gap-1.5 text-sm font-semibold min-h-11" style={{ color: "var(--violet)" }}>
+          <ArrowLeft size={16} /> Accounts
+        </Link>
+        <div className="flex gap-2 items-center">
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => setEditing(v => !v)}
+            className="h-10 px-4 rounded-full font-semibold"
+          >
+            {editing ? "Cancel" : "Edit card"}
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon"
+            className="h-10 w-10 rounded-full"
+            onClick={() => recalculateBalance.mutate()}
+            disabled={recalculateBalance.isPending}
+            aria-label="Recalculate balance from transactions"
+          >
+            <RefreshCw size={14} className={recalculateBalance.isPending ? "animate-spin" : ""} />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={`Archive ${account.name}`}
+            onClick={() => archiveAccount.mutate()}
+            disabled={archiveAccount.isPending}
+            className="h-10 w-10 rounded-full"
+            style={{ background: "color-mix(in srgb, var(--red) 10%, transparent)", color: "var(--red)" }}
+          >
+            <Archive size={14} />
+          </Button>
+        </div>
+      </div>
 
       {/* Card header / banner */}
       <CreditCardBanner
@@ -149,46 +184,9 @@ export function CreditCardDetailClient({ id }: Props) {
         payableDueDate={nextPayableStatement?.dueDate}
       />
 
-      {/* EMI commitment summary */}
-      <EmiCommitmentCard accountId={id} />
-
-      {/* Edit section */}
-      <div className="flex gap-2 justify-end">
-        <Button
-          type="button"
-          variant="secondary"
-          onClick={() => setEditing(v => !v)}
-          className="h-auto px-4 py-2 rounded-(--r-sm) font-bold"
-        >
-          {editing ? "Cancel" : "Edit Card"}
-        </Button>
-        <Button
-          type="button"
-          variant="secondary"
-          size="icon"
-          onClick={() => recalculateBalance.mutate()}
-          disabled={recalculateBalance.isPending}
-          aria-label="Recalculate balance from transactions"
-        >
-          <RefreshCw size={14} className={recalculateBalance.isPending ? "animate-spin" : ""} />
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label={`Archive ${account.name}`}
-          onClick={() => archiveAccount.mutate()}
-          disabled={archiveAccount.isPending}
-          className="px-4 py-2 rounded-(--r-sm)"
-          style={{ background: "color-mix(in srgb, var(--red) 10%, transparent)", color: "var(--red)" }}
-        >
-          <Archive size={14} />
-        </Button>
-      </div>
-
       {editing && (
-        <Card radius="lg" elevation="floating" className="p-5 flex flex-col gap-4">
-          <div className="text-sm font-bold" style={{ color: "var(--ink)" }}>Edit Card</div>
+        <Card radius="lg" elevation="floating" className="p-5 sm:p-6 flex flex-col gap-4">
+          <h2 style={{ font: "var(--text-h2)", letterSpacing: "var(--track-h2)", color: "var(--ink)" }}>Edit card</h2>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="credit-card-detail-client-name-1" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Name</Label>
             <Input id="credit-card-detail-client-name-1" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
@@ -197,40 +195,47 @@ export function CreditCardDetailClient({ id }: Props) {
           <Button
             onClick={() => updateAccount.mutate()}
             disabled={updateAccount.isPending || !form.name}
-            className="h-auto py-2.5 rounded-(--r-sm) font-bold"
+            className="h-11 rounded-full font-semibold sm:self-end sm:px-8"
           >
             <Save size={15} />
-            {updateAccount.isPending ? "Saving..." : "Save Changes"}
+            {updateAccount.isPending ? "Saving..." : "Save changes"}
           </Button>
         </Card>
       )}
 
-      {/* Statements */}
-      <section className="flex flex-col gap-3">
-        <h3 className="text-sm font-bold px-1" style={{ color: "var(--ink)" }}>Billing Statements</h3>
-        <StatementList accountId={id} account={account} />
-      </section>
+      <div className="grid-split">
+        <div className="min-w-0 flex flex-col gap-6">
+          {/* Statements */}
+          <section>
+            <div className="section-head"><h2>Billing statements</h2></div>
+            <StatementList accountId={id} account={account} />
+          </section>
 
-      {/* Recent transactions */}
-      <section className="flex flex-col gap-3">
-        <div className="flex items-center justify-between px-1">
-          <h3 className="text-sm font-bold" style={{ color: "var(--ink)" }}>Recent Transactions</h3>
-          <Link href={`/transactions?accountId=${id}`} className="text-sm font-bold" style={{ color: "var(--violet)" }}>View all</Link>
+          {/* Recent transactions */}
+          <section>
+            <div className="section-head">
+              <h2>Recent transactions</h2>
+              <Link href={`/transactions?accountId=${id}`} className="text-sm font-semibold" style={{ color: "var(--violet)" }}>View all</Link>
+            </div>
+            {txLoading ? (
+              <Skeleton className="h-48 rounded-(--r-md)" />
+            ) : (transactions?.data ?? []).length === 0 ? (
+              <Card radius="lg" className="p-8 text-center">
+                <div className="font-semibold" style={{ color: "var(--ink)" }}>No transactions yet</div>
+              </Card>
+            ) : (
+              <div className="inset-group" style={{ "--inset": "72px" } as React.CSSProperties}>
+                {(transactions?.data ?? []).map(tx => <TransactionRow key={String(tx._id)} transaction={tx} grouped />)}
+              </div>
+            )}
+          </section>
         </div>
-        {txLoading ? (
-          <div className="flex flex-col gap-2">
-            {[0, 1, 2].map(i => <Skeleton key={i} className="h-16 rounded-(--r-md)" />)}
-          </div>
-        ) : (transactions?.data ?? []).length === 0 ? (
-          <Card radius="lg" className="p-8 text-center">
-            <div className="font-bold" style={{ color: "var(--ink)" }}>No transactions yet</div>
-          </Card>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {(transactions?.data ?? []).map(tx => <TransactionRow key={String(tx._id)} transaction={tx} />)}
-          </div>
-        )}
-      </section>
+
+        <aside className="rail flex flex-col gap-5">
+          {/* EMI commitment summary */}
+          <EmiCommitmentCard accountId={id} />
+        </aside>
+      </div>
     </div>
   );
 }

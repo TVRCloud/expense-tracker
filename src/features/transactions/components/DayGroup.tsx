@@ -1,3 +1,4 @@
+import type React from "react";
 import { format, isToday, isYesterday } from "date-fns";
 import { TransactionRow } from "./TransactionRow";
 import { type ITransaction } from "@/types/models";
@@ -23,16 +24,16 @@ export function DayGroup({ date, transactions }: Props) {
   const isPositive = dayTotal >= 0;
 
   return (
-    <div className="flex flex-col gap-2">
-      {/* Day label row */}
-      <div className="flex items-center justify-between px-1">
-        <h3 className="text-[13px] font-semibold" style={{ color: "var(--ink-2)" }}>
-          {formatDayLabel(date)}
-        </h3>
+    <section>
+      {/* Sticky day header: translucent chrome so rows scroll beneath it */}
+      <div
+        className="chrome sticky top-0 md:top-(--topbar-h) z-10 flex items-baseline justify-between px-1 py-2 -mx-1"
+      >
+        <h3 style={{ font: "var(--text-label)", color: "var(--ink-2)" }}>{formatDayLabel(date)}</h3>
         {/* Always signed: colour alone doesn't say "net spent". */}
         <span
-          className="text-[13px] font-semibold tnum"
-          style={{ color: isPositive ? "var(--green)" : "var(--red)" }}
+          className="tnum"
+          style={{ font: "var(--text-label)", fontFamily: "var(--font-mono)", color: isPositive ? "var(--green)" : "var(--red)" }}
           aria-label={`Day total ${isPositive ? "plus" : "minus"} ${formatCurrency(Math.abs(dayTotal))}`}
         >
           {isPositive ? "+" : "−"}
@@ -40,12 +41,11 @@ export function DayGroup({ date, transactions }: Props) {
         </span>
       </div>
 
-      {/* Transaction rows */}
-      <div className="flex flex-col gap-2">
+      <div className="inset-group" style={{ "--inset": "72px" } as React.CSSProperties}>
         {transactions.map((t) => (
-          <TransactionRow key={String(t._id)} transaction={t} hideDate />
+          <TransactionRow key={String(t._id)} transaction={t} hideDate grouped />
         ))}
       </div>
-    </div>
+    </section>
   );
 }

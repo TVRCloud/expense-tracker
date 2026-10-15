@@ -122,7 +122,7 @@ These apply regardless of who builds the Dart code — call them out explicitly 
 
 ## 5. Design system to mirror (for the few screens that exist)
 
-Source of truth: `src/app/globals.css`.
+Source of truth: `src/app/globals.css`. Full reference with component previews: see [design-system.md](design-system.md).
 
 - Typography: Plus Jakarta Sans for UI/body text; JetBrains Mono for all money figures
   ("ledger precision" — every amount in the app, anywhere, uses the mono font).

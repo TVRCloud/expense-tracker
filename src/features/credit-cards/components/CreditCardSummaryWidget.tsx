@@ -20,11 +20,11 @@ function MetricTile({
   const color = tone === "red" ? "var(--red)" : tone === "green" ? "var(--green)" : "var(--ink)";
 
   return (
-    <div className="rounded-(--r-sm) p-3 min-w-0" style={{ background: "var(--card-2)" }}>
-      <div className="text-[10px] font-bold uppercase tracking-wider mb-1 truncate" style={{ color: "var(--ink-3)" }}>
+    <div className="min-w-0">
+      <div className="truncate mb-0.5" style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>
         {label}
       </div>
-      <div className="text-[15px] font-extrabold tnum truncate" style={{ color }}>
+      <div className="tnum truncate" style={{ font: "var(--text-figure-sm)", fontSize: 15, color }}>
         {value}
       </div>
     </div>
@@ -37,21 +37,10 @@ export function CreditCardSummaryWidget() {
 
   if (isLoading) {
     return (
-      <div
-        className="rounded-(--r-lg) p-5 flex flex-col gap-4"
-        style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
-      >
-        <div className="flex items-center justify-between">
-          <Skeleton className="h-4 w-28 rounded-full" />
-          <Skeleton className="h-3 w-12 rounded-full" />
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          {[0, 1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-14 rounded-(--r-sm)" />
-          ))}
-        </div>
-        <Skeleton className="h-16 rounded-(--r-sm)" />
-      </div>
+      <section>
+        <div className="section-head"><h2>Credit cards</h2></div>
+        <Skeleton className="h-52 rounded-(--r-lg)" />
+      </section>
     );
   }
 
@@ -66,50 +55,44 @@ export function CreditCardSummaryWidget() {
   );
 
   return (
-    <div
-      className="rounded-(--r-lg) p-5 flex flex-col gap-4"
-      style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
-    >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <CreditCard size={16} style={{ color: "var(--violet)" }} />
-          <span className="text-sm font-extrabold" style={{ color: "var(--ink)" }}>Credit Cards</span>
-        </div>
-        <Link href="/accounts?filter=credit_card" className="text-[12px] font-bold" style={{ color: "var(--violet)" }}>
+    <section>
+      <div className="section-head">
+        <h2>Credit cards</h2>
+        <Link href="/accounts?filter=credit_card" className="font-semibold text-sm" style={{ color: "var(--violet)" }}>
           View all
         </Link>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="rounded-(--r-lg) p-5 grid grid-cols-2 gap-x-4 gap-y-4 mb-3" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
         <MetricTile label="Payable" value={formatCurrency(totalPayable)} tone={totalPayable > 0 ? "red" : "default"} />
         <MetricTile label="Unbilled" value={formatCurrency(totalUnbilled)} tone={totalUnbilled > 0 ? "red" : "default"} />
         <MetricTile label="Exposure" value={formatCurrency(totalExposure)} tone={totalExposure > 0 ? "red" : "default"} />
         <MetricTile label="Available" value={formatCurrency(totalAvailable)} tone={totalAvailable > 0 ? "green" : "red"} />
       </div>
 
-      <div className="flex flex-col gap-3">
+      <div className="inset-group">
         {data.cards.map(card => (
           <Link
             key={card.accountId}
             href={`/accounts/${card.accountId}`}
-            className="flex flex-col gap-2 rounded-(--r-sm) p-2.5 transition-colors"
-            style={{ background: "var(--card-2)" }}
+            className="flex flex-col gap-2 px-4 py-3 transition-colors active:bg-(--card-2)"
           >
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
-                <span className="text-[13px] font-bold truncate" style={{ color: "var(--ink)" }}>
+                <CreditCard size={15} style={{ color: "var(--ink-3)" }} className="flex-none" />
+                <span className="text-[15px] font-medium truncate" style={{ color: "var(--ink)" }}>
                   {card.name}
                 </span>
                 {card.lastFourDigits && (
-                  <span className="text-[11px]" style={{ color: "var(--ink-3)" }}>••{card.lastFourDigits}</span>
+                  <span className="text-xs" style={{ color: "var(--ink-3)" }}>••{card.lastFourDigits}</span>
                 )}
               </div>
-              <div className="flex items-center gap-2 flex-none">
+              <div className="flex items-center gap-1.5 flex-none">
                 {card.isOverdue && <AlertTriangle size={13} style={{ color: "var(--red)" }} />}
                 {card.nextDueDate && (
                   <span
-                    className="text-[11px] font-bold"
-                    style={{ color: card.isOverdue ? "var(--red)" : card.daysUntilDue !== null && card.daysUntilDue <= 7 ? "#f59e0b" : "var(--ink-3)" }}
+                    className="text-xs font-semibold"
+                    style={{ color: card.isOverdue ? "var(--red)" : card.daysUntilDue !== null && card.daysUntilDue <= 7 ? "var(--amber)" : "var(--ink-3)" }}
                   >
                     {card.isOverdue
                       ? "Overdue"
@@ -120,30 +103,26 @@ export function CreditCardSummaryWidget() {
                 )}
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-2 text-[11px] font-bold">
-              <div className="min-w-0">
-                <span style={{ color: "var(--ink-3)" }}>Payable </span>
-                <span className="tnum" style={{ color: (card.payableStatementDue ?? 0) > 0 ? "var(--red)" : "var(--ink)" }}>
+            <div className="flex justify-between gap-2 text-xs">
+              <span style={{ color: "var(--ink-3)" }}>
+                Payable{" "}
+                <span className="tnum font-semibold" style={{ color: (card.payableStatementDue ?? 0) > 0 ? "var(--red)" : "var(--ink-2)" }}>
                   {formatCurrency(card.payableStatementDue ?? 0)}
                 </span>
-              </div>
-              <div className="min-w-0 text-right">
-                <span style={{ color: "var(--ink-3)" }}>Unbilled </span>
-                <span className="tnum" style={{ color: (card.unbilledUsage ?? 0) > 0 ? "var(--red)" : "var(--ink)" }}>
+              </span>
+              <span style={{ color: "var(--ink-3)" }}>
+                Unbilled{" "}
+                <span className="tnum font-semibold" style={{ color: (card.unbilledUsage ?? 0) > 0 ? "var(--red)" : "var(--ink-2)" }}>
                   {formatCurrency(card.unbilledUsage ?? 0)}
                 </span>
-              </div>
+              </span>
             </div>
             {card.creditLimit > 0 && (
-              <CreditUtilizationBar
-                balance={card.balance}
-                creditLimit={card.creditLimit}
-                compact
-              />
+              <CreditUtilizationBar balance={card.balance} creditLimit={card.creditLimit} compact />
             )}
           </Link>
         ))}
       </div>
-    </div>
+    </section>
   );
 }

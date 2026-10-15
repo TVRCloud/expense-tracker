@@ -151,6 +151,11 @@ export async function verifyN8nAuth(req: NextRequest, requestId: string): Promis
   return success(req, requestId, found);
 }
 
+// Plain SHA-256 is intentional: integration keys are server-generated with
+// 256 bits of randomness (`etk_` + randomBytes(32), see api-keys.ts), not
+// user-chosen passwords, so there is nothing to brute-force and a slow hash
+// (bcrypt/argon2) would only add latency to every request. CodeQL's
+// js/insufficient-password-hash flags this by name; it is a false positive.
 export function hashKey(rawKey: string): string {
   return createHash("sha256").update(rawKey).digest("hex");
 }

@@ -1,48 +1,38 @@
 "use client";
 
-import { ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Minus, Plus } from "lucide-react";
+import { Card } from "@/components/_ui/Card";
 import { useCurrency } from "@/hooks/useCurrency";
 
 interface Props {
-  type: "income" | "expense";
+  type: "income" | "expense" | "net";
   amount: number;
   label?: string;
+  hint?: string;
 }
 
-export function IOCard({ type, amount, label }: Props) {
+/** KPI tile: small icon chip, quiet label, mono figure. Used in the analytics KPI strip. */
+export function IOCard({ type, amount, label, hint }: Props) {
   const { formatCurrency } = useCurrency();
-  const isIncome = type === "income";
-
-  const bg = isIncome
-    ? "color-mix(in srgb, var(--violet) 11%, var(--card))"
-    : "color-mix(in srgb, var(--red) 11%, var(--card))";
-  const iconBg = isIncome ? "var(--violet)" : "var(--red)";
-  const amountColor = isIncome ? "var(--violet)" : "var(--red)";
-  const Icon = isIncome ? ArrowDownLeft : ArrowUpRight;
+  const color = type === "income" ? "var(--green)" : type === "expense" ? "var(--red)" : amount >= 0 ? "var(--green)" : "var(--red)";
+  const Icon = type === "income" ? ArrowDownLeft : type === "expense" ? ArrowUpRight : amount >= 0 ? Plus : Minus;
+  const text = label ?? (type === "income" ? "Income" : type === "expense" ? "Expenses" : "Net");
 
   return (
-    <div
-      className="rounded-(--r-md) p-5"
-      style={{ background: bg, boxShadow: "var(--shadow-sm)" }}
-    >
-      <div
-        className="w-10 h-10 rounded-full grid place-items-center mb-4"
-        style={{ background: iconBg }}
-      >
-        <Icon size={18} color="white" />
+    <Card radius="lg" className="p-5 flex flex-col gap-3 min-w-0">
+      <div className="flex items-center gap-2">
+        <span
+          className="w-7 h-7 rounded-full grid place-items-center flex-none"
+          style={{ background: `color-mix(in srgb, ${color} 14%, transparent)`, color }}
+        >
+          <Icon size={15} aria-hidden />
+        </span>
+        <span style={{ font: "var(--text-label)", color: "var(--ink-2)" }}>{text}</span>
       </div>
-      <div
-        className="text-[11px] font-bold uppercase tracking-wider mb-1.5"
-        style={{ color: "var(--ink-3)" }}
-      >
-        {label ?? (isIncome ? "Income" : "Expenses")}
+      <div className="tnum truncate" style={{ font: "var(--text-stat)", color: "var(--ink)" }}>
+        {formatCurrency(type === "net" ? Math.abs(amount) : amount)}
       </div>
-      <div
-        className="text-[22px] font-extrabold tnum leading-none"
-        style={{ color: amountColor }}
-      >
-        {formatCurrency(amount)}
-      </div>
-    </div>
+      {hint && <div style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>{hint}</div>}
+    </Card>
   );
 }

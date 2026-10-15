@@ -6,13 +6,12 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import Link from "next/link";
-import { Eye, EyeOff, Wallet } from "lucide-react";
+import { Eye, EyeOff } from "lucide-react";
 import { registerSchema, type RegisterInput } from "@/features/auth/schemas/auth.schema";
 import apiClient from "@/lib/api-client";
-import { Card } from "@/components/_ui/Card";
 import { Button } from "@/components/_ui/Button";
 import { Input } from "@/components/_ui/Input";
-import { Label } from "@/components/ui/label";
+import { AuthCard, AuthField, AuthNotice, AUTH_INPUT, AUTH_SUBMIT, AUTH_LINK } from "./AuthShell";
 
 export function RegisterForm() {
   const router = useRouter();
@@ -42,138 +41,85 @@ export function RegisterForm() {
     }
   };
 
-  const fieldClass = "rounded-[14px] py-3 px-4 h-auto font-semibold";
-  const fieldStyle = { background: "var(--card-2)", border: "1.5px solid var(--line-2)" };
-
   return (
-    <Card radius="lg" elevation="floating" className="p-8">
-      <div className="flex items-center gap-3 mb-8">
-        <div
-          className="w-10 h-10 rounded-[12px] grid place-items-center text-white shadow-[0_8px_18px_rgba(0,0,0,.34)]"
-          style={{ background: "linear-gradient(150deg,var(--violet),var(--violet-2))" }}
-        >
-          <Wallet size={20} />
-        </div>
-        <span className="font-extrabold text-xl tracking-tight">
-          exp<span style={{ color: "var(--violet)" }}>s</span>
-        </span>
-      </div>
-
-      <h1 className="font-extrabold text-2xl tracking-tight mb-1" style={{ color: "var(--ink)" }}>
-        Create account
-      </h1>
-      <p className="text-sm font-medium mb-7" style={{ color: "var(--ink-2)" }}>
-        Start tracking your finances
-      </p>
-
-      <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
-        <div>
-          <Label htmlFor="register-form-full-name-1" className="block text-[13px] font-medium mb-2" style={{ color: "var(--ink-2)" }}>
-            Full name
-          </Label>
-          <Input id="register-form-full-name-1"
+    <AuthCard
+      title="Create account"
+      subtitle="Start tracking your finances"
+      footer={
+        <>
+          Already have an account?{" "}
+          <Link href="/login" className={AUTH_LINK} style={{ color: "var(--ink)" }}>
+            Sign in
+          </Link>
+        </>
+      }
+    >
+      <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-5" noValidate>
+        <AuthField label="Full name" htmlFor="register-form-full-name-1" error={errors.name?.message}>
+          <Input
+            id="register-form-full-name-1"
             type="text"
             autoComplete="name"
             placeholder="Alex Rivera"
-            className={fieldClass}
-            style={fieldStyle}
+            className={AUTH_INPUT}
+            aria-invalid={!!errors.name}
             {...register("name")}
           />
-          {errors.name && (
-            <p className="mt-1 text-xs font-semibold" style={{ color: "var(--red)" }}>
-              {errors.name.message}
-            </p>
-          )}
-        </div>
+        </AuthField>
 
-        <div>
-          <Label htmlFor="register-form-email-2" className="block text-[13px] font-medium mb-2" style={{ color: "var(--ink-2)" }}>
-            Email
-          </Label>
-          <Input id="register-form-email-2"
+        <AuthField label="Email" htmlFor="register-form-email-2" error={errors.email?.message}>
+          <Input
+            id="register-form-email-2"
             type="email"
             autoComplete="email"
             placeholder="you@example.com"
-            className={fieldClass}
-            style={fieldStyle}
+            className={AUTH_INPUT}
+            aria-invalid={!!errors.email}
             {...register("email")}
           />
-          {errors.email && (
-            <p className="mt-1 text-xs font-semibold" style={{ color: "var(--red)" }}>
-              {errors.email.message}
-            </p>
-          )}
-        </div>
+        </AuthField>
 
-        <div>
-          <Label htmlFor="register-password" className="block text-[13px] font-medium mb-2" style={{ color: "var(--ink-2)" }}>
-            Password
-          </Label>
+        <AuthField label="Password" htmlFor="register-password" error={errors.password?.message}>
           <div className="relative">
             <Input
               id="register-password"
               type={showPw ? "text" : "password"}
               autoComplete="new-password"
               placeholder="Min. 8 characters"
-              className={`${fieldClass} pr-12`}
-              style={fieldStyle}
+              className={`${AUTH_INPUT} pr-12`}
+              aria-invalid={!!errors.password}
               {...register("password")}
             />
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={() => setShowPw((v) => !v)}
-              aria-label={showPw ? "Hide password" : "Show password"}
-              className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8"
-              style={{ color: "var(--ink-3)" }}
-            >
-              {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
-            </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => setShowPw((v) => !v)}
+                aria-label={showPw ? "Hide password" : "Show password"}
+                className="absolute right-1.5 top-1/2 size-9 -translate-y-1/2 rounded-full"
+                style={{ color: "var(--ink-3)" }}
+              >
+                {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
+              </Button>
           </div>
-          {errors.password && (
-            <p className="mt-1 text-xs font-semibold" style={{ color: "var(--red)" }}>
-              {errors.password.message}
-            </p>
-          )}
-        </div>
+        </AuthField>
 
-        <div>
-          <Label htmlFor="register-confirm-password" className="block text-[13px] font-medium mb-2" style={{ color: "var(--ink-2)" }}>
-            Confirm password
-          </Label>
+        <AuthField label="Confirm password" htmlFor="register-confirm-password" error={errors.confirmPassword?.message}>
           <Input
             id="register-confirm-password"
             type={showPw ? "text" : "password"}
             autoComplete="new-password"
             placeholder="Repeat password"
-            className={fieldClass}
-            style={fieldStyle}
+            className={AUTH_INPUT}
+            aria-invalid={!!errors.confirmPassword}
             {...register("confirmPassword")}
           />
-          {errors.confirmPassword && (
-            <p className="mt-1 text-xs font-semibold" style={{ color: "var(--red)" }}>
-              {errors.confirmPassword.message}
-            </p>
-          )}
-        </div>
+        </AuthField>
 
-        <Button
-          type="submit"
-          disabled={loading}
-          className="w-full h-auto py-4 rounded-[15px] font-bold text-base mt-1"
-          style={{ background: "var(--fab)", color: "var(--fab-ink)" }}
-        >
+        <Button type="submit" disabled={loading} className={AUTH_SUBMIT}>
           {loading ? "Creating account…" : "Create account"}
         </Button>
       </form>
-
-      <p className="text-center mt-6 text-sm font-semibold" style={{ color: "var(--ink-2)" }}>
-        Already have an account?{" "}
-        <Link href="/login" className="font-bold" style={{ color: "var(--violet)" }}>
-          Sign in
-        </Link>
-      </p>
-    </Card>
+    </AuthCard>
   );
 }

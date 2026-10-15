@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutDashboard, ArrowLeftRight, Plus, BarChart2, Wallet } from "lucide-react";
-import { motion } from "motion/react";
+import { MotionConfig, motion } from "motion/react";
 
 const ITEMS = [
   // Same names as the sidebar, so a place is called one thing everywhere.
@@ -14,65 +14,71 @@ const ITEMS = [
   { href: "/accounts", label: "Accounts", icon: Wallet },
 ];
 
+/**
+ * Mobile tab bar: edge-to-edge translucent chrome with a hairline top
+ * border, safe-area aware. Active tab = tinted pill (shared-layout spring,
+ * critically damped) + heavier icon stroke. "Add" is the single prominent
+ * action, inline in the bar rather than floating over content.
+ */
 export function BottomNav() {
   const pathname = usePathname();
 
   return (
-    <div className="fixed left-0 right-0 bottom-0 z-40 md:hidden pointer-events-none pb-[calc(8px+env(safe-area-inset-bottom,0px))] px-4">
+    <MotionConfig reducedMotion="user">
       <nav
-        className="pointer-events-auto max-w-[420px] mx-auto flex items-center justify-around rounded-[26px] p-1.5"
+        aria-label="Primary"
+        className="chrome fixed inset-x-0 bottom-0 z-40 md:hidden"
         style={{
-          background: "var(--card)",
-          backdropFilter: "blur(28px) saturate(180%)",
-          WebkitBackdropFilter: "blur(28px) saturate(180%)",
-          border: "1px solid var(--glass-border)",
-          boxShadow: "0 16px 40px rgba(0,0,0,0.18), 0 2px 10px rgba(0,0,0,0.08)",
+          borderTop: "1px solid var(--line)",
+          paddingBottom: "env(safe-area-inset-bottom, 0px)",
         }}
       >
-        {ITEMS.map(({ href, label, icon: Icon, fab }) => {
-          if (fab) {
+        <div className="mx-auto flex max-w-[560px] items-center justify-between px-2 pt-1.5 pb-1.5">
+          {ITEMS.map(({ href, label, icon: Icon, fab }) => {
+            if (fab) {
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  aria-label="Add transaction"
+                  className="btn-interactive grid size-12 shrink-0 place-items-center rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-[color-mix(in_srgb,var(--violet)_35%,transparent)]"
+                  style={{
+                    background: "var(--fab)",
+                    color: "var(--fab-ink)",
+                    boxShadow: "0 6px 16px rgba(0,0,0,0.22)",
+                  }}
+                >
+                  <Icon size={24} strokeWidth={2.4} />
+                </Link>
+              );
+            }
+
+            const active = pathname === href || (href !== "/dashboard" && pathname.startsWith(href + "/"));
+
             return (
               <Link
                 key={href}
                 href={href}
-                className="relative -top-5 w-13 h-13 rounded-full grid place-items-center text-white shrink-0 active:scale-95 transition-transform"
-                style={{
-                  background: "var(--fab)",
-                  color: "var(--fab-ink)",
-                  boxShadow: "0 10px 24px rgba(0,0,0,0.30), 0 0 0 4px var(--bg)",
-                }}
-                aria-label="Add transaction"
+                aria-current={active ? "page" : undefined}
+                className="btn-interactive relative flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 rounded-(--r-md) px-1 py-1.5 text-[10.5px] font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-(--violet)"
+                style={{ color: active ? "var(--ink)" : "var(--ink-3)" }}
               >
-                <Icon size={24} />
+                {active && (
+                  <motion.span
+                    layoutId="bottom-nav-pill"
+                    className="absolute inset-x-1 inset-y-0.5 rounded-(--r-md)"
+                    style={{ background: "color-mix(in srgb, var(--violet) 12%, transparent)" }}
+                    // Critically damped (2·√420 ≈ 41): a tap has no momentum.
+                    transition={{ type: "spring", stiffness: 420, damping: 41 }}
+                  />
+                )}
+                <Icon size={21} strokeWidth={active ? 2.5 : 1.9} className="relative z-10" />
+                <span className="relative z-10 max-w-full truncate">{label}</span>
               </Link>
             );
-          }
-
-          const active = pathname === href || (href !== "/dashboard" && pathname.startsWith(href + "/"));
-
-          return (
-            <Link
-              key={href}
-              href={href}
-              aria-current={active ? "page" : undefined}
-              className="relative flex flex-col items-center justify-center py-2 px-2 min-w-[64px] min-h-11 text-[10.5px] font-semibold transition-transform active:scale-95 outline-none focus-visible:ring-2 focus-visible:ring-(--violet) rounded-[20px]"
-              style={{ color: active ? "var(--ink)" : "var(--ink-3)" }}
-            >
-              {active && (
-                <motion.div
-                  layoutId="mobile-floating-pill"
-                  className="absolute inset-0 rounded-[20px]"
-                  style={{ background: "color-mix(in srgb, var(--violet) 12%, transparent)" }}
-                  // Critically damped (2·√420 ≈ 41): a tap has no momentum.
-                  transition={{ type: "spring", stiffness: 420, damping: 41 }}
-                />
-              )}
-              <Icon size={20} className="relative z-10 mb-0.5" />
-              <span className="relative z-10 tracking-tight">{label}</span>
-            </Link>
-          );
-        })}
+          })}
+        </div>
       </nav>
-    </div>
+    </MotionConfig>
   );
 }

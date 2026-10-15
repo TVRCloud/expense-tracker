@@ -20,7 +20,8 @@ import { ProfileCard } from "./ProfileCard";
 import { SettingsRow } from "./SettingsRow";
 import { useProfile } from "../hooks/useProfile";
 import { useAccounts } from "@/features/dashboard/hooks/useDashboard";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/_ui/Skeleton";
+import { PageHeader } from "@/components/shared/PageHeader";
 
 export function AccountClient() {
   const router = useRouter();
@@ -32,14 +33,10 @@ export function AccountClient() {
 
   if (profileLoading || accountsLoading) {
     return (
-      <div className="flex flex-col gap-5">
-        <Skeleton className="h-44 rounded-[var(--r-lg)]" />
-        <Skeleton className="h-24 rounded-[var(--r-lg)]" />
-        <div className="grid md:grid-cols-2 gap-3">
-          {[0, 1, 2, 3, 4, 5].map((i) => (
-            <Skeleton key={i} className="h-16 rounded-[var(--r-md)]" />
-          ))}
-        </div>
+      <div className="page-stack">
+        <Skeleton className="h-44 rounded-(--r-lg)" />
+        <Skeleton className="h-24 rounded-(--r-lg)" />
+        <Skeleton className="h-56 rounded-(--r-md)" />
       </div>
     );
   }
@@ -69,86 +66,44 @@ export function AccountClient() {
   };
 
   return (
-    <div className="flex flex-col gap-5">
-      {/* Balance banner */}
-      <BalanceBanner
-        totalBalance={totalBalance}
-        accountCount={accounts?.length ?? 0}
-      />
+    <div className="page-stack">
+      <PageHeader title="Account" subtitle="Your profile, balance and account controls." />
 
-      {/* Profile card */}
-      <ProfileCard user={profile} />
+      <div className="grid-split">
+        <div className="page-stack">
+          <BalanceBanner totalBalance={totalBalance} accountCount={accounts?.length ?? 0} />
 
-      {/* Settings grid */}
-      <div className="grid md:grid-cols-2 gap-3">
-        {/* Left column */}
-        <div className="flex flex-col gap-3">
-          <SettingsRow
-            icon={User}
-            title="Edit Profile"
-            subtitle="Update your name and avatar"
-            href="/settings/profile"
-          />
-          <SettingsRow
-            icon={Lock}
-            title="Security"
-            subtitle="Password & active sessions"
-            href="/settings/security"
-          />
-          <SettingsRow
-            icon={Bell}
-            title="Notifications"
-            subtitle="Push & email preferences"
-            href="/settings/notifications"
-          />
-          <SettingsRow
-            icon={APPEARANCE_ICON}
-            title="Appearance"
-            subtitle="Theme and display"
-            href="/settings/appearance"
-          />
+          <div className="grid-2 items-start">
+            <div className="inset-group" style={{ "--inset": "60px" } as React.CSSProperties}>
+              <SettingsRow icon={User} title="Edit profile" subtitle="Update your name and avatar" href="/settings/profile" />
+              <SettingsRow icon={Lock} title="Security" subtitle="Password and sessions" href="/settings/security" />
+              <SettingsRow icon={Bell} title="Notifications" subtitle="Push and email preferences" href="/settings/notifications" />
+              <SettingsRow icon={APPEARANCE_ICON} title="Appearance" subtitle="Theme and display" href="/settings/appearance" />
+            </div>
+            <div className="inset-group" style={{ "--inset": "60px" } as React.CSSProperties}>
+              <SettingsRow icon={ACCOUNTS_NAV_ICON} title="Accounts" subtitle={`${accounts?.length ?? 0} linked accounts`} href="/accounts" />
+              <SettingsRow icon={Shield} title="Privacy" subtitle="Data and permissions" href="/settings/privacy" />
+              <SettingsRow icon={HelpCircle} title="Help & Support" subtitle="FAQ and contact" href="/settings/help" />
+              <SettingsRow icon={LogOut} title="Sign out" onClick={() => void handleSignOut()} />
+            </div>
+          </div>
         </div>
 
-        {/* Right column */}
-        <div className="flex flex-col gap-3">
-          <SettingsRow
-            icon={ACCOUNTS_NAV_ICON}
-            title="Accounts"
-            subtitle={`${accounts?.length ?? 0} linked accounts`}
-            href="/accounts"
-          />
-          <SettingsRow
-            icon={Shield}
-            title="Privacy"
-            subtitle="Data and permissions"
-            href="/settings/privacy"
-          />
-          <SettingsRow
-            icon={HelpCircle}
-            title="Help & Support"
-            subtitle="FAQ and contact"
-            href="/settings/help"
-          />
-          <SettingsRow
-            icon={LogOut}
-            title="Sign Out"
-            onClick={() => void handleSignOut()}
-          />
+        <div className="rail page-stack">
+          <ProfileCard user={profile} />
+          <div>
+            <h2 className="mb-2 px-4" style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>Danger zone</h2>
+            <div className="inset-group" style={{ "--inset": "60px" } as React.CSSProperties}>
+              <SettingsRow
+                icon={Trash2}
+                title="Delete account"
+                subtitle="Permanently remove your data"
+                onClick={() => void handleDeleteAccount()}
+                danger
+              />
+            </div>
+          </div>
         </div>
-      </div>
-
-      {/* Danger zone */}
-      <div className="flex flex-col gap-3">
-        <div className="text-[11px] font-bold uppercase tracking-wider px-1" style={{ color: "var(--ink-3)" }}>
-          Danger Zone
-        </div>
-        <SettingsRow
-          icon={Trash2}
-          title="Delete Account"
-          subtitle="Permanently remove your data"
-          onClick={() => void handleDeleteAccount()}
-          danger
-        />
       </div>
       {dialog}
     </div>

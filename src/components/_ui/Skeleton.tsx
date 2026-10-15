@@ -10,7 +10,7 @@ interface Props extends React.ComponentPropsWithoutRef<typeof SkeletonRoot> {
 export function Skeleton({ inverse, className, ...props }: Props) {
   return (
     <SkeletonRoot
-      className={cn(inverse && "bg-white/15 before:via-white/25", className)}
+      className={cn("rounded-(--r-sm) bg-(--card-2) motion-reduce:animate-none", inverse && "bg-white/15 before:via-white/25", className)}
       {...props}
     />
   );

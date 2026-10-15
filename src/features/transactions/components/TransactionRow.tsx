@@ -12,9 +12,11 @@ interface Props {
   transaction: ITransaction;
   /** Inside a day group, whose header already says the date. */
   hideDate?: boolean;
+  /** Inside an `.inset-group`: no own surface, the group supplies it and the dividers. */
+  grouped?: boolean;
 }
 
-export function TransactionRow({ transaction, hideDate = false }: Props) {
+export function TransactionRow({ transaction, hideDate = false, grouped = false }: Props) {
   const { formatCurrency } = useCurrency();
   const isIncome = transaction.type === "income";
   const isTransfer = transaction.type === "transfer";
@@ -37,37 +39,34 @@ export function TransactionRow({ transaction, hideDate = false }: Props) {
     // click and screen readers); the recurring chip sits above it, since
     // links can't nest.
     <div
-      className="group relative flex items-center gap-3.5 sm:gap-4 rounded-(--r-md) px-3.5 sm:px-4 py-3 sm:py-3.5 transition-transform duration-150 has-[a:active]:scale-[0.98]"
-      style={{
-        background: "var(--card)",
-        border: "1px solid var(--line)",
-      }}
+      className={`group relative flex items-center gap-3 sm:gap-3.5 px-3.5 sm:px-4 min-h-[60px] py-2.5 transition-[transform,background-color] duration-150 has-[a:active]:scale-[0.99] has-[a:active]:bg-(--card-2) ${
+        grouped ? "" : "rounded-(--r-md)"
+      }`}
+      style={grouped ? undefined : { background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
     >
       <Link
         href={href}
         aria-label={`${title}, ${isTransfer ? "transfer" : isIncome ? "received" : "spent"} ${formatCurrency(transaction.amount)}`}
-        className="absolute inset-0 rounded-(--r-md) outline-none focus-visible:ring-2 focus-visible:ring-(--violet) focus-visible:ring-offset-2"
+        className="absolute inset-0 outline-none focus-visible:ring-2 focus-visible:ring-(--violet) focus-visible:ring-inset"
       />
       {/* Avatar — category icon with tinted bg */}
       {isTransfer ? (
         <div
-          className="w-12 h-12 rounded-full grid place-items-center flex-none"
+          className="w-11 h-11 rounded-full grid place-items-center flex-none"
           style={{
-            background: "color-mix(in srgb, var(--violet) 14%, transparent)",
-            border: "1.5px solid color-mix(in srgb, var(--violet) 28%, transparent)",
+            background: "color-mix(in srgb, var(--violet) 12%, transparent)",
           }}
         >
-          <CategoryIcon size={20} style={{ color: "var(--violet)" }} />
+          <CategoryIcon size={19} style={{ color: "var(--violet)" }} />
         </div>
       ) : (
         <div
-          className="w-12 h-12 rounded-full grid place-items-center flex-none"
+          className="w-11 h-11 rounded-full grid place-items-center flex-none"
           style={{
-            background: `color-mix(in srgb, ${avatarHex} 14%, transparent)`,
-            border: `1.5px solid color-mix(in srgb, ${avatarHex} 28%, transparent)`,
+            background: `color-mix(in srgb, ${avatarHex} 13%, transparent)`,
           }}
         >
-          <CategoryIcon size={20} style={{ color: avatarHex! }} />
+          <CategoryIcon size={19} style={{ color: avatarHex! }} />
         </div>
       )}
 
@@ -75,7 +74,7 @@ export function TransactionRow({ transaction, hideDate = false }: Props) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 flex-wrap">
           <div
-            className="font-semibold text-[15px] truncate"
+            className="font-medium text-[15px] truncate"
             style={{ color: "var(--ink)" }}
           >
             {title}
@@ -107,22 +106,14 @@ export function TransactionRow({ transaction, hideDate = false }: Props) {
         </div>
       </div>
 
-      {/* Amount — tinted chip */}
+      {/* Amount — plain mono figure; sign + colour carry the meaning */}
       <div
-        className="ml-auto tnum whitespace-nowrap px-2.5 py-1 rounded-xl"
-        style={{
-          font: "var(--text-figure-sm)",
-          color,
-          background: isTransfer
-            ? "color-mix(in srgb, var(--violet) 10%, transparent)"
-            : isIncome
-            ? "color-mix(in srgb, var(--green) 12%, transparent)"
-            : "color-mix(in srgb, var(--red) 10%, transparent)",
-        }}
+        className="ml-auto tnum whitespace-nowrap pl-2"
+        style={{ font: "var(--text-figure-sm)", fontFamily: "var(--font-mono)", color }}
       >
         {sign}{formatCurrency(transaction.amount)}
       </div>
-      <ChevronRight size={19} aria-hidden style={{ color: "var(--ink-3)", flexShrink: 0 }} />
+      <ChevronRight size={16} aria-hidden className="hidden sm:block" style={{ color: "var(--ink-3)", flexShrink: 0 }} />
     </div>
   );
 }

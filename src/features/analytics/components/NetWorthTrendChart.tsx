@@ -49,7 +49,7 @@ export function NetWorthTrendChart({ data, currentTotalBalance }: Props) {
             <stop offset="95%" stopColor="var(--color-netWorth)" stopOpacity={0.02} />
           </linearGradient>
         </defs>
-        <CartesianGrid vertical={false} strokeDasharray="4 4" stroke="var(--line)" />
+        <CartesianGrid vertical={false} strokeDasharray="3 6" stroke="var(--line)" strokeOpacity={0.6} />
         <XAxis
           dataKey="label"
           axisLine={false}
@@ -71,8 +71,16 @@ export function NetWorthTrendChart({ data, currentTotalBalance }: Props) {
           type="monotone"
           dataKey="netWorth"
           stroke="var(--color-netWorth)"
-          strokeWidth={2}
+          strokeWidth={2.5}
           fill="url(#netWorthFill)"
+          dot={(p: { cx?: number; cy?: number; index?: number }) =>
+            p.index === points.length - 1 && p.cx != null && p.cy != null ? (
+              <circle key="end" cx={p.cx} cy={p.cy} r={5} fill="var(--color-netWorth)" stroke="var(--card)" strokeWidth={2.5} />
+            ) : (
+              <g key={`d${p.index}`} />
+            )
+          }
+          activeDot={{ r: 5, stroke: "var(--card)", strokeWidth: 2 }}
           isAnimationActive
           animationDuration={800}
           animationEasing="ease-out"

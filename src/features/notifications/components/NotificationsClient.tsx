@@ -3,11 +3,12 @@
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, Check, CheckCheck, Trash2 } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, format, isToday, isYesterday } from "date-fns";
 import apiClient from "@/lib/api-client";
 import { type INotification } from "@/types/models";
 import { Skeleton } from "@/components/_ui/Skeleton";
 import { Card } from "@/components/_ui/Card";
+import { PageHeader } from "@/components/shared/PageHeader";
 import { Button } from "@/components/_ui/Button";
 import { toast } from "sonner";
 import { NOTIFICATION_TYPE_ICONS, NOTIFICATION_TYPE_COLORS } from "@/lib/icons";
@@ -78,114 +79,120 @@ export function NotificationsClient() {
   const notifications = data?.data ?? [];
   const unreadCount = data?.unreadCount ?? 0;
 
-  return (
-    <div className="flex flex-col gap-5">
-      {/* Header actions */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold" style={{ color: "var(--ink-2)" }}>
-            {unreadCount > 0 ? `${unreadCount} unread` : "All caught up"}
-          </span>
-        </div>
-        {unreadCount > 0 && (
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => markAllRead.mutate()}
-            disabled={markAllRead.isPending}
-            className="h-auto flex items-center gap-1.5 text-sm font-semibold px-3 py-1.5 rounded-full"
-            style={{ color: "var(--violet)" }}
-          >
-            <CheckCheck size={15} />
-            Mark all read
-          </Button>
-        )}
-      </div>
+  const groups: { label: string; items: INotification[] }[] = [];
+  for (const n of notifications) {
+    const d = new Date(n.createdAt);
+    const label = isToday(d) ? "Today" : isYesterday(d) ? "Yesterday" : format(d, "EEEE, d MMM");
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(n);
+    else groups.push({ label, items: [n] });
+  }
 
-      {/* List */}
+  const markAllButton = unreadCount > 0 && (
+    <Button
+      type="button"
+      variant="secondary"
+      onClick={() => markAllRead.mutate()}
+      disabled={markAllRead.isPending}
+      className="h-auto flex items-center gap-1.5 text-sm font-semibold px-4 py-2 rounded-full"
+    >
+      <CheckCheck size={15} />
+      Mark all read
+    </Button>
+  );
+
+  return (
+    <div className="page-stack">
+      <PageHeader
+        title="Notifications"
+        subtitle={unreadCount > 0 ? `${unreadCount} unread` : "All caught up"}
+        actions={markAllButton}
+      />
+
       {isLoading ? (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-3 max-w-3xl">
           {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-20 rounded-(--r-md)" />)}
         </div>
       ) : notifications.length === 0 ? (
         <Card radius="lg" className="flex flex-col items-center justify-center gap-3 py-20">
-          <div
-            className="w-16 h-16 rounded-full grid place-items-center text-3xl"
-            style={{ background: "var(--card-2)" }}
-          >
-            <Bell size={28} style={{ color: "var(--ink-3)" }} />
+          <div className="w-16 h-16 rounded-full grid place-items-center" style={{ background: "var(--card-2)" }}>
+            <Bell size={28} style={{ color: "var(--ink-3)" }} aria-hidden />
           </div>
-          <p className="text-sm font-medium" style={{ color: "var(--ink-2)" }}>No notifications</p>
+          <p style={{ font: "var(--text-body)", color: "var(--ink-2)" }}>No notifications yet</p>
         </Card>
       ) : (
-        <div className="flex flex-col gap-2.5">
-          {notifications.map((n) => {
-            const href = notificationHref(n);
-            return (
-            <Card
-              key={String(n._id)}
-              radius="md"
-              className={`flex items-start gap-4 px-4 py-4${href ? " cursor-pointer transition-colors hover:bg-(--card-2)" : ""}`}
-              style={{ borderLeft: n.isRead ? "3px solid transparent" : "3px solid var(--violet)" }}
-              onClick={href ? () => {
-                if (!n.isRead) markRead.mutate(String(n._id));
-                router.push(href);
-              } : undefined}
-            >
-              {/* Icon */}
-              <div
-                className="w-10 h-10 rounded-full grid place-items-center flex-none mt-0.5"
-                style={{ background: "var(--card-2)" }}
-              >
-                {(() => {
+        <div className="page-stack max-w-3xl">
+          {groups.map((g) => (
+            <section key={g.label}>
+              <div className="section-head"><h2>{g.label}</h2></div>
+              <div className="inset-group" style={{ "--inset": "68px" } as React.CSSProperties}>
+                {g.items.map((n) => {
+                  const href = notificationHref(n);
                   const TypeIcon = NOTIFICATION_TYPE_ICONS[n.type] ?? Bell;
-                  return <TypeIcon size={18} style={{ color: NOTIFICATION_TYPE_COLORS[n.type] ?? "var(--ink-2)" }} />;
-                })()}
-              </div>
+                  const open = href
+                    ? () => {
+                        if (!n.isRead) markRead.mutate(String(n._id));
+                        router.push(href);
+                      }
+                    : undefined;
+                  return (
+                    <div
+                      key={String(n._id)}
+                      role={href ? "link" : undefined}
+                      tabIndex={href ? 0 : undefined}
+                      onClick={open}
+                      onKeyDown={open ? (e) => { if (e.key === "Enter") open(); } : undefined}
+                      className={`group flex items-start gap-3 pl-4 pr-3 py-3.5 min-h-16${href ? " cursor-pointer transition-colors hover:bg-(--card-2) active:bg-(--card-2) focus-visible:outline-none focus-visible:bg-(--card-2)" : ""}`}
+                    >
+                      <div className="w-10 h-10 rounded-full grid place-items-center flex-none" style={{ background: "var(--card-2)" }}>
+                        <TypeIcon size={18} style={{ color: NOTIFICATION_TYPE_COLORS[n.type] ?? "var(--ink-2)" }} aria-hidden />
+                      </div>
 
-              {/* Content */}
-              <div className="flex-1 min-w-0">
-                <div className="font-bold text-[14px]" style={{ color: "var(--ink)" }}>
-                  {n.title}
-                </div>
-                <div className="text-sm mt-0.5" style={{ color: "var(--ink-2)" }}>
-                  {n.body}
-                </div>
-                <div className="text-xs mt-1.5 font-medium" style={{ color: "var(--ink-3)" }}>
-                  {formatDistanceToNow(new Date(n.createdAt), { addSuffix: true })}
-                </div>
-              </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          {!n.isRead && (
+                            <span className="w-2 h-2 rounded-full flex-none" style={{ background: "var(--ink)" }}>
+                              <span className="sr-only">Unread</span>
+                            </span>
+                          )}
+                          <span className="truncate" style={{ font: "var(--text-body)", fontWeight: n.isRead ? 500 : 650, color: "var(--ink)" }}>{n.title}</span>
+                        </div>
+                        <div className="mt-0.5 line-clamp-2" style={{ font: "var(--text-label)", color: "var(--ink-2)" }}>{n.body}</div>
+                        <div className="mt-1" style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>
+                          {formatDistanceToNow(new Date(n.createdAt), { addSuffix: true })}
+                        </div>
+                      </div>
 
-              {/* Actions */}
-              <div className="flex items-center gap-2 flex-none">
-                {!n.isRead && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Mark as read"
-                    onClick={(e) => { e.stopPropagation(); markRead.mutate(String(n._id)); }}
-                    className="w-8 h-8 rounded-full"
-                    style={{ background: "var(--card-2)" }}
-                  >
-                    <Check size={15} style={{ color: "var(--green)" }} />
-                  </Button>
-                )}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Delete notification"
-                  onClick={(e) => { e.stopPropagation(); deleteNotif.mutate(String(n._id)); }}
-                  className="w-8 h-8 rounded-full"
-                  style={{ background: "var(--card-2)" }}
-                >
-                  <Trash2 size={14} style={{ color: "var(--red)" }} />
-                </Button>
+                      <div className="flex items-center flex-none sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity">
+                        {!n.isRead && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            aria-label="Mark as read"
+                            onClick={(e) => { e.stopPropagation(); markRead.mutate(String(n._id)); }}
+                            className="rounded-full"
+                          >
+                            <Check size={16} style={{ color: "var(--green)" }} />
+                          </Button>
+                        )}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          aria-label="Delete notification"
+                          onClick={(e) => { e.stopPropagation(); deleteNotif.mutate(String(n._id)); }}
+                          className="rounded-full"
+                        >
+                          <Trash2 size={15} style={{ color: "var(--red)" }} />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            </Card>
-            );
-          })}
+            </section>
+          ))}
         </div>
       )}
     </div>

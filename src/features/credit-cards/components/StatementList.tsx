@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import type React from "react";
 import { format } from "date-fns";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCreditStatements } from "@/features/credit-cards/hooks/useCreditStatements";
@@ -22,15 +23,15 @@ export function StatementList({ accountId, account }: StatementListProps) {
   if (isLoading) {
     return (
       <div className="flex flex-col gap-2">
-        {[0, 1, 2].map(i => <Skeleton key={i} className="h-16 rounded-[var(--r-md)]" />)}
+        {[0, 1, 2].map(i => <Skeleton key={i} className="h-16 rounded-(--r-md)" />)}
       </div>
     );
   }
 
   if (!data?.currentCycle) {
     return (
-      <div className="rounded-[var(--r-md)] p-6 text-center" style={{ background: "var(--card)" }}>
-        <div className="text-sm font-bold" style={{ color: "var(--ink)" }}>Billing cycle not set up</div>
+      <div className="rounded-(--r-md) p-6 text-center" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
+        <div className="font-semibold" style={{ color: "var(--ink)" }}>Billing cycle not set up</div>
         <p className="text-xs mt-1" style={{ color: "var(--ink-3)" }}>Edit this card to configure the statement close date and payment due days.</p>
       </div>
     );
@@ -40,49 +41,40 @@ export function StatementList({ accountId, account }: StatementListProps) {
 
   return (
     <>
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-4">
         {/* Current open cycle */}
-        <div
-          className="rounded-[var(--r-md)] px-4 py-4"
-          style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)", border: "1.5px solid var(--line)" }}
-        >
+        <div className="rounded-(--r-md) px-4 py-4" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
           <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-[10px] font-bold uppercase tracking-wider mb-0.5" style={{ color: "var(--violet)" }}>
-                Current Cycle · Unbilled
-              </div>
-              <div className="text-[13px] font-bold" style={{ color: "var(--ink)" }}>
+            <div className="min-w-0">
+              <div style={{ font: "var(--text-micro)", color: "var(--violet)" }}>Current cycle · Unbilled</div>
+              <div className="text-[15px] font-medium mt-0.5" style={{ color: "var(--ink)" }}>
                 {current.label}
               </div>
-              <div className="text-[11px] font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>
+              <div className="text-xs mt-0.5" style={{ color: "var(--ink-3)" }}>
                 Closes {format(new Date(current.periodEnd), "MMM d")} · Due after close {format(new Date(current.dueDate), "MMM d")}
               </div>
             </div>
             <div className="text-right flex-none">
-              <div className="text-[20px] font-extrabold tnum" style={{ color: current.balance > 0 ? "var(--red)" : "var(--ink)" }}>
+              <div className="tnum" style={{ font: "var(--text-stat)", fontSize: 20, color: current.balance > 0 ? "var(--red)" : "var(--ink)" }}>
                 {formatCurrency(current.unbilledUsage ?? current.balance)}
               </div>
-              <div className="text-[10px] font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>
-                Not payable yet
-              </div>
+              <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-3)" }}>Not payable yet</div>
             </div>
           </div>
         </div>
 
         {/* Past statements */}
         {data.data.length > 0 && (
-          <>
-            <div className="text-[11px] font-bold uppercase tracking-wider px-1 mt-2" style={{ color: "var(--ink-3)" }}>
-              Statement History
+          <div>
+            <div className="px-1 pb-2" style={{ font: "var(--text-label)", color: "var(--ink-2)" }}>
+              Statement history
             </div>
-            {data.data.map(s => (
-              <StatementRow
-                key={String(s._id)}
-                statement={s}
-                onPayNow={setPayTarget}
-              />
-            ))}
-          </>
+            <div className="inset-group" style={{ "--inset": "64px" } as React.CSSProperties}>
+              {data.data.map(s => (
+                <StatementRow key={String(s._id)} statement={s} onPayNow={setPayTarget} />
+              ))}
+            </div>
+          </div>
         )}
       </div>
 

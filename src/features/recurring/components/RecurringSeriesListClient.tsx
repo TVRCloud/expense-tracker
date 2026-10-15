@@ -8,6 +8,8 @@ import { useRecurringSeriesList, type RecurringSeries } from "../hooks/useRecurr
 import { TRANSACTION_CATEGORY_ICONS } from "@/lib/icons";
 import { canonicalizeCategory } from "@/lib/category-colors";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PageHeader } from "@/components/shared/PageHeader";
+import type { CSSProperties } from "react";
 
 function freqLabel(frequency: string, interval: number): string {
   const unit = frequency === "monthly" ? "months" : frequency === "weekly" ? "weeks" : frequency === "daily" ? "days" : "years";
@@ -23,29 +25,28 @@ function SeriesCard({ series }: { series: RecurringSeries }) {
   return (
     <Link
       href={`/transactions/recurring/${series._id}`}
-      className="flex items-center gap-4 rounded-[var(--r-md)] px-4 py-4"
-      style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
+      className="flex items-center gap-3.5 px-4 min-h-[68px] py-3 transition-colors active:bg-(--card-2)"
     >
       <div
         className="w-11 h-11 rounded-full grid place-items-center flex-none"
-        style={{ background: "color-mix(in srgb, var(--violet) 12%, transparent)", color: "var(--violet)" }}
+        style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
       >
         <CategoryIcon size={19} />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="font-bold text-sm truncate" style={{ color: "var(--ink)" }}>
+        <div className="font-medium text-[15px] truncate" style={{ color: "var(--ink)" }}>
           {series.label ?? series.description ?? series.category}
         </div>
-        <div className="text-xs font-medium mt-0.5 capitalize" style={{ color: "var(--ink-3)" }}>
+        <div className="text-xs mt-0.5 capitalize" style={{ color: "var(--ink-3)" }}>
           {freqLabel(series.frequency, series.interval)} · {series.paidCount}/{series.count} paid
           {series.nextDue && ` · next ${format(new Date(series.nextDue), "d MMM")}`}
         </div>
       </div>
       <div className="text-right flex-none">
-        <div className="font-extrabold tnum text-[15px]" style={{ color: amountColor }}>
+        <div className="tnum" style={{ font: "var(--text-figure-sm)", fontSize: 15, color: amountColor }}>
           {formatCurrency(series.amount)}
         </div>
-        <div className="text-[11px] font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>
+        <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-3)" }}>
           {remaining > 0 ? `${remaining} left` : "Completed"}
         </div>
       </div>
@@ -56,33 +57,47 @@ function SeriesCard({ series }: { series: RecurringSeries }) {
 export function RecurringSeriesListClient() {
   const { data, isLoading } = useRecurringSeriesList();
   const series = data?.data ?? [];
+  const active = series.filter(s => s.remainingCount > 0);
+  const done = series.filter(s => s.remainingCount <= 0);
+
+  const group = (items: RecurringSeries[]) => (
+    <div className="inset-group" style={{ "--inset": "74px" } as CSSProperties}>
+      {items.map(s => <SeriesCard key={s._id} series={s} />)}
+    </div>
+  );
 
   return (
-    <div className="flex flex-col gap-5">
-      <Link href="/transactions" className="inline-flex items-center gap-2 text-sm font-bold" style={{ color: "var(--violet)" }}>
-        <ArrowLeft size={16} /> Back to Transactions
+    <div className="page-stack">
+      <Link href="/transactions" className="inline-flex items-center gap-1.5 text-sm font-semibold min-h-11 self-start" style={{ color: "var(--violet)" }}>
+        <ArrowLeft size={16} /> Transactions
       </Link>
 
-      <div className="flex items-center gap-2">
-        <RotateCcw size={18} style={{ color: "var(--violet)" }} />
-        <h1 className="text-lg font-extrabold" style={{ color: "var(--ink)" }}>Recurring</h1>
-      </div>
+      <PageHeader title="Recurring" subtitle={series.length ? `${active.length} active · ${done.length} completed` : "Installments and repeating payments"} />
 
       {isLoading ? (
-        <div className="flex flex-col gap-3">
-          {[0, 1, 2].map(i => <Skeleton key={i} className="h-20 rounded-[var(--r-md)]" />)}
+        <div className="inset-group">
+          {[0, 1, 2].map(i => <Skeleton key={i} className="h-[68px] rounded-none" />)}
         </div>
       ) : series.length === 0 ? (
         <div
-          className="flex flex-col items-center justify-center gap-2 rounded-[var(--r-lg)] py-16"
+          className="flex flex-col items-center justify-center gap-2 rounded-(--r-lg) py-16 text-center px-6"
           style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
         >
           <RotateCcw size={28} style={{ color: "var(--ink-3)" }} />
-          <p className="text-sm font-medium" style={{ color: "var(--ink-2)" }}>No recurring transactions yet</p>
+          <p style={{ font: "var(--text-body)", color: "var(--ink-2)" }}>No recurring transactions yet</p>
         </div>
       ) : (
-        <div className="flex flex-col gap-3">
-          {series.map(s => <SeriesCard key={s._id} series={s} />)}
+        <div className="grid-2 items-start">
+          <section>
+            <div className="section-head"><h2>Active</h2></div>
+            {active.length ? group(active) : <p style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>Nothing active.</p>}
+          </section>
+          {done.length > 0 && (
+            <section>
+              <div className="section-head"><h2>Completed</h2></div>
+              {group(done)}
+            </section>
+          )}
         </div>
       )}
     </div>

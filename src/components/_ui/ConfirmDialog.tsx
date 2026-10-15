@@ -54,12 +54,12 @@ export function useConfirm() {
           )}
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel onClick={() => close(false)}>
+          <AlertDialogCancel className="h-11 rounded-(--r-sm) font-semibold" onClick={() => close(false)}>
             {options?.cancelLabel ?? "Cancel"}
           </AlertDialogCancel>
           <AlertDialogAction
             onClick={() => close(true)}
-            className={cn(options?.destructive && buttonVariants({ variant: "destructive" }))}
+            className={cn("h-11 rounded-(--r-sm) font-semibold", options?.destructive && buttonVariants({ variant: "destructive" }))}
           >
             {options?.confirmLabel ?? "Confirm"}
           </AlertDialogAction>

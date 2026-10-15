@@ -47,7 +47,7 @@ export function CategoryRingGrid({ byCategory, total }: Props) {
   const top = byCategory.slice(0, 6);
 
   return (
-    <div className="grid grid-cols-3 gap-3">
+    <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-6">
       {top.map(({ category, total: catTotal }) => {
         const pct = total > 0 ? (catTotal / total) * 100 : 0;
         const size = ringSize(pct);

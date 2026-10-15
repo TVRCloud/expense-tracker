@@ -3,33 +3,34 @@ import { Button } from "@/components/_ui/Button";
 
 export default function PublicLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen flex flex-col" style={{ background: "var(--bg)" }}>
+    <div className="flex min-h-dvh flex-col" style={{ background: "var(--bg)" }}>
       <header
-        className="flex items-center justify-between px-6 py-4 mx-auto w-full"
-        style={{ maxWidth: "var(--maxw)" }}
+        className="chrome sticky top-0 z-30"
+        style={{ borderBottom: "1px solid var(--line)", paddingTop: "env(safe-area-inset-top, 0px)" }}
       >
-        <Link href="/" className="font-extrabold" style={{ color: "var(--ink)" }}>
-          Finance OS
-        </Link>
-        <nav className="flex items-center gap-2">
-          <Link
-            href="/login"
-            className="px-3 py-2 text-sm font-semibold"
-            style={{ color: "var(--ink-2)" }}
-          >
-            Sign in
+        <div
+          className="mx-auto flex h-14 w-full items-center justify-between px-5 sm:px-8"
+          style={{ maxWidth: "var(--maxw)" }}
+        >
+          <Link href="/" className="text-base font-bold tracking-[-0.02em]" style={{ color: "var(--ink)" }}>
+            Finance OS
           </Link>
-          <Button asChild>
-            <Link href="/register">Get started</Link>
-          </Button>
-        </nav>
+          <nav className="flex items-center gap-1.5">
+            <Button asChild variant="ghost" className="h-9 rounded-full px-4">
+              <Link href="/login">Sign in</Link>
+            </Button>
+            <Button asChild className="h-9 rounded-full px-4">
+              <Link href="/register">Get started</Link>
+            </Button>
+          </nav>
+        </div>
       </header>
 
       <main className="flex-1">{children}</main>
 
       <footer
-        className="px-6 py-8 mx-auto w-full text-center"
-        style={{ maxWidth: "var(--maxw)", color: "var(--ink-3)" }}
+        className="mx-auto w-full px-5 py-8 text-center sm:px-8"
+        style={{ maxWidth: "var(--maxw)", color: "var(--ink-3)", borderTop: "1px solid var(--line)" }}
       >
         <p className="text-sm">© {new Date().getFullYear()} Finance OS</p>
       </footer>
