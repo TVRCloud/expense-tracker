@@ -1358,3 +1358,140 @@ describe("account matching by bank when no digits are saved", () => {
     expect(res.body.status).toBe("queued");
   });
 });
+
+describe("app update routes", () => {
+  const KEY = "test-app-update-api-key-value";
+  const release = (over: Record<string, unknown> = {}) => ({
+    tag_name: "v1.1.0+11",
+    body: "Faster Home.",
+    published_at: "2026-10-16T08:00:00Z",
+    draft: false,
+    prerelease: false,
+    assets: [
+      { id: 7, name: "notes.txt", size: 10 },
+      { id: 99, name: "ExpenseCompanion-1.1.0-11.apk", size: 1234, digest: "sha256:ABCDEF" },
+    ],
+    ...over,
+  });
+
+  async function setup() {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "U", email: `au${Date.now()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+  }
+
+  const req = (path: string) => new NextRequest(`http://localhost/api/integrations/${path}`, { headers: { authorization: `Bearer ${KEY}` } });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    delete process.env.APP_RELEASES_TOKEN;
+    const { resetAppUpdateCacheForTests } = await import("@/lib/app-update");
+    resetAppUpdateCacheForTests();
+  });
+
+  it("parseRelease reads the tag, the apk and its checksum, and ignores anything else", async () => {
+    const { parseRelease } = await import("@/lib/app-update");
+    const r = parseRelease(release());
+    expect(r).toMatchObject({ version: "1.1.0", build: 11, notes: "Faster Home.", apk: { assetId: 99, size: 1234, sha256: "abcdef" } });
+    expect(parseRelease(release({ draft: true }))).toBeNull();
+    expect(parseRelease(release({ prerelease: true }))).toBeNull();
+    expect(parseRelease(release({ tag_name: "nightly" }))).toBeNull();
+    expect(parseRelease(release({ assets: [{ id: 1, name: "x.zip", size: 1 }] }))).toBeNull();
+    expect(parseRelease(release({ assets: [{ id: 5, name: "a.apk", size: 2 }] }))!.apk.sha256).toBeNull();
+  });
+
+  it("reports no update, and never calls GitHub, when no token is configured", async () => {
+    await setup();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { GET } = await import("@/app/api/integrations/app-update/route");
+    const res = await GET(req("app-update"), undefined as never);
+    expect(res.status).toBe(200);
+    expect((await res.json()).data).toEqual({ configured: false, latest: null });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns the latest release without the asset id, and caches it", async () => {
+    await setup();
+    process.env.APP_RELEASES_TOKEN = "ghp_test";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(release()), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { GET } = await import("@/app/api/integrations/app-update/route");
+    const body = await (await GET(req("app-update"), undefined as never)).json();
+    expect(body.data.configured).toBe(true);
+    expect(body.data.latest).toEqual({
+      version: "1.1.0",
+      build: 11,
+      notes: "Faster Home.",
+      publishedAt: "2026-10-16T08:00:00Z",
+      sizeBytes: 1234,
+      sha256: "abcdef",
+    });
+    await GET(req("app-update"), undefined as never);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://api.github.com/repos/TVRCloud/expense-tracker-mobile/releases/latest");
+    expect((init.headers as Record<string, string>).authorization).toBe("Bearer ghp_test");
+  });
+
+  it("needs a valid API key", async () => {
+    await setup();
+    const { GET } = await import("@/app/api/integrations/app-update/route");
+    const res = await GET(new NextRequest("http://localhost/api/integrations/app-update"), undefined as never);
+    expect(res.status).toBe(401);
+  });
+
+  it("serves the last good release when GitHub then fails", async () => {
+    await setup();
+    process.env.APP_RELEASES_TOKEN = "ghp_test";
+    const { getLatestAppRelease } = await import("@/lib/app-update");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(release()), { status: 200 })));
+    expect((await getLatestAppRelease())?.build).toBe(11);
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 502 })));
+    expect((await getLatestAppRelease())?.build).toBe(11);
+    vi.useRealTimers();
+  });
+
+  it("download hands out GitHub's signed redirect and no APK bytes", async () => {
+    await setup();
+    process.env.APP_RELEASES_TOKEN = "ghp_test";
+    const signed = "https://objects.githubusercontent.com/signed-apk?sig=1";
+    const fetchMock = vi.fn(async (url: string) =>
+      url.endsWith("/releases/latest")
+        ? new Response(JSON.stringify(release()), { status: 200 })
+        : new Response(null, { status: 302, headers: { location: signed } })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { GET } = await import("@/app/api/integrations/app-update/download/route");
+    const res = await GET(req("app-update/download"), undefined as never);
+    expect(res.status).toBe(200);
+    expect((await res.json()).data).toEqual({ url: signed, build: 11, sizeBytes: 1234, sha256: "abcdef" });
+    const assetCall = fetchMock.mock.calls.find((c) => (c as unknown as [string])[0].includes("/releases/assets/99"))!;
+    expect((assetCall as unknown as [string, RequestInit])[1].redirect).toBe("manual");
+  });
+
+  it("download is a 404 when there is no release, and never forwards a non-https redirect", async () => {
+    await setup();
+    const { GET } = await import("@/app/api/integrations/app-update/download/route");
+    expect((await GET(req("app-update/download"), undefined as never)).status).toBe(404);
+
+    process.env.APP_RELEASES_TOKEN = "ghp_test";
+    const { resetAppUpdateCacheForTests } = await import("@/lib/app-update");
+    resetAppUpdateCacheForTests();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.endsWith("/releases/latest")
+          ? new Response(JSON.stringify(release()), { status: 200 })
+          : new Response(null, { status: 302, headers: { location: "http://insecure.example.com/x" } })
+      )
+    );
+    expect((await GET(req("app-update/download"), undefined as never)).status).toBe(500);
+  });
+});
+
