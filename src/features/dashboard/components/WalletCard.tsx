@@ -30,11 +30,11 @@ export function WalletCard({ account, className, style }: Props) {
   return (
     <Link
       href={`/accounts/${account._id}`}
-      className={`block rounded-(--r-lg) p-5 transition-transform active:scale-[0.98] ${className ?? ""}`}
+      className={`block rounded-(--r-lg) p-5 h-full transition-transform active:scale-[0.98] ${className ?? ""}`}
       style={{
         background: "linear-gradient(135deg, #18181b 0%, #27272a 60%, #3f3f46 100%)",
-        boxShadow: `0 20px 50px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.07), inset 3px 0 0 ${accent}`,
-        minHeight: 164,
+        boxShadow: `0 10px 28px rgba(0,0,0,.28), 0 0 0 1px rgba(255,255,255,.07), inset 3px 0 0 ${accent}`,
+        minHeight: 148,
         ...style,
       }}
     >
@@ -72,7 +72,7 @@ export function WalletCard({ account, className, style }: Props) {
       {/* Balance */}
       <div
         className="tnum leading-none mb-4"
-        style={{ font: "var(--text-stat)", fontSize: 26, color: "#fff" }}
+        style={{ font: "var(--text-stat)", fontSize: 24, color: "#fff" }}
       >
         {formatCurrency(account.balance)}
       </div>

@@ -40,7 +40,11 @@ export function Progress({
   return (
     <ProgressRoot
       value={Math.min(100, Math.max(0, value))}
-      className={cn(striped && "progress-striped", className)}
+      className={cn(
+        "rounded-full [&>[data-state]]:rounded-full [&>[data-state]]:transition-transform [&>[data-state]]:duration-500 [&>[data-state]]:ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:[&>[data-state]]:transition-none",
+        striped && "progress-striped",
+        className
+      )}
       style={style}
       aria-label={ariaLabel}
     />

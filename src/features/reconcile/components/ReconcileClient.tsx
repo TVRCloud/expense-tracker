@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card } from "@/components/_ui/Card";
+import { PageHeader } from "@/components/shared/PageHeader";
 import { Button } from "@/components/_ui/Button";
 import { Input } from "@/components/_ui/Input";
 import { Switch } from "@/components/_ui/Switch";
@@ -50,7 +51,7 @@ function Amount({ type, amount }: { type: string | null; amount: number | null }
 
 function EmptyState({ text }: { text: string }) {
   return (
-    <Card radius="lg" className="p-8 flex flex-col items-center gap-2 text-center">
+    <Card radius="lg" className="p-10 flex flex-col items-center gap-2 text-center">
       <InboxIcon size={22} style={{ color: "var(--ink-3)" }} aria-hidden />
       <p className="text-sm" style={{ color: "var(--ink-3)" }}>{text}</p>
     </Card>
@@ -63,11 +64,11 @@ function NeedsReviewRow({ txn }: { txn: InboxTxn }) {
   const fallback = txn.sourceInfo.priority === "fallback";
 
   return (
-    <Card radius="md" className="p-4 flex flex-col gap-3">
+    <Card radius="lg" className="p-5 flex flex-col gap-3.5 min-w-0">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-bold text-[15px] truncate" style={{ color: "var(--ink)" }}>{txn.description || txn.category}</span>
+            <span className="font-semibold text-[15px] truncate" style={{ color: "var(--ink)" }}>{txn.description || txn.category}</span>
             <SourceBadge source={txn.source} />
           </div>
           <div className="text-xs mt-0.5" style={{ color: "var(--ink-3)" }}>
@@ -87,11 +88,11 @@ function NeedsReviewRow({ txn }: { txn: InboxTxn }) {
         </blockquote>
       )}
       <div className="flex flex-wrap gap-2">
-        <Button type="button" onClick={() => confirmTxn.mutate(txn.id)} disabled={confirmTxn.isPending} className="h-auto px-3.5 py-2 rounded-(--r-sm) font-bold text-sm">
+        <Button type="button" onClick={() => confirmTxn.mutate(txn.id)} disabled={confirmTxn.isPending} className="h-auto px-4 py-2 rounded-full font-semibold text-sm">
           <Check size={15} />
           Looks right
         </Button>
-        <Button type="button" variant="secondary" onClick={() => setFixing(true)} className="h-auto px-3.5 py-2 rounded-(--r-sm) font-bold text-sm">
+        <Button type="button" variant="secondary" onClick={() => setFixing(true)} className="h-auto px-4 py-2 rounded-full font-semibold text-sm">
           <PencilLine size={15} />
           Fix this…
         </Button>
@@ -195,11 +196,11 @@ function CreateFromCapture({ capture, onDone }: { capture: InboxCapture; onDone:
               { onSuccess: onDone }
             )
           }
-          className="h-auto px-3.5 py-2 rounded-(--r-sm) font-bold text-sm"
+          className="h-auto px-4 py-2 rounded-full font-semibold text-sm"
         >
           {resolve.isPending ? "Adding..." : "Add transaction"}
         </Button>
-        <Button type="button" variant="secondary" onClick={onDone} className="h-auto px-3.5 py-2 rounded-(--r-sm) font-bold text-sm">
+        <Button type="button" variant="secondary" onClick={onDone} className="h-auto px-4 py-2 rounded-full font-semibold text-sm">
           Cancel
         </Button>
       </div>
@@ -226,7 +227,7 @@ function CouldntMatchRow({ capture }: { capture: InboxCapture }) {
   };
 
   return (
-    <Card radius="md" className="p-4 flex flex-col gap-3">
+    <Card radius="lg" className="p-5 flex flex-col gap-3.5 min-w-0">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
@@ -262,29 +263,29 @@ function CouldntMatchRow({ capture }: { capture: InboxCapture }) {
         <div className="flex flex-wrap gap-2">
           {capture.reason === "source_conflict" ? (
             <>
-              <Button type="button" variant="secondary" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: capture.id, input: { action: "keep_mine" } })} className="h-auto px-3.5 py-2 rounded-(--r-sm) font-bold text-sm">
+              <Button type="button" variant="secondary" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: capture.id, input: { action: "keep_mine" } })} className="h-auto px-4 py-2 rounded-full font-semibold text-sm">
                 Keep mine
               </Button>
-              <Button type="button" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: capture.id, input: { action: "use_sms" } })} className="h-auto px-3.5 py-2 rounded-(--r-sm) font-bold text-sm">
+              <Button type="button" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: capture.id, input: { action: "use_sms" } })} className="h-auto px-4 py-2 rounded-full font-semibold text-sm">
                 Use SMS values
               </Button>
             </>
           ) : capture.reason === "possible_duplicate" && related ? (
             <>
-              <Button type="button" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: capture.id, input: { action: "link" } })} className="h-auto px-3.5 py-2 rounded-(--r-sm) font-bold text-sm">
+              <Button type="button" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: capture.id, input: { action: "link" } })} className="h-auto px-4 py-2 rounded-full font-semibold text-sm">
                 Same payment
               </Button>
-              <Button type="button" variant="secondary" onClick={() => setCreating(true)} className="h-auto px-3.5 py-2 rounded-(--r-sm) font-bold text-sm">
+              <Button type="button" variant="secondary" onClick={() => setCreating(true)} className="h-auto px-4 py-2 rounded-full font-semibold text-sm">
                 It&apos;s separate
               </Button>
             </>
           ) : (
-            <Button type="button" onClick={() => setCreating(true)} className="h-auto px-3.5 py-2 rounded-(--r-sm) font-bold text-sm">
+            <Button type="button" onClick={() => setCreating(true)} className="h-auto px-4 py-2 rounded-full font-semibold text-sm">
               <Plus size={15} />
               Add as transaction
             </Button>
           )}
-          <Button type="button" variant="ghost" onClick={() => void onDiscard()} disabled={discard.isPending} className="h-auto px-3 py-2 rounded-(--r-sm) font-bold text-sm ml-auto" style={{ color: "var(--red)" }}>
+          <Button type="button" variant="ghost" onClick={() => void onDiscard()} disabled={discard.isPending} className="h-auto px-3.5 py-2 rounded-full font-semibold text-sm ml-auto" style={{ color: "var(--red)" }}>
             <Trash2 size={15} />
             Discard
           </Button>
@@ -301,9 +302,9 @@ function HistoryList() {
   if (isLoading) return <Skeleton className="h-40 rounded-(--r-lg)" />;
   if (!data?.length) return <EmptyState text="No corrections yet. Fixes you make, and SMS updates, show here." />;
   return (
-    <Card radius="lg" className="divide-y overflow-hidden" style={{ borderColor: "var(--line)" }}>
+    <div className="inset-group" style={{ "--inset": "16px" } as React.CSSProperties}>
       {data.map((c) => (
-        <Link key={c.id} href={`/transactions/${c.transactionId}`} className="flex items-center gap-3 px-4 py-3.5 hover:bg-(--card-2)">
+        <Link key={c.id} href={`/transactions/${c.transactionId}`} className="flex items-center gap-3 px-4 py-3.5 min-h-14 transition-colors hover:bg-(--card-2) active:bg-(--card-2)">
           <div className="min-w-0 flex-1">
             <div className="text-sm font-bold truncate" style={{ color: "var(--ink)" }}>{c.transactionLabel}</div>
             <div className="text-xs" style={{ color: "var(--ink-3)" }}>
@@ -324,7 +325,7 @@ function HistoryList() {
           <ChevronRight size={16} style={{ color: "var(--ink-3)" }} />
         </Link>
       ))}
-    </Card>
+    </div>
   );
 }
 
@@ -332,44 +333,62 @@ export function ReconcileClient() {
   const { data, isLoading } = useReconcileInbox();
   const [tab, setTab] = useState("review");
 
+  const waiting = data?.counts.waitingForSms ?? 0;
+  const stat = (label: string, value: number | undefined, tone?: string) => (
+    <Card radius="lg" className="p-5 flex flex-col gap-2 min-w-0">
+      <span style={{ font: "var(--text-label)", color: "var(--ink-2)" }}>{label}</span>
+      <span className="tnum" style={{ font: "var(--text-stat)", color: tone ?? "var(--ink)" }}>{value ?? "–"}</span>
+    </Card>
+  );
+  const list = "grid-cards";
+  const listVars = { "--card-min": "min(100%, 400px)" } as React.CSSProperties;
+
   return (
-    <div className="flex flex-col gap-5 pb-8">
-      <div>
-        <h1 className="text-xl font-extrabold" style={{ color: "var(--ink)" }}>Reconcile</h1>
-        <p className="text-sm mt-1" style={{ color: "var(--ink-3)" }}>
-          Payments captured from SMS, n8n and app notifications. SMS is the source of truth; notifications are only used when no SMS arrives.
-          {data?.counts.waitingForSms ? ` ${data.counts.waitingForSms} notification${data.counts.waitingForSms === 1 ? " is" : "s are"} waiting for an SMS.` : ""}
-        </p>
+    <div className="page-stack pb-8">
+      <PageHeader
+        title="Reconcile"
+        subtitle={
+          <>
+            Payments captured from SMS, n8n and app notifications. SMS is the source of truth; notifications are used only when no SMS arrives.
+            {waiting ? ` ${waiting} notification${waiting === 1 ? " is" : "s are"} waiting for an SMS.` : ""}
+          </>
+        }
+      />
+
+      <div className="grid-cards" style={{ "--card-min": "180px" } as React.CSSProperties}>
+        {stat("Needs review", data?.counts.needsReview, data?.counts.needsReview ? "var(--amber)" : undefined)}
+        {stat("Couldn't match", data?.counts.couldntMatch)}
+        {stat("Waiting for SMS", data ? waiting : undefined)}
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList>
-          <TabsTrigger value="review">Needs review{data ? ` (${data.counts.needsReview})` : ""}</TabsTrigger>
-          <TabsTrigger value="unmatched">Couldn&apos;t match{data ? ` (${data.counts.couldntMatch})` : ""}</TabsTrigger>
-          <TabsTrigger value="history">History</TabsTrigger>
+        <TabsList className="rounded-full p-0.5 h-auto" style={{ background: "var(--card-2)" }}>
+          <TabsTrigger value="review" className="rounded-full px-4 py-1.5 text-[13px] font-semibold pointer-coarse:min-h-11">Needs review{data ? ` (${data.counts.needsReview})` : ""}</TabsTrigger>
+          <TabsTrigger value="unmatched" className="rounded-full px-4 py-1.5 text-[13px] font-semibold pointer-coarse:min-h-11">Couldn&apos;t match{data ? ` (${data.counts.couldntMatch})` : ""}</TabsTrigger>
+          <TabsTrigger value="history" className="rounded-full px-4 py-1.5 text-[13px] font-semibold pointer-coarse:min-h-11">History</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="review" className="flex flex-col gap-3 mt-4">
+        <TabsContent value="review" className="mt-5">
           {isLoading ? (
             <Skeleton className="h-40 rounded-(--r-lg)" />
           ) : data?.needsReview.length ? (
-            data.needsReview.map((t) => <NeedsReviewRow key={t.id} txn={t} />)
+            <div className={list} style={listVars}>{data.needsReview.map((t) => <NeedsReviewRow key={t.id} txn={t} />)}</div>
           ) : (
             <EmptyState text="All caught up. New captured payments land here for a quick check." />
           )}
         </TabsContent>
 
-        <TabsContent value="unmatched" className="flex flex-col gap-3 mt-4">
+        <TabsContent value="unmatched" className="mt-5">
           {isLoading ? (
             <Skeleton className="h-40 rounded-(--r-lg)" />
           ) : data?.couldntMatch.length ? (
-            data.couldntMatch.map((c) => <CouldntMatchRow key={c.id} capture={c} />)
+            <div className={list} style={listVars}>{data.couldntMatch.map((c) => <CouldntMatchRow key={c.id} capture={c} />)}</div>
           ) : (
             <EmptyState text="Nothing waiting. Messages that can't be matched to an account show here." />
           )}
         </TabsContent>
 
-        <TabsContent value="history" className="mt-4">
+        <TabsContent value="history" className="mt-5">
           {tab === "history" && <HistoryList />}
         </TabsContent>
       </Tabs>

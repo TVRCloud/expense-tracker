@@ -1,9 +1,11 @@
 import { ChevronRight, type LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { type ReactNode } from "react";
+import { cn } from "@/lib/utils";
 
 interface Props {
   icon: LucideIcon;
+  /** Kept for API compatibility; tile colour now follows the brand tokens. */
   iconColor?: string;
   title: string;
   subtitle?: string;
@@ -11,65 +13,58 @@ interface Props {
   onClick?: () => void;
   trailing?: ReactNode;
   danger?: boolean;
+  /** Highlights the row (current section in the desktop two-pane layout). */
+  selected?: boolean;
 }
 
-export function SettingsRow({
-  icon: Icon,
-  iconColor = "var(--violet)",
-  title,
-  subtitle,
-  href,
-  onClick,
-  trailing,
-  danger,
-}: Props) {
-  const tintAlpha = danger ? "rgba(235,87,87,.12)" : "rgba(0,0,0,.12)";
-  const finalIconColor = danger ? "var(--red)" : iconColor;
-
+/**
+ * Navigation row for an `.inset-group` (set `--inset: 60px` so the hairline
+ * starts after the icon tile). 56px min height, 32px icon tile, press tint,
+ * chevron trailing unless `trailing` is given.
+ */
+export function SettingsRow({ icon: Icon, title, subtitle, href, onClick, trailing, danger, selected }: Props) {
   const inner = (
     <>
-      {/* Icon */}
       <div
-        className="w-10 h-10 rounded-[12px] grid place-items-center flex-none"
-        style={{ background: tintAlpha }}
+        className="grid size-8 flex-none place-items-center rounded-[9px]"
+        style={
+          danger
+            ? { background: "color-mix(in srgb, var(--red) 14%, transparent)", color: "var(--red)" }
+            : { background: "var(--violet)", color: "var(--violet-fg)" }
+        }
       >
-        <Icon size={19} style={{ color: finalIconColor }} />
+        <Icon size={17} strokeWidth={2.2} />
       </div>
-
-      {/* Text */}
-      <div className="flex-1 min-w-0">
-        <div
-          className="text-sm font-bold truncate"
-          style={{ color: danger ? "var(--red)" : "var(--ink)" }}
-        >
+      <div className="min-w-0 flex-1 text-left">
+        <div className="truncate" style={{ font: "var(--text-body)", color: danger ? "var(--red)" : "var(--ink)" }}>
           {title}
         </div>
         {subtitle && (
-          <div className="text-xs font-medium mt-0.5 truncate" style={{ color: "var(--ink-3)" }}>
+          <div className="mt-0.5 truncate" style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>
             {subtitle}
           </div>
         )}
       </div>
-
-      {/* Trailing */}
-      {trailing ?? <ChevronRight size={17} style={{ color: "var(--ink-3)", flexShrink: 0 }} />}
+      {trailing ?? <ChevronRight size={16} className="flex-none" style={{ color: "var(--ink-3)" }} />}
     </>
   );
 
-  const cls =
-    "flex items-center gap-3.5 rounded-[var(--r-md)] px-4 py-3.5 transition-all hover:opacity-85 w-full text-left";
-  const style = { background: "var(--card)", boxShadow: "var(--shadow-sm)" };
+  const cls = cn(
+    "flex min-h-14 w-full items-center gap-3 px-4 py-2.5 text-left outline-none transition-colors",
+    "hover:bg-(--card-2) active:bg-(--card-2) focus-visible:bg-(--card-2)",
+    selected && "bg-[color-mix(in_srgb,var(--violet)_10%,transparent)] hover:bg-[color-mix(in_srgb,var(--violet)_12%,transparent)]"
+  );
 
   if (href) {
     return (
-      <Link href={href} className={cls} style={style}>
+      <Link href={href} className={cls} aria-current={selected ? "page" : undefined}>
         {inner}
       </Link>
     );
   }
 
   return (
-    <button onClick={onClick} className={cls} style={style}>
+    <button type="button" onClick={onClick} className={cls}>
       {inner}
     </button>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { motion } from "motion/react";
+import { MotionConfig, motion } from "motion/react";
 import { ReactNode, CSSProperties } from "react";
 import { hasHydrated } from "@/components/shared/hydration";
 
@@ -20,6 +20,7 @@ export function StaggerContainer({
   delayChildren = 0.02,
 }: StaggerContainerProps) {
   return (
+    <MotionConfig reducedMotion="user">
     <motion.div
       // Already in the server HTML: show at once, no stagger (hydration.tsx).
       initial={hasHydrated() ? "hidden" : false}
@@ -39,6 +40,7 @@ export function StaggerContainer({
     >
       {children}
     </motion.div>
+    </MotionConfig>
   );
 }
 

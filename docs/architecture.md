@@ -66,6 +66,8 @@ expense-tracker/
 
 ## Key design decisions
 
+- UI follows the Apple-style design system in [design-system.md](design-system.md) (tokens in `src/app/globals.css`, reference artifact linked there)
+
 - All monetary values are stored as **integers (cents)** — never floats
 - `requireAuth()` is called at the top of every Route Handler — no middleware magic for per-route auth
 - JTI session tracking: every JWT contains a `jti` stored in MongoDB; on every token refresh the JTI is validated. Session can be revoked server-side by setting `isActive: false`

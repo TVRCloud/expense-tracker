@@ -145,9 +145,9 @@ export function TransactionDetailClient({ id }: Props) {
   if (isError || !transaction) {
     return (
       <div className="flex flex-col gap-4">
-        <Link href="/transactions" className="inline-flex items-center gap-2 text-sm font-bold" style={{ color: "var(--violet)" }}>
+        <Link href="/transactions" className="inline-flex items-center gap-1.5 text-sm font-semibold min-h-11" style={{ color: "var(--violet)" }}>
           <ArrowLeft size={16} />
-          Back to transactions
+          Transactions
         </Link>
         <Card radius="lg" className="p-8 text-center">
           <div className="font-bold" style={{ color: "var(--ink)" }}>Transaction not found</div>
@@ -157,109 +157,98 @@ export function TransactionDetailClient({ id }: Props) {
     );
   }
 
+  const isSplit = Boolean(splitGroupId && splitSiblings && splitSiblings.length > 1);
+  const sign = transaction.type === "income" ? "+" : transaction.type === "transfer" ? "" : "-";
+  const details: [string, string][] = [
+    ["Description", transaction.description ?? "Not set"],
+    ["Date", format(new Date(transaction.date), "d MMM yyyy")],
+    ["Account", typeof transaction.account === "string" ? transaction.account : transaction.account.name],
+    ["Recurring", transaction.isRecurring ? `${transaction.recurrenceLabel ? `${transaction.recurrenceLabel} · ` : ""}Every ${transaction.recurrenceInterval ?? 1} ${transaction.recurrenceFrequency ?? "period"}${transaction.recurrenceCount ? ` · ${transaction.recurrenceCount} installments` : ""}` : "No"],
+    ["Note", transaction.note ?? "Not set"],
+    ["Tags", transaction.tags?.length ? transaction.tags.join(", ") : "None"],
+  ];
+
   return (
-    <div className="flex flex-col gap-5">
-      <Link href="/transactions" className="inline-flex items-center gap-2 text-sm font-bold" style={{ color: "var(--violet)" }}>
+    <div className="page-stack">
+      <Link href="/transactions" className="inline-flex items-center gap-1.5 text-sm font-semibold min-h-11 self-start" style={{ color: "var(--violet)" }}>
         <ArrowLeft size={16} />
-        Back to transactions
+        Transactions
       </Link>
 
-      <Card radius="lg" elevation="floating" className="p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
-              {transaction.type}
-            </div>
-            <div className="text-[34px] font-extrabold tnum mt-1" style={amountStyle}>
-              {transaction.type === "income" ? "+" : "-"}
-              {formatCurrency(transaction.amount)}
-            </div>
-            <div className="text-sm font-medium capitalize" style={{ color: "var(--ink-2)" }}>
-              {transaction.category} {transaction.subcategory ? `/${transaction.subcategory}` : ""}
-            </div>
+      {/* Hero amount */}
+      <Card radius="lg" className="p-6 sm:p-8 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <div className="capitalize" style={{ font: "var(--text-label)", color: "var(--ink-2)" }}>
+            {transaction.type}
           </div>
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setEditing((value) => !value)}
-              className="h-auto px-4 py-2 rounded-(--r-sm) font-bold"
-            >
-              {editing ? "Cancel" : "Edit"}
-            </Button>
-            {splitGroupId && splitSiblings && splitSiblings.length > 1 && (
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={async () => {
-                  const ok = await confirm({
-                    title: "Delete entire split purchase?",
-                    description: `This removes all ${splitSiblings.length} categories from this purchase and reverses the full amount from your account. This can't be undone.`,
-                    confirmLabel: "Delete all",
-                    destructive: true,
-                  });
-                  if (ok) deleteSplitGroup.mutate();
-                }}
-                disabled={deleteSplitGroup.isPending}
-                className="h-auto px-4 py-2 rounded-(--r-sm) font-bold text-sm"
-                style={{ background: "rgba(235,87,87,.12)", color: "var(--red)" }}
-              >
-                Delete entire split
-              </Button>
-            )}
+          <div
+            className="tnum mt-1.5 break-all"
+            style={{ font: "var(--text-display)", letterSpacing: "var(--track-title)", ...amountStyle }}
+          >
+            {sign}
+            {formatCurrency(transaction.amount)}
+          </div>
+          <div className="mt-2 capitalize" style={{ font: "var(--text-body)", color: "var(--ink-2)" }}>
+            {transaction.category} {transaction.subcategory ? `/ ${transaction.subcategory}` : ""}
+          </div>
+        </div>
+        <div className="flex gap-2 flex-wrap items-center">
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => setEditing((value) => !value)}
+            className="h-11 px-5 rounded-full"
+          >
+            {editing ? "Cancel" : "Edit"}
+          </Button>
+          {isSplit && (
             <Button
               type="button"
               variant="ghost"
-              size="icon"
-              aria-label="Delete transaction"
               onClick={async () => {
                 const ok = await confirm({
-                  title: "Delete this transaction?",
-                  description: "This can't be undone. Account balances will be reversed.",
-                  confirmLabel: "Delete",
+                  title: "Delete entire split purchase?",
+                  description: `This removes all ${splitSiblings!.length} categories from this purchase and reverses the full amount from your account. This can't be undone.`,
+                  confirmLabel: "Delete all",
                   destructive: true,
                 });
-                if (ok) deleteTransaction.mutate();
+                if (ok) deleteSplitGroup.mutate();
               }}
-              disabled={deleteTransaction.isPending}
-              className="w-10 h-10 rounded-(--r-sm)"
-              style={{ background: "rgba(235,87,87,.12)", color: "var(--red)" }}
+              disabled={deleteSplitGroup.isPending}
+              className="h-11 px-4 rounded-full text-[13px]"
+              style={{ background: "color-mix(in srgb, var(--red) 12%, transparent)", color: "var(--red)" }}
             >
-              <Trash2 size={16} />
+              Delete entire split
             </Button>
-          </div>
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Delete transaction"
+            onClick={async () => {
+              const ok = await confirm({
+                title: "Delete this transaction?",
+                description: "This can't be undone. Account balances will be reversed.",
+                confirmLabel: "Delete",
+                destructive: true,
+              });
+              if (ok) deleteTransaction.mutate();
+            }}
+            disabled={deleteTransaction.isPending}
+            className="w-11 h-11 rounded-full"
+            style={{ background: "color-mix(in srgb, var(--red) 12%, transparent)", color: "var(--red)" }}
+          >
+            <Trash2 size={16} />
+          </Button>
         </div>
       </Card>
 
-      {splitGroupId && splitSiblings && splitSiblings.length > 1 && (
-        <Card radius="lg" className="p-5 flex flex-col gap-3">
-          <div className="flex items-center gap-2">
-            <SplitSquareHorizontal size={15} style={{ color: "var(--amber)" }} />
-            <span className="text-sm font-bold" style={{ color: "var(--ink)" }}>
-              Split purchase — {splitSiblings.length} categories, total {formatCurrency(splitSiblings.reduce((sum, s) => sum + s.amount, 0))}
-            </span>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            {splitSiblings.map((s) => (
-              <Link
-                key={s._id}
-                href={`/transactions/${s._id}`}
-                className="flex items-center justify-between px-3 py-2 rounded-(--r-sm) text-sm"
-                style={{
-                  background: String(s._id) === id ? "color-mix(in srgb, var(--violet) 10%, transparent)" : "var(--card-2)",
-                }}
-              >
-                <span className="font-semibold capitalize" style={{ color: "var(--ink)" }}>{s.category}</span>
-                <span className="tnum font-bold" style={{ color: "var(--ink-2)" }}>{formatCurrency(s.amount)}</span>
-              </Link>
-            ))}
-          </div>
-        </Card>
-      )}
-
+      <div className="grid-split">
+      <div className="min-w-0">
       <Card radius="lg" className="overflow-hidden">
         {editing ? (
-          <div className="p-5 flex flex-col gap-4">
+          <div className="p-5 sm:p-6 flex flex-col gap-4">
             <div className="grid md:grid-cols-2 gap-3">
               <div className="flex flex-col gap-1.5 md:col-span-2">
                 <Label htmlFor="transaction-detail-client-description-1" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Description</Label>
@@ -295,31 +284,57 @@ export function TransactionDetailClient({ id }: Props) {
               type="button"
               onClick={() => updateTransaction.mutate()}
               disabled={updateTransaction.isPending || !form.category}
-              className="h-auto py-3 rounded-(--r-sm) font-bold"
+              className="h-11 rounded-full sm:self-end sm:px-8"
             >
               <Save size={16} />
               {updateTransaction.isPending ? "Saving..." : "Save changes"}
             </Button>
           </div>
         ) : (
-          <div className="divide-y" style={{ borderColor: "var(--line)" }}>
-            {[
-              ["Description", transaction.description ?? "Not set"],
-              ["Date", format(new Date(transaction.date), "d MMM yyyy")],
-              ["Account", typeof transaction.account === "string" ? transaction.account : transaction.account.name],
-              ["Recurring", transaction.isRecurring ? `${transaction.recurrenceLabel ? `${transaction.recurrenceLabel} · ` : ""}Every ${transaction.recurrenceInterval ?? 1} ${transaction.recurrenceFrequency ?? "period"}${transaction.recurrenceCount ? ` · ${transaction.recurrenceCount} installments` : ""}` : "No"],
-              ["Note", transaction.note ?? "Not set"],
-              ["Tags", transaction.tags?.length ? transaction.tags.join(", ") : "None"],
-            ].map(([label, value]) => (
-              <div key={label} className="flex items-start justify-between gap-4 px-5 py-4">
-                <span className="text-sm font-semibold" style={{ color: "var(--ink-3)" }}>{label}</span>
-                <span className="text-sm font-bold text-right break-all" style={{ color: "var(--ink)" }}>{value}</span>
+          <div className="inset-group rounded-none shadow-none">
+            {details.map(([label, value]) => (
+              <div key={label} className="flex items-start justify-between gap-6 px-5 py-4 min-h-[52px]">
+                <span className="text-[15px] flex-none" style={{ color: "var(--ink-2)" }}>{label}</span>
+                <span className="text-[15px] font-medium text-right break-words min-w-0" style={{ color: "var(--ink)" }}>{value}</span>
               </div>
             ))}
           </div>
         )}
       </Card>
+      </div>
+
+      <aside className="rail flex flex-col gap-5">
+      {isSplit && splitSiblings && (
+        <section>
+          <div className="section-head">
+            <h2>Split purchase</h2>
+            <span className="tnum" style={{ font: "var(--text-figure-sm)", color: "var(--ink-2)" }}>
+              {formatCurrency(splitSiblings.reduce((sum, s) => sum + s.amount, 0))}
+            </span>
+          </div>
+          <div className="inset-group">
+            {splitSiblings.map((s) => (
+              <Link
+                key={s._id}
+                href={`/transactions/${s._id}`}
+                className="flex items-center justify-between gap-3 px-4 min-h-[52px] py-2.5 transition-colors active:bg-(--card-2)"
+                style={{
+                  background: String(s._id) === id ? "color-mix(in srgb, var(--violet) 8%, transparent)" : undefined,
+                }}
+              >
+                <span className="flex items-center gap-2 capitalize text-[15px] font-medium" style={{ color: "var(--ink)" }}>
+                  <SplitSquareHorizontal size={14} style={{ color: "var(--amber)" }} />
+                  {s.category}
+                </span>
+                <span className="tnum" style={{ font: "var(--text-figure-sm)", color: "var(--ink-2)" }}>{formatCurrency(s.amount)}</span>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
       <ProvenanceCard transactionId={id} />
+      </aside>
+      </div>
       {dialog}
     </div>
   );

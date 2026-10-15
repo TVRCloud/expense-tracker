@@ -5,13 +5,11 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { useTheme } from "next-themes";
-import { motion } from "motion/react";
 import {
   LayoutDashboard,
   ArrowLeftRight,
   BarChart2,
   Wallet,
-  Plus,
   Sun,
   Moon,
   LogOut,
@@ -25,7 +23,6 @@ import {
   Landmark,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Switch } from "@/components/_ui/Switch";
 import { Button } from "@/components/_ui/Button";
 import { Avatar } from "@/components/_ui/Avatar";
 
@@ -87,41 +84,37 @@ export function Sidebar() {
 
   return (
     <aside
-      className="hidden md:flex flex-col sticky top-0 h-screen glass-surface"
+      className="hidden md:flex flex-col sticky top-0 h-screen"
       style={{
         width: "var(--sidebar-w)",
-        borderRight: "1px solid var(--glass-border)",
-        padding: "26px 18px",
+        flex: "none",
+        background: "color-mix(in srgb, var(--card-2) 55%, var(--bg))",
+        backdropFilter: "var(--glass-blur)",
+        WebkitBackdropFilter: "var(--glass-blur)",
+        borderRight: "1px solid var(--line)",
+        padding: "20px 12px 16px",
       }}
     >
       {/* Brand */}
-      <div className="flex items-center gap-3 px-2 pb-7">
+      <div className="flex items-center gap-3 px-2 pb-6 xl:px-3">
         <div
-          className="w-10 h-10 rounded-[12px] grid place-items-center text-white flex-none"
-          style={{
-            background: "var(--fab)",
-            boxShadow: "var(--shadow-sm)",
-          }}
+          className="w-9 h-9 rounded-[11px] grid place-items-center flex-none"
+          style={{ background: "var(--fab)", color: "var(--fab-ink)" }}
         >
-          <Wallet size={20} />
+          <Wallet size={18} />
         </div>
-        <div>
-          <span className="font-extrabold text-[19px] tracking-tight leading-none block" style={{ color: "var(--ink)" }}>
-            Finance <span style={{ color: "var(--violet)" }}>OS</span>
-          </span>
-          <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "var(--ink-3)" }}>
-            exps
-          </span>
-        </div>
+        <span className="hidden xl:block font-semibold text-[17px] leading-none" style={{ color: "var(--ink)", letterSpacing: "-0.02em" }}>
+          Finance OS
+        </span>
       </div>
 
-      {/* Nav with section groups */}
-      <nav className="flex flex-col gap-4 flex-1 overflow-y-auto">
+      {/* Nav — labels collapse to an icon rail below xl */}
+      <nav className="flex flex-col gap-5 flex-1 overflow-y-auto overflow-x-hidden -mx-1 px-1" style={{ scrollbarWidth: "none" }}>
         {groups.map(({ label, items }) => (
           <div key={label}>
             <div
-              className="text-[11px] font-semibold uppercase px-4 mb-1"
-              style={{ color: "var(--ink-3)", letterSpacing: "0.1em" }}
+              className="hidden xl:block text-[12px] font-medium px-3 mb-1.5"
+              style={{ color: "var(--ink-3)" }}
             >
               {label}
             </div>
@@ -132,27 +125,21 @@ export function Sidebar() {
                   <Link
                     key={href}
                     href={href}
+                    title={itemLabel}
+                    aria-label={itemLabel}
                     aria-current={active ? "page" : undefined}
                     className={cn(
-                      "relative flex items-center gap-3 px-4 py-2.5 rounded-[14px] font-medium text-[14.5px] transition-all duration-200 active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-(--violet)",
-                      active ? "text-(--ink)" : "hover:text-(--ink) hover:bg-(--card-2)/50"
+                      "flex items-center justify-center xl:justify-start gap-3 h-10 px-0 xl:px-3 rounded-[11px] text-[14px] transition-colors duration-150 active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-(--violet)",
+                      active ? "font-semibold" : "font-medium hover:bg-(--card-2)"
                     )}
                     style={
                       active
-                        ? { background: "var(--card-2)", color: "var(--ink)", fontWeight: 600 }
+                        ? { background: "var(--card)", color: "var(--ink)", boxShadow: "var(--shadow-sm)" }
                         : { color: "var(--ink-2)" }
                     }
                   >
-                    {active && (
-                      <motion.span
-                        layoutId="sidebar-active-indicator"
-                        className="absolute left-0 rounded-r-full"
-                        style={{ width: 3, top: 8, bottom: 8, background: "var(--amber)" }}
-                        transition={{ type: "spring", stiffness: 380, damping: 39 }}
-                      />
-                    )}
-                    <Icon size={20} className="transition-transform duration-200 group-hover:scale-105" />
-                    <span>{itemLabel}</span>
+                    <Icon size={19} strokeWidth={active ? 2.25 : 1.9} className="flex-none" />
+                    <span className="hidden xl:inline truncate">{itemLabel}</span>
                   </Link>
                 );
               })}
@@ -161,45 +148,24 @@ export function Sidebar() {
         ))}
       </nav>
 
-      {/* Add Transaction */}
-      <Link
-        href="/transactions/add"
-        className="mt-5 flex items-center justify-center gap-2 px-4 py-3.5 rounded-[15px] font-bold text-[15px] transition-all hover:brightness-110"
-        style={{ background: "var(--fab)", color: "var(--fab-ink)" }}
-      >
-        <Plus size={19} />
-        <span>Add Transaction</span>
-      </Link>
-
       {/* Footer */}
-      <div className="mt-4 flex flex-col gap-3">
-        {/* Theme toggle */}
-        <label
-          className="flex items-center justify-between px-4 py-3 rounded-[14px] font-semibold text-sm cursor-pointer"
-          style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
+      <div className="mt-4 flex flex-col gap-1">
+        <button
+          type="button"
+          onClick={() => setTheme(isDark ? "light" : "dark")}
+          title={isDark ? "Light mode" : "Dark mode"}
+          aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+          className="flex items-center justify-center xl:justify-start gap-3 h-10 px-0 xl:px-3 rounded-[11px] text-[14px] font-medium hover:bg-(--card-2) transition-colors"
+          style={{ color: "var(--ink-2)" }}
         >
-          <span className="flex items-center gap-3">
-            {isDark ? <Sun size={18} /> : <Moon size={18} />}
-            <span>{isDark ? "Light mode" : "Dark mode"}</span>
-          </span>
-          <Switch
-            checked={isDark}
-            onCheckedChange={(checked) => setTheme(checked ? "dark" : "light")}
-            aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-          />
-        </label>
+          {isDark ? <Sun size={19} /> : <Moon size={19} />}
+          <span className="hidden xl:inline">{isDark ? "Light mode" : "Dark mode"}</span>
+        </button>
 
-        {/* Profile card */}
-        <div
-          className="flex items-center gap-3 px-3 py-3 rounded-[14px]"
-          style={{
-            background: "var(--card-2)",
-            borderTop: "1px solid var(--line)",
-          }}
-        >
-          <Avatar name={session?.user?.name ?? "User"} size={36} />
-          <div className="min-w-0 flex-1">
-            <div className="font-bold text-[13px] truncate" style={{ color: "var(--ink)" }}>
+        <div className="flex items-center gap-3 px-1.5 xl:px-2 py-2 mt-1 rounded-[13px] justify-center xl:justify-start" style={{ borderTop: "1px solid var(--line)" }}>
+          <Avatar name={session?.user?.name ?? "User"} size={34} />
+          <div className="hidden xl:block min-w-0 flex-1">
+            <div className="font-semibold text-[13px] truncate" style={{ color: "var(--ink)" }}>
               {session?.user?.name ?? "User"}
             </div>
             <div className="text-[11px] truncate" style={{ color: "var(--ink-3)" }}>
@@ -211,8 +177,8 @@ export function Sidebar() {
             variant="ghost"
             size="icon"
             onClick={() => signOut({ callbackUrl: "/login" })}
-            className="p-1.5 rounded-xl h-auto w-auto"
-            style={{ color: "var(--ink-3)", background: "var(--card)" }}
+            className="hidden xl:grid p-1.5 rounded-xl h-auto w-auto"
+            style={{ color: "var(--ink-3)" }}
             aria-label="Sign out"
           >
             <LogOut size={16} />

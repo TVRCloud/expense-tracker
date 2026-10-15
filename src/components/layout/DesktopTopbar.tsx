@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, Search } from "lucide-react";
+import { Bell, Plus, Search } from "lucide-react";
 import { ROUTE_TITLES } from "@/lib/route-titles";
 import { Button } from "@/components/_ui/Button";
 
@@ -12,46 +12,50 @@ export function DesktopTopbar() {
 
   return (
     <header
-      className="hidden md:flex items-center justify-between fixed top-0 right-0 z-30"
+      className="hidden md:flex items-center justify-between fixed top-0 right-0 z-30 chrome"
       style={{
         left: "var(--sidebar-w)",
-        height: 64,
-        padding: "0 32px",
-        background: "var(--card)",
-        backdropFilter: "var(--glass-blur)",
-        WebkitBackdropFilter: "var(--glass-blur)",
-        borderBottom: "1px solid var(--glass-border)",
-        boxShadow: "0 1px 24px rgba(28,18,68,.06), inset 0 -1px 0 rgba(255,255,255,.3)",
+        height: "var(--topbar-h)",
+        padding: "0 var(--gutter)",
       }}
     >
-      <h1
-        className="font-extrabold tracking-tight"
-        style={{ fontSize: 20, color: "var(--ink)", letterSpacing: "-0.3px" }}
+      {/* Small title: hidden while the page's large title is on screen. */}
+      <span
+        className="topbar-title font-semibold"
+        style={{ fontSize: 15, letterSpacing: "-0.01em", color: "var(--ink)" }}
       >
         {title}
-      </h1>
+      </span>
 
       <div className="flex items-center gap-2">
         <Button
           type="button"
           variant="ghost"
           onClick={() => document.dispatchEvent(new CustomEvent("open-command-palette"))}
-          className="h-9 px-3 rounded-full text-sm font-medium gap-2"
-          style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
+          className="h-9 px-3.5 rounded-full text-sm font-medium gap-2 min-w-[min(260px,28vw)] justify-start"
+          style={{ background: "var(--card-2)", color: "var(--ink-3)" }}
         >
           <Search size={15} />
-          Search
-          <kbd className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: "var(--card)", color: "var(--ink-3)" }}>
+          <span className="flex-1 text-left">Search</span>
+          <kbd className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md" style={{ background: "var(--card)", color: "var(--ink-3)" }}>
             ⌘K
           </kbd>
         </Button>
         <Link
           href="/notifications"
           aria-label="Notifications"
-          className="w-10 h-10 rounded-full grid place-items-center transition-opacity hover:opacity-75"
+          className="w-9 h-9 rounded-full grid place-items-center transition-colors hover:brightness-95"
           style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
         >
-          <Bell size={19} />
+          <Bell size={17} />
+        </Link>
+        <Link
+          href="/transactions/add"
+          className="h-9 px-4 rounded-full inline-flex items-center gap-1.5 text-sm font-semibold btn-interactive"
+          style={{ background: "var(--fab)", color: "var(--fab-ink)" }}
+        >
+          <Plus size={16} />
+          Add
         </Link>
       </div>
     </header>

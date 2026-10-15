@@ -10,12 +10,13 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { ArrowUpDown, Search, Shield, UserCheck, UserX } from "lucide-react";
+import { ArrowUpDown, Search, UserCheck, UserX } from "lucide-react";
 import { toast } from "sonner";
 import apiClient from "@/lib/api-client";
 import { RoleGuard } from "@/components/shared/RoleGuard";
 import { Skeleton } from "@/components/_ui/Skeleton";
 import { Card } from "@/components/_ui/Card";
+import { PageHeader } from "@/components/shared/PageHeader";
 import { Button } from "@/components/_ui/Button";
 import { Avatar } from "@/components/_ui/Avatar";
 import { Input } from "@/components/_ui/Input";
@@ -126,8 +127,8 @@ export function AdminUsersClient() {
             variant="ghost"
             onClick={() => updateUser.mutate({ id: String(user._id), patch: { isActive: !user.isActive } })}
             disabled={updateUser.isPending}
-            className="h-auto inline-flex items-center gap-2 rounded-(--r-sm) px-3 py-2 font-bold"
-            style={user.isActive ? { background: "rgba(79,192,126,.12)", color: "var(--green)" } : { background: "rgba(235,87,87,.12)", color: "var(--red)" }}
+            className="h-auto inline-flex items-center gap-2 rounded-full px-3.5 py-2 font-semibold"
+            style={user.isActive ? { background: "color-mix(in srgb, var(--green) 13%, transparent)", color: "var(--green)" } : { background: "color-mix(in srgb, var(--red) 13%, transparent)", color: "var(--red)" }}
           >
             {user.isActive ? <UserCheck size={15} /> : <UserX size={15} />}
             {user.isActive ? "Active" : "Inactive"}
@@ -156,19 +157,11 @@ export function AdminUsersClient() {
         </Card>
       }
     >
-      <div className="flex flex-col gap-5">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-[12px] grid place-items-center" style={{ background: "rgba(0,0,0,.10)", color: "var(--violet)" }}>
-            <Shield size={19} />
-          </div>
-          <div>
-            <h2 className="text-xl font-extrabold" style={{ color: "var(--ink)" }}>Users</h2>
-            <div className="text-sm" style={{ color: "var(--ink-3)" }}>{total} total</div>
-          </div>
-        </div>
+      <div className="page-stack">
+        <PageHeader title="Users" subtitle={`${total} total`} />
 
-        <Card radius="md" className="flex items-center gap-3 px-4 py-3">
-          <Search size={18} style={{ color: "var(--ink-3)", flexShrink: 0 }} />
+        <div className="chrome sticky z-10 flex items-center gap-3 rounded-(--r-md) px-4 min-h-12" style={{ top: "calc(var(--topbar-h) + 8px)", boxShadow: "var(--shadow-sm)" }}>
+          <Search size={18} style={{ color: "var(--ink-3)", flexShrink: 0 }} aria-hidden />
           <Input
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
@@ -180,17 +173,18 @@ export function AdminUsersClient() {
                 setSkip(0);
               }
             }}
-            placeholder="Search users..."
+            placeholder="Search by name or email"
+            aria-label="Search users"
             className="flex-1 h-auto border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
           />
           <Button
             type="button"
             onClick={() => { setSearch(searchInput.trim()); setSkip(0); }}
-            className="h-auto px-3 py-1.5 rounded-(--r-sm) font-bold"
+            className="h-auto px-4 py-1.5 rounded-full font-semibold"
           >
             Search
           </Button>
-        </Card>
+        </div>
 
         {isLoading ? (
           <div className="flex flex-col gap-3">
@@ -202,9 +196,46 @@ export function AdminUsersClient() {
             <p className="text-sm mt-1" style={{ color: "var(--ink-3)" }}>Try a different search.</p>
           </Card>
         ) : (
-          <Card radius="lg" className="overflow-hidden p-1">
+          <>
+          <div className="inset-group md:hidden" style={{ "--inset": "66px" } as React.CSSProperties}>
+            {users.map((user) => (
+              <div key={String(user._id)} className="flex flex-col gap-3 px-4 py-3.5">
+                <div className="flex items-center gap-3 min-w-0">
+                  <Avatar name={user.name ?? user.email} size={38} />
+                  <div className="min-w-0">
+                    <div className="font-semibold truncate" style={{ color: "var(--ink)" }}>{user.name}</div>
+                    <div className="text-sm truncate" style={{ color: "var(--ink-3)" }}>{user.email}</div>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between gap-3 pl-[50px]">
+                  <Select
+                    value={user.role}
+                    onValueChange={(value) => updateUser.mutate({ id: String(user._id), patch: { role: value as IUser["role"] } })}
+                  >
+                    <SelectTrigger className="w-28 pointer-coarse:min-h-11"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="user">User</SelectItem>
+                      <SelectItem value="admin">Admin</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => updateUser.mutate({ id: String(user._id), patch: { isActive: !user.isActive } })}
+                    disabled={updateUser.isPending}
+                    className="h-auto inline-flex items-center gap-2 rounded-full px-3.5 py-2 font-semibold"
+                    style={user.isActive ? { background: "color-mix(in srgb, var(--green) 13%, transparent)", color: "var(--green)" } : { background: "color-mix(in srgb, var(--red) 13%, transparent)", color: "var(--red)" }}
+                  >
+                    {user.isActive ? <UserCheck size={15} /> : <UserX size={15} />}
+                    {user.isActive ? "Active" : "Inactive"}
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <Card radius="lg" className="hidden md:block overflow-hidden p-1">
             <Table>
-              <TableHeader>
+              <TableHeader className="sticky top-0">
                 {table.getHeaderGroups().map((headerGroup) => (
                   <TableRow key={headerGroup.id}>
                     {headerGroup.headers.map((header) => (
@@ -228,6 +259,7 @@ export function AdminUsersClient() {
               </TableBody>
             </Table>
           </Card>
+          </>
         )}
 
         {pageCount > 1 && (

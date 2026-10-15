@@ -16,6 +16,7 @@ import {
 import { format, formatDistanceToNow } from "date-fns";
 import apiClient from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PageHeader } from "@/components/shared/PageHeader";
 import { toast } from "sonner";
 
 type OtpStatus = {
@@ -156,7 +157,7 @@ function RecoveryCodesPanel({ codes, onDone }: { codes: string[]; onDone?: () =>
           <button
             onClick={onDone}
             className="px-4 py-3 rounded-[var(--r-sm)] font-bold"
-            style={{ background: "var(--violet)", color: "#fff" }}
+            style={{ background: "var(--violet)", color: "var(--violet-fg)" }}
           >
             Continue
           </button>
@@ -196,13 +197,13 @@ function SetupPanel({ onDone }: { onDone: () => void }) {
   });
 
   return (
-    <section className="flex flex-col gap-5">
+    <section className="flex flex-col gap-5 max-w-3xl rounded-(--r-lg) p-6 sm:p-8" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
       <div className="flex items-center gap-3">
         <div className="w-11 h-11 rounded-full grid place-items-center" style={{ background: "var(--card-2)" }}>
           <Fingerprint size={22} style={{ color: "var(--violet)" }} />
         </div>
         <div>
-          <h2 className="font-extrabold text-xl" style={{ color: "var(--ink)" }}>Secure logs access</h2>
+          <h2 className="font-semibold text-xl tracking-tight" style={{ color: "var(--ink)" }}>Secure logs access</h2>
           <p className="text-sm" style={{ color: "var(--ink-2)" }}>Authenticator setup is required before logs can open.</p>
         </div>
       </div>
@@ -212,7 +213,7 @@ function SetupPanel({ onDone }: { onDone: () => void }) {
           onClick={() => setup.mutate()}
           disabled={setup.isPending}
           className="w-fit px-4 py-3 rounded-[var(--r-sm)] font-bold"
-          style={{ background: "var(--violet)", color: "#fff" }}
+          style={{ background: "var(--violet)", color: "var(--violet-fg)" }}
         >
           {setup.isPending ? "Creating..." : "Create authenticator setup"}
         </button>
@@ -242,13 +243,13 @@ function SetupPanel({ onDone }: { onDone: () => void }) {
               maxLength={8}
               placeholder="6-digit code"
               className="rounded-[var(--r-sm)] px-4 py-3 font-bold outline-none"
-              style={{ background: "var(--card)", color: "var(--ink)", boxShadow: "var(--shadow-sm)" }}
+              style={{ background: "var(--card-2)", color: "var(--ink)" }}
             />
             <button
               onClick={() => verify.mutate()}
               disabled={verify.isPending || code.length < 6}
               className="w-fit px-4 py-3 rounded-[var(--r-sm)] font-bold disabled:opacity-60"
-              style={{ background: "var(--violet)", color: "#fff" }}
+              style={{ background: "var(--violet)", color: "var(--violet-fg)" }}
             >
               {verify.isPending ? "Verifying..." : "Enable logs access"}
             </button>
@@ -281,13 +282,13 @@ function UnlockPanel() {
   });
 
   return (
-    <section className="flex max-w-md flex-col gap-4">
+    <section className="flex max-w-md flex-col gap-4 rounded-(--r-lg) p-6 sm:p-8" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
       <div className="flex items-center gap-3">
         <div className="w-11 h-11 rounded-full grid place-items-center" style={{ background: "var(--card-2)" }}>
           <Lock size={22} style={{ color: "var(--violet)" }} />
         </div>
         <div>
-          <h2 className="font-extrabold text-xl" style={{ color: "var(--ink)" }}>Logs locked</h2>
+          <h2 className="font-semibold text-xl tracking-tight" style={{ color: "var(--ink)" }}>Logs locked</h2>
           <p className="text-sm" style={{ color: "var(--ink-2)" }}>Enter an authenticator or recovery code.</p>
         </div>
       </div>
@@ -299,9 +300,8 @@ function UnlockPanel() {
             onClick={() => setMode(item)}
             className="px-3 py-2 rounded-[var(--r-sm)] text-sm font-bold"
             style={{
-              background: mode === item ? "var(--violet)" : "var(--card)",
-              color: mode === item ? "#fff" : "var(--ink-2)",
-              boxShadow: "var(--shadow-sm)",
+              background: mode === item ? "var(--violet)" : "var(--card-2)",
+              color: mode === item ? "var(--violet-fg)" : "var(--ink-2)",
             }}
           >
             {item === "unlock" ? "Authenticator" : "Recovery"}
@@ -314,14 +314,14 @@ function UnlockPanel() {
         onChange={(e) => setCode(e.target.value)}
         inputMode={mode === "unlock" ? "numeric" : "text"}
         placeholder={mode === "unlock" ? "6-digit code" : "Recovery code"}
-        className="rounded-[var(--r-sm)] px-4 py-3 font-bold outline-none"
-        style={{ background: "var(--card)", color: "var(--ink)", boxShadow: "var(--shadow-sm)" }}
+        className="rounded-[var(--r-sm)] px-4 min-h-11 font-bold outline-none"
+        style={{ background: "var(--card-2)", color: "var(--ink)" }}
       />
       <button
         onClick={() => verify.mutate()}
         disabled={verify.isPending || code.length < 6}
         className="w-fit px-4 py-3 rounded-[var(--r-sm)] font-bold disabled:opacity-60"
-        style={{ background: "var(--violet)", color: "#fff" }}
+        style={{ background: "var(--violet)", color: "var(--violet-fg)" }}
       >
         {verify.isPending ? "Checking..." : "Unlock logs"}
       </button>
@@ -420,9 +420,9 @@ function LogsManagementPanel({ status }: { status: OtpStatus }) {
 
   return (
     <section className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--r-sm)] px-3 py-2.5" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-(--r-md) px-4 py-3" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
         <div>
-          <div className="text-sm font-extrabold" style={{ color: "var(--ink)" }}>Authenticator management</div>
+          <div className="text-sm font-semibold" style={{ color: "var(--ink)" }}>Authenticator management</div>
           <div className="text-sm" style={{ color: "var(--ink-2)" }}>
             {status.recoveryCodesRemaining} recovery codes remaining
           </div>
@@ -458,8 +458,8 @@ function LogsManagementPanel({ status }: { status: OtpStatus }) {
       {isOpen && recoveryCodes.length > 0 && <RecoveryCodesPanel codes={recoveryCodes} />}
 
       {isOpen && mode && recoveryCodes.length === 0 && (
-        <div className="rounded-[var(--r-sm)] p-4" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
-          <div className="mb-3 font-extrabold" style={{ color: "var(--ink)" }}>
+        <div className="rounded-(--r-md) p-5" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
+          <div className="mb-3 font-semibold" style={{ color: "var(--ink)" }}>
             {mode === "rotate" ? "Rotate authenticator" : mode === "recovery" ? "Regenerate recovery codes" : "Disable authenticator"}
           </div>
 
@@ -497,7 +497,7 @@ function LogsManagementPanel({ status }: { status: OtpStatus }) {
                     disable.isPending
                   }
                   className="px-4 py-3 rounded-[var(--r-sm)] font-bold disabled:opacity-60"
-                  style={{ background: mode === "disable" ? "var(--red)" : "var(--violet)", color: "#fff" }}
+                  style={{ background: mode === "disable" ? "var(--red)" : "var(--violet)", color: mode === "disable" ? "#fff" : "var(--violet-fg)" }}
                 >
                   {mode === "rotate" ? "Start rotation" : mode === "recovery" ? "Regenerate" : "Disable"}
                 </button>
@@ -533,7 +533,7 @@ function LogsManagementPanel({ status }: { status: OtpStatus }) {
                   onClick={() => rotateConfirm.mutate()}
                   disabled={newCode.length < 6 || rotateConfirm.isPending}
                   className="w-fit px-4 py-3 rounded-[var(--r-sm)] font-bold disabled:opacity-60"
-                  style={{ background: "var(--violet)", color: "#fff" }}
+                  style={{ background: "var(--violet)", color: "var(--violet-fg)" }}
                 >
                   Confirm rotation
                 </button>
@@ -559,21 +559,18 @@ function LogBlockRow({
   const relativeTime = formatDistanceToNow(createdAt, { addSuffix: true });
 
   return (
-    <article
-      className="overflow-hidden rounded-[var(--r-sm)]"
-      style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}
-    >
+    <article className="relative">
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={isExpanded}
-        className="block w-full px-3 py-2.5 text-left transition-colors hover:bg-black/[0.02]"
+        className="block w-full px-4 py-3 min-h-12 text-left transition-colors hover:bg-(--card-2) focus-visible:bg-(--card-2) focus-visible:outline-none"
       >
-        <div className="hidden items-center gap-3 md:grid md:grid-cols-[78px_1fr_96px_130px_150px_150px_32px]">
-          <span className="rounded-[var(--r-sm)] px-2 py-1 text-center text-xs font-extrabold" style={{ background: "var(--card-2)", color: "var(--violet)" }}>
+        <div className="hidden items-center gap-3 md:grid md:grid-cols-[78px_1fr_96px_130px_minmax(120px,1fr)_minmax(120px,1fr)_32px]">
+          <span className="tnum px-2 py-1 text-xs font-mono font-bold" style={{ color: "var(--ink-2)" }}>
             #{block.sequence}
           </span>
-          <span className="min-w-0 truncate text-sm font-extrabold capitalize" style={{ color: "var(--ink)" }}>
+          <span className="min-w-0 truncate text-sm font-semibold capitalize" style={{ color: "var(--ink)" }}>
             {block.scope.replaceAll("_", " ")}
           </span>
           <span className="text-xs font-bold uppercase tracking-normal" style={{ color: "var(--ink-3)" }}>
@@ -597,10 +594,10 @@ function LogBlockRow({
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <span className="rounded-[var(--r-sm)] px-2 py-1 text-xs font-extrabold" style={{ background: "var(--card-2)", color: "var(--violet)" }}>
+                <span className="tnum py-1 text-xs font-mono font-bold" style={{ color: "var(--ink-2)" }}>
                   #{block.sequence}
                 </span>
-                <span className="min-w-0 truncate text-sm font-extrabold capitalize" style={{ color: "var(--ink)" }}>
+                <span className="min-w-0 truncate text-sm font-semibold capitalize" style={{ color: "var(--ink)" }}>
                   {block.scope.replaceAll("_", " ")}
                 </span>
               </div>
@@ -620,7 +617,7 @@ function LogBlockRow({
       </button>
 
       {isExpanded && (
-        <div className="border-t px-3 pb-3 pt-3" style={{ borderColor: "color-mix(in srgb, var(--ink) 10%, transparent)" }}>
+        <div className="px-4 pb-4 pt-3" style={{ background: "var(--card-2)" }}>
           <div className="mb-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <div className="font-bold uppercase" style={{ color: "var(--ink-3)" }}>Entity id</div>
@@ -706,13 +703,13 @@ function LedgerView({ status }: { status: OtpStatus }) {
 
   return (
     <section className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--r-sm)] px-3 py-2.5" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-(--r-md) px-4 py-3" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
         <div className="flex min-w-0 items-center gap-3">
           <div className="grid h-9 w-9 flex-none place-items-center rounded-[var(--r-sm)]" style={{ background: "var(--card-2)" }}>
             <ShieldCheck size={19} style={{ color: "var(--violet)" }} />
           </div>
           <div className="min-w-0">
-            <h2 className="truncate text-base font-extrabold" style={{ color: "var(--ink)" }}>Immutable logs</h2>
+            <h2 className="truncate text-base font-semibold" style={{ color: "var(--ink)" }}>Immutable logs</h2>
             <p className="text-xs font-semibold" style={{ color: "var(--ink-2)" }}>{total} blocks</p>
           </div>
         </div>
@@ -739,18 +736,18 @@ function LedgerView({ status }: { status: OtpStatus }) {
 
       <LogsManagementPanel status={status} />
 
-      <div className="flex flex-col gap-2 rounded-[var(--r-sm)] p-2 sm:flex-row sm:items-center" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
+      <div className="chrome sticky z-10 flex flex-col gap-2 rounded-(--r-md) p-2 sm:flex-row sm:items-center" style={{ top: "calc(var(--topbar-h) + 8px)", boxShadow: "var(--shadow-sm)" }}>
         <select
           value={scope}
           onChange={(e) => { setScope(e.target.value); setSkip(0); setExpandedBlockId(null); }}
-          className="h-10 rounded-[var(--r-sm)] px-3 text-sm font-bold outline-none sm:w-52"
+          className="h-11 rounded-[var(--r-sm)] px-3 text-sm font-semibold outline-none sm:w-52"
           style={{ background: "var(--card-2)", color: "var(--ink)" }}
         >
           {SCOPES.map((item) => (
             <option key={item.value} value={item.value}>{item.label}</option>
           ))}
         </select>
-        <div className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-[var(--r-sm)] px-3" style={{ background: "var(--card-2)" }}>
+        <div className="flex h-11 min-w-0 flex-1 items-center gap-2 rounded-[var(--r-sm)] px-3" style={{ background: "var(--card-2)" }}>
           <Search size={16} style={{ color: "var(--ink-3)" }} />
           <input
             value={entityId}
@@ -768,7 +765,7 @@ function LedgerView({ status }: { status: OtpStatus }) {
             <button
               onClick={() => { setSkip(Math.max(0, skip - limit)); setExpandedBlockId(null); }}
               disabled={!canPrev}
-              className="h-9 rounded-[var(--r-sm)] px-3 text-xs font-bold disabled:opacity-50"
+              className="h-10 rounded-[var(--r-sm)] px-3 text-xs font-semibold disabled:opacity-40 active:scale-[0.97] transition-transform"
               style={{ background: "var(--card-2)", color: "var(--ink)" }}
             >
               Previous
@@ -776,7 +773,7 @@ function LedgerView({ status }: { status: OtpStatus }) {
             <button
               onClick={() => { setSkip(skip + limit); setExpandedBlockId(null); }}
               disabled={!canNext}
-              className="h-9 rounded-[var(--r-sm)] px-3 text-xs font-bold disabled:opacity-50"
+              className="h-10 rounded-[var(--r-sm)] px-3 text-xs font-semibold disabled:opacity-40 active:scale-[0.97] transition-transform"
               style={{ background: "var(--card-2)", color: "var(--ink)" }}
             >
               Next
@@ -785,7 +782,8 @@ function LedgerView({ status }: { status: OtpStatus }) {
         </div>
       </div>
 
-      <div className="hidden rounded-[var(--r-sm)] px-3 py-2 text-[11px] font-extrabold uppercase md:grid md:grid-cols-[78px_1fr_96px_130px_150px_150px_32px] md:gap-3" style={{ background: "var(--card-2)", color: "var(--ink-3)" }}>
+      <div className="overflow-hidden rounded-(--r-md)" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
+      <div className="hidden px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide md:grid md:grid-cols-[78px_1fr_96px_130px_minmax(120px,1fr)_minmax(120px,1fr)_32px] md:gap-3" style={{ background: "var(--card-2)", color: "var(--ink-3)", borderBottom: "1px solid var(--line)" }}>
         <span>Seq</span>
         <span>Scope</span>
         <span>Action</span>
@@ -796,15 +794,15 @@ function LedgerView({ status }: { status: OtpStatus }) {
       </div>
 
       {ledger.isLoading ? (
-        <div className="flex flex-col gap-2">
-          {[0, 1, 2, 3, 4].map((item) => <Skeleton key={item} className="h-14 rounded-[var(--r-sm)]" />)}
+        <div className="flex flex-col gap-1 p-2">
+          {[0, 1, 2, 3, 4].map((item) => <Skeleton key={item} className="h-12 rounded-(--r-sm)" />)}
         </div>
       ) : blocks.length === 0 ? (
-        <div className="rounded-[var(--r-sm)] px-4 py-6 text-center text-sm font-semibold" style={{ background: "var(--card)", color: "var(--ink-2)", boxShadow: "var(--shadow-sm)" }}>
+        <div className="px-4 py-10 text-center text-sm font-medium" style={{ color: "var(--ink-3)" }}>
           No log blocks found
         </div>
       ) : (
-        <div className="flex flex-col gap-2">
+        <div>
           {blocks.map((block) => (
             <LogBlockRow
               key={block._id}
@@ -815,6 +813,7 @@ function LedgerView({ status }: { status: OtpStatus }) {
           ))}
         </div>
       )}
+      </div>
     </section>
   );
 }
@@ -824,17 +823,21 @@ export function LogsClient() {
   const status = useOtpStatus();
   const data = status.data?.data;
 
+  let body;
   if (status.isLoading) {
-    return <Skeleton className="h-48 rounded-[var(--r-md)]" />;
+    body = <Skeleton className="h-48 rounded-(--r-lg)" />;
+  } else if (!data?.isEnabled) {
+    body = <SetupPanel onDone={() => void qc.invalidateQueries({ queryKey: ["logs", "otp-status"] })} />;
+  } else if (!data.unlocked) {
+    body = <UnlockPanel />;
+  } else {
+    body = <LedgerView status={data} />;
   }
 
-  if (!data?.isEnabled) {
-    return <SetupPanel onDone={() => void qc.invalidateQueries({ queryKey: ["logs", "otp-status"] })} />;
-  }
-
-  if (!data.unlocked) {
-    return <UnlockPanel />;
-  }
-
-  return <LedgerView status={data} />;
+  return (
+    <div className="page-stack">
+      <PageHeader title="Logs" subtitle="Tamper-evident record of every change to your data" />
+      {body}
+    </div>
+  );
 }

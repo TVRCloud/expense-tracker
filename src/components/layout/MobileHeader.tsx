@@ -8,38 +8,41 @@ import { ROUTE_TITLES } from "@/lib/route-titles";
 import { Button } from "@/components/_ui/Button";
 import { Avatar } from "@/components/_ui/Avatar";
 
+/**
+ * Mobile top chrome: translucent 52px bar, safe-area aware. Home shows
+ * avatar + greeting; other pages show a back chip and a small centred title
+ * that fades in only once the page's large title (PageHeader) scrolls away.
+ */
 export function MobileHeader() {
   const pathname = usePathname();
   const router = useRouter();
   const { data: session } = useSession();
 
-  const title = ROUTE_TITLES[pathname] ?? "Finance OS";
+  // Nested routes (e.g. /settings/profile) fall back to their section title.
+  const section = "/" + pathname.split("/").filter(Boolean)[0];
+  const title = ROUTE_TITLES[pathname] ?? ROUTE_TITLES[section] ?? "Finance OS";
   const isHome = pathname === "/dashboard";
   const userName = session?.user?.name ?? "";
   const greeting = getGreeting();
 
   return (
     <header
-      className="md:hidden sticky top-0 z-30 transition-all duration-200"
+      className="chrome md:hidden sticky top-0 z-30"
       style={{
-        background: "var(--card)",
-        backdropFilter: "blur(24px) saturate(180%)",
-        WebkitBackdropFilter: "blur(24px) saturate(180%)",
-        borderBottom: "1px solid var(--glass-border)",
-        padding: "12px 18px",
+        borderBottom: "1px solid var(--line)",
+        paddingTop: "env(safe-area-inset-top, 0px)",
       }}
     >
-      <div className="flex items-center justify-between">
-        {/* Left: avatar on home, back button elsewhere */}
+      <div className="flex h-13 items-center justify-between gap-2 px-3.5">
         {isHome ? (
           <Button
             type="button"
             variant="ghost"
             onClick={() => router.push("/settings")}
             aria-label="Open settings"
-            className="w-10 h-10 rounded-full p-0 shrink-0 active:scale-95"
+            className="size-10 shrink-0 rounded-full p-0"
           >
-            <Avatar name={userName || "User"} size={40} />
+            <Avatar name={userName || "User"} size={36} />
           </Button>
         ) : (
           <Button
@@ -49,40 +52,44 @@ export function MobileHeader() {
             // A PWA opened on a deep link has nothing to go back to.
             onClick={() => (window.history.length > 1 ? router.back() : router.push("/dashboard"))}
             aria-label="Go back"
-            className="w-11 h-11 rounded-full active:scale-95"
+            className="size-10 shrink-0 rounded-full"
             style={{ background: "var(--card-2)", color: "var(--ink)" }}
           >
             <ChevronLeft size={20} />
           </Button>
         )}
 
-        {/* Center: greeting on home, page title elsewhere */}
         {isHome ? (
-          <div className="text-left flex-1 px-3">
-            <div className="text-[11px] font-medium tracking-tight" style={{ color: "var(--ink-2)" }}>
+          <div className="min-w-0 flex-1 px-1 text-left">
+            <div className="text-[11px] font-medium" style={{ color: "var(--ink-2)" }}>
               {greeting}
             </div>
-            <div className="font-extrabold text-[16.5px] leading-tight truncate" style={{ color: "var(--ink)" }}>
+            <div
+              className="truncate text-[16px] font-semibold leading-tight tracking-[-0.015em]"
+              style={{ color: "var(--ink)" }}
+            >
               {userName || "there"}
             </div>
           </div>
         ) : (
-          <span className="font-extrabold text-[18px] tracking-tight truncate flex-1 text-center px-2" style={{ color: "var(--ink)" }}>
+          <span
+            className="topbar-title min-w-0 flex-1 truncate px-2 text-center text-[16px] font-semibold tracking-[-0.015em]"
+            style={{ color: "var(--ink)" }}
+          >
             {title}
           </span>
         )}
 
-        {/* Right: notifications bell */}
         <Button
           type="button"
           variant="ghost"
           size="icon"
           onClick={() => router.push("/notifications")}
           aria-label="Notifications"
-          className="w-10 h-10 rounded-full shrink-0 active:scale-95"
+          className="size-10 shrink-0 rounded-full"
           style={{ background: "var(--card-2)", color: "var(--ink-2)" }}
         >
-          <Bell size={19} />
+          <Bell size={18} />
         </Button>
       </div>
     </header>

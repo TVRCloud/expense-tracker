@@ -39,6 +39,9 @@ function fieldLabel(text: string) {
   );
 }
 
+const PANEL = "rounded-(--r-md) p-4 flex flex-col gap-3";
+const PANEL_STYLE = { background: "var(--card)", boxShadow: "var(--shadow-sm)" } as const;
+
 function formatDate(value?: string | null) {
   return value ? format(new Date(value), "d MMM yyyy") : null;
 }
@@ -68,7 +71,7 @@ function NewKeyPanel({ created, onDone }: { created: CreatedApiKey; onDone: () =
   };
 
   return (
-    <div className="rounded-(--r-md) p-4 flex flex-col gap-3" style={{ background: "var(--card-2)" }}>
+    <div className={PANEL} style={PANEL_STYLE}>
       <div className="flex items-start gap-2">
         <TriangleAlert size={16} className="flex-none mt-0.5" style={{ color: "var(--amber)" }} />
         <p className="text-sm leading-relaxed" style={{ color: "var(--ink-2)" }}>
@@ -78,19 +81,19 @@ function NewKeyPanel({ created, onDone }: { created: CreatedApiKey; onDone: () =
       </div>
       <code
         className="block break-all rounded-(--r-sm) px-3 py-2 font-mono text-xs select-all"
-        style={{ background: "var(--card)", color: "var(--ink)" }}
+        style={{ background: "var(--card-2)", color: "var(--ink)" }}
       >
         {created.key}
       </code>
       <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="secondary" onClick={() => void copy()} className="h-auto px-3.5 py-2 rounded-(--r-sm) font-bold text-sm">
+        <Button type="button" variant="secondary" onClick={() => void copy()} className="h-10 px-4 text-sm">
           <Clipboard size={15} />
           Copy key
         </Button>
-        <Button type="button" variant="secondary" onClick={() => setShowQr((v) => !v)} className="h-auto px-3.5 py-2 rounded-(--r-sm) font-bold text-sm">
+        <Button type="button" variant="secondary" onClick={() => setShowQr((v) => !v)} className="h-10 px-4 text-sm">
           {showQr ? "Hide QR code" : "Show QR for phone app"}
         </Button>
-        <Button type="button" onClick={onDone} className="h-auto px-3.5 py-2 rounded-(--r-sm) font-bold text-sm">
+        <Button type="button" onClick={onDone} className="h-10 px-4 text-sm">
           I&apos;ve saved it
         </Button>
       </div>
@@ -130,8 +133,8 @@ function CreateKeyForm({ onCreated, onCancel }: { onCreated: (k: CreatedApiKey) 
 
   return (
     <form
-      className="rounded-(--r-md) p-4 flex flex-col gap-3"
-      style={{ background: "var(--card-2)" }}
+      className={PANEL}
+      style={PANEL_STYLE}
       onSubmit={(e) => {
         e.preventDefault();
         submit();
@@ -170,11 +173,11 @@ function CreateKeyForm({ onCreated, onCancel }: { onCreated: (k: CreatedApiKey) 
         <Button
           type="submit"
           disabled={createKey.isPending || !form.label.trim() || !form.currentPassword}
-          className="h-auto px-3.5 py-2 rounded-(--r-sm) font-bold text-sm"
+          className="h-10 px-4 text-sm"
         >
           {createKey.isPending ? "Creating..." : "Create key"}
         </Button>
-        <Button type="button" variant="secondary" onClick={onCancel} className="h-auto px-3.5 py-2 rounded-(--r-sm) font-bold text-sm">
+        <Button type="button" variant="secondary" onClick={onCancel} className="h-10 px-4 text-sm">
           Cancel
         </Button>
       </div>
@@ -200,13 +203,13 @@ function KeyRow({ apiKey, onRevoke, revoking }: { apiKey: ApiKeyRecord; onRevoke
   ];
 
   return (
-    <div className="rounded-(--r-md) p-4 flex items-start gap-3" style={{ background: "var(--card-2)" }}>
+    <div className="flex items-start gap-3 px-4 py-3.5">
       <KeyRound size={16} className="flex-none mt-0.5" style={{ color: status === "active" ? "var(--violet)" : "var(--ink-3)" }} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-bold truncate" style={{ color: "var(--ink)" }}>{apiKey.label}</span>
+          <span className="text-[15px] font-semibold truncate" style={{ color: "var(--ink)" }}>{apiKey.label}</span>
           <span className="font-mono text-xs" style={{ color: "var(--ink-3)" }}>…{apiKey.lastFour}</span>
-          <span className="text-[10.5px] font-bold uppercase tracking-wider" style={{ color: style.color }}>{style.label}</span>
+          <span className="text-[11px] font-semibold" style={{ color: style.color }}>{style.label}</span>
         </div>
         <div className="text-xs mt-1 flex flex-col gap-0.5" style={{ color: "var(--ink-3)" }}>
           {details.map((d) => <span key={d}>{d}</span>)}
@@ -218,7 +221,7 @@ function KeyRow({ apiKey, onRevoke, revoking }: { apiKey: ApiKeyRecord; onRevoke
           variant="secondary"
           onClick={onRevoke}
           disabled={revoking}
-          className="h-auto px-3 py-1.5 rounded-(--r-sm) font-bold text-xs flex-none"
+          className="h-9 px-3.5 text-[13px] flex-none"
           style={{ color: "var(--red)" }}
         >
           Revoke
@@ -252,8 +255,8 @@ export function ApiKeysFields() {
   };
 
   return (
-    <>
-      <p className="text-sm leading-relaxed" style={{ color: "var(--ink-3)" }}>
+    <div className="flex flex-col gap-5">
+      <p className="px-1 text-sm leading-relaxed" style={{ color: "var(--ink-2)" }}>
         API keys let apps like the mobile companion or n8n add and read your data. Each key acts as you, so create a
         separate one for each app and revoke any you no longer use.
       </p>
@@ -275,7 +278,7 @@ export function ApiKeysFields() {
             setCreated(null);
             setCreating(true);
           }}
-          className="h-auto py-3 rounded-(--r-sm) font-bold"
+          className="h-11 w-full font-semibold"
         >
           <Plus size={16} />
           Create API key
@@ -283,11 +286,13 @@ export function ApiKeysFields() {
       )}
 
       {active.length === 0 ? (
-        <p className="text-sm" style={{ color: "var(--ink-3)" }}>No active keys.</p>
+        <p className="px-1 text-sm" style={{ color: "var(--ink-3)" }}>No active keys.</p>
       ) : (
-        active.map((k) => (
-          <KeyRow key={k._id} apiKey={k} onRevoke={() => void handleRevoke(k)} revoking={revokeKey.isPending} />
-        ))
+        <div className="inset-group" style={{ "--inset": "44px" } as React.CSSProperties}>
+          {active.map((k) => (
+            <KeyRow key={k._id} apiKey={k} onRevoke={() => void handleRevoke(k)} revoking={revokeKey.isPending} />
+          ))}
+        </div>
       )}
 
       {history.length > 0 && (
@@ -295,15 +300,19 @@ export function ApiKeysFields() {
           <button
             type="button"
             onClick={() => setShowHistory((v) => !v)}
-            className="text-sm font-bold text-left"
-            style={{ color: "var(--violet)" }}
+            className="px-1 text-sm font-semibold text-left outline-none focus-visible:underline"
+            style={{ color: "var(--ink-2)" }}
           >
             {showHistory ? "Hide" : "Show"} revoked and expired keys ({history.length})
           </button>
-          {showHistory && history.map((k) => <KeyRow key={k._id} apiKey={k} />)}
+          {showHistory && (
+            <div className="inset-group" style={{ "--inset": "44px" } as React.CSSProperties}>
+              {history.map((k) => <KeyRow key={k._id} apiKey={k} />)}
+            </div>
+          )}
         </>
       )}
       {dialog}
-    </>
+    </div>
   );
 }

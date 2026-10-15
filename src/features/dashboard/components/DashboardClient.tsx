@@ -11,11 +11,12 @@ import { TransactionRow } from "@/features/transactions/components/TransactionRo
 import { useCurrency } from "@/hooks/useCurrency";
 import { StaggerContainer, StaggerItem } from "@/components/shared/StaggerContainer";
 import { Card } from "@/components/_ui/Card";
-import { Progress } from "@/components/_ui/Progress";
 import { Skeleton } from "@/components/_ui/Skeleton";
 import { Button } from "@/components/_ui/Button";
-import { Receipt, Wallet } from "lucide-react";
-import type { ReactNode } from "react";
+import { Receipt, Wallet, Plus, TrendingUp, TrendingDown, PiggyBank } from "lucide-react";
+import { PageHeader } from "@/components/shared/PageHeader";
+import { StatCard } from "./StatCard";
+import type { CSSProperties, ReactNode } from "react";
 
 export function DashboardClient() {
   const { formatCurrency } = useCurrency();
@@ -30,45 +31,87 @@ export function DashboardClient() {
   const barScale = stats ? Math.max(stats.income, stats.expense) : 0;
   const primaryAccount = accounts?.[0] as (IAccount & { creditMeta?: { lastFourDigits?: string } }) | undefined;
 
+  const net = stats?.net ?? 0;
+  const monthName = new Date().toLocaleString("en-US", { month: "long" });
+  const statsPending = statsLoading && !stats;
+
   return (
-    <div>
-      {/* Balance card — shown immediately, numbers fill in as queries resolve */}
-      <div className="mb-5">
-        <BalanceCard
-          accountBalance={accountBalance}
-          income={stats?.income ?? 0}
-          expense={stats?.expense ?? 0}
-          isLoading={statsLoading || acctLoading}
-          cardLastFour={primaryAccount?.creditMeta?.lastFourDigits}
+    <div className="page-stack">
+      <PageHeader
+        title="Home"
+        subtitle={`${monthName} overview`}
+        actions={
+          <Button asChild className="btn-interactive hidden md:inline-flex h-10 rounded-full px-5 text-[13px]">
+            <Link href="/transactions/add">
+              <Plus size={16} />
+              Add transaction
+            </Link>
+          </Button>
+        }
+      />
+
+      {/* Hero — shown immediately, numbers fill in as queries resolve */}
+      <BalanceCard
+        accountBalance={accountBalance}
+        income={stats?.income ?? 0}
+        expense={stats?.expense ?? 0}
+        isLoading={statsLoading || acctLoading}
+        cardLastFour={primaryAccount?.creditMeta?.lastFourDigits}
+      />
+
+      {/* Stat strip — bars share one scale so lengths compare */}
+      <div className="grid-cards" style={{ "--card-min": "220px" } as CSSProperties}>
+        <StatCard
+          icon={<TrendingUp size={14} />}
+          label="Income"
+          value={formatCurrency(stats?.income ?? 0)}
+          color="var(--green)"
+          progress={barScale ? ((stats?.income ?? 0) / barScale) * 100 : 0}
+          caption={`${monthName} so far`}
+          loading={statsPending}
+        />
+        <StatCard
+          icon={<TrendingDown size={14} />}
+          label="Spending"
+          value={formatCurrency(stats?.expense ?? 0)}
+          color="var(--red)"
+          progress={barScale ? ((stats?.expense ?? 0) / barScale) * 100 : 0}
+          caption={`${monthName} so far`}
+          loading={statsPending}
+        />
+        <StatCard
+          icon={<PiggyBank size={14} />}
+          label={net >= 0 ? "Net saved" : "Overspent"}
+          value={`${net >= 0 ? "+" : "−"}${formatCurrency(Math.abs(net))}`}
+          color={net >= 0 ? "var(--green)" : "var(--red)"}
+          caption={net >= 0 ? "Income minus spending" : "Spending is ahead of income"}
+          loading={statsPending}
         />
       </div>
 
-      {/* Accounts — every account, not just one, so a wallet with several
-          banks/cards is fully visible at a glance instead of guessing. */}
-      <div className="mb-5">
-        <div className="flex items-center justify-between mb-3 mx-0.5">
-          <h2 className="tracking-tight" style={{ font: "var(--text-h2)", color: "var(--ink)" }}>
-            Accounts{accounts?.length ? ` · ${accounts.length}` : ""}
-          </h2>
+      {/* Accounts — swipe row on phones, responsive grid from sm up */}
+      <section>
+        <div className="section-head">
+          <h2>Accounts{accounts?.length ? ` · ${accounts.length}` : ""}</h2>
           <Link href="/accounts" className="font-semibold text-sm" style={{ color: "var(--violet)" }}>
             See all
           </Link>
         </div>
 
         {acctLoading ? (
-          <div className="flex gap-3 overflow-hidden">
-            {[0, 1].map((i) => (
-              <Skeleton key={i} className="rounded-(--r-lg) flex-none w-62.5" style={{ height: 164 }} />
+          <div className="flex gap-3 overflow-hidden sm:grid sm:[grid-template-columns:repeat(auto-fill,minmax(min(100%,250px),1fr))]">
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} className="rounded-(--r-lg) flex-none w-62.5 sm:w-auto" style={{ height: 148 }} />
             ))}
           </div>
         ) : accounts?.length ? (
           <StaggerContainer
-            className="flex gap-3 overflow-x-auto pb-1 -mx-0.5 px-0.5"
+            className="flex gap-3 overflow-x-auto pb-1 -mx-(--gutter) px-(--gutter) sm:mx-0 sm:px-0 sm:pb-0 sm:overflow-visible sm:grid sm:gap-4 sm:[grid-template-columns:repeat(auto-fill,minmax(min(100%,250px),1fr))]"
             style={{ scrollSnapType: "x mandatory", scrollbarWidth: "none" }}
           >
             {accounts.map((account) => (
-              <StaggerItem key={account._id} className="flex-none w-62.5">
-                <WalletCard account={account} style={{ scrollSnapAlign: "start" }} />
+              <StaggerItem key={account._id} className="flex-none w-62.5 sm:w-auto" style={{ scrollSnapAlign: "start" }}>
+                <WalletCard account={account} />
               </StaggerItem>
             ))}
           </StaggerContainer>
@@ -81,37 +124,36 @@ export function DashboardClient() {
             action="Add an account"
           />
         )}
-      </div>
+      </section>
 
-      {/* Desktop two-column layout */}
-      <div className="md:grid md:gap-5" style={{ gridTemplateColumns: "1fr 320px" }}>
-        {/* Transactions column */}
-        <div>
-          {/* Upcoming installments — mobile only (desktop has right column) */}
-          <div className="md:hidden mb-5">
-            <UpcomingPaymentsWidget />
-          </div>
-
-          <div className="flex items-center justify-between mb-3 mx-0.5">
-            <h2 className="tracking-tight" style={{ font: "var(--text-h2)", color: "var(--ink)" }}>
-              Recent transactions
-            </h2>
+      {/* Recent transactions + side rail */}
+      <div className="grid-split">
+        <section className="min-w-0">
+          <div className="section-head">
+            <h2>Recent transactions</h2>
             <Link href="/transactions" className="font-semibold text-sm" style={{ color: "var(--violet)" }}>
               See all
             </Link>
           </div>
 
           {txnLoading ? (
-            <div className="flex flex-col gap-3">
+            <div className="inset-group" style={{ "--inset": "72px" } as CSSProperties}>
               {[0, 1, 2, 3, 4].map((i) => (
-                <Skeleton key={i} className="rounded-(--r-lg)" style={{ height: 70 }} />
+                <div key={i} className="flex items-center gap-3.5 px-4 min-h-[60px]">
+                  <Skeleton className="w-11 h-11 rounded-full flex-none" />
+                  <div className="flex-1 flex flex-col gap-1.5">
+                    <Skeleton className="h-3.5 w-1/3 rounded-full" />
+                    <Skeleton className="h-3 w-1/5 rounded-full" />
+                  </div>
+                  <Skeleton className="h-4 w-16 rounded-full" />
+                </div>
               ))}
             </div>
           ) : transactions?.length ? (
-            <StaggerContainer className="flex flex-col gap-3">
+            <StaggerContainer className="inset-group" style={{ "--inset": "72px" } as CSSProperties}>
               {transactions.map((t) => (
                 <StaggerItem key={t._id}>
-                  <TransactionRow transaction={t} />
+                  <TransactionRow transaction={t} grouped />
                 </StaggerItem>
               ))}
             </StaggerContainer>
@@ -124,63 +166,12 @@ export function DashboardClient() {
               action="Add a transaction"
             />
           )}
+        </section>
 
-          {creditCardAccounts.length > 0 && (
-            <div className="md:hidden mt-5">
-              <CreditCardSummaryWidget />
-            </div>
-          )}
-        </div>
-
-        {/* Desktop right column */}
-        <div className="hidden md:flex flex-col gap-5">
-          {creditCardAccounts.length > 0 && <CreditCardSummaryWidget />}
+        <aside className="rail flex flex-col gap-5">
           <UpcomingPaymentsWidget />
-
-          {stats && (
-            <Card radius="lg" className="p-6" style={{ border: "1px solid var(--line)" }}>
-              <div className="mb-5" style={{ font: "var(--text-h2)", color: "var(--ink)" }}>
-                {new Date().toLocaleString("en-US", { month: "long" })} breakdown
-              </div>
-              <div className="flex flex-col gap-4">
-                {/* Both bars on one scale, so their lengths compare. */}
-                <div>
-                  <div className="flex justify-between mb-2" style={{ font: "var(--text-label)" }}>
-                    <span style={{ color: "var(--ink-2)" }}>Income</span>
-                    <span className="tnum" style={{ font: "var(--text-figure-sm)", color: "var(--ink)" }}>
-                      {formatCurrency(stats.income)}
-                    </span>
-                  </div>
-                  <Progress value={barScale ? (stats.income / barScale) * 100 : 0} color="var(--green)" height={3} />
-                </div>
-                <div>
-                  <div className="flex justify-between mb-2" style={{ font: "var(--text-label)" }}>
-                    <span style={{ color: "var(--ink-2)" }}>Spending</span>
-                    <span className="tnum" style={{ font: "var(--text-figure-sm)", color: "var(--ink)" }}>
-                      {formatCurrency(stats.expense)}
-                    </span>
-                  </div>
-                  <Progress value={barScale ? (stats.expense / barScale) * 100 : 0} color="var(--red)" height={3} />
-                </div>
-                <div
-                  className="flex items-center justify-between pt-4"
-                  style={{ borderTop: "1px solid var(--line)" }}
-                >
-                  <span style={{ font: "var(--text-label)", color: "var(--ink-2)" }}>
-                    {stats.net >= 0 ? "Net saved" : "Overspent"}
-                  </span>
-                  <span
-                    className="tnum"
-                    style={{ font: "var(--text-stat)", fontSize: 18, color: stats.net >= 0 ? "var(--green)" : "var(--red)" }}
-                  >
-                    {stats.net >= 0 ? "+" : "−"}
-                    {formatCurrency(Math.abs(stats.net))}
-                  </span>
-                </div>
-              </div>
-            </Card>
-          )}
-        </div>
+          {creditCardAccounts.length > 0 && <CreditCardSummaryWidget />}
+        </aside>
       </div>
     </div>
   );

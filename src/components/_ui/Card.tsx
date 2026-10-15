@@ -56,7 +56,8 @@ export function Card<T extends ElementType = "div">({
         SURFACE[surface],
         RADIUS[radius],
         ELEVATION[elevation],
-        interactive && "card-interactive",
+        interactive &&
+          "card-interactive cursor-pointer outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--violet)",
         className
       )}
       {...props}

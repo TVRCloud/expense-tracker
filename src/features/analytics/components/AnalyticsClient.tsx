@@ -14,6 +14,7 @@ import { getCategoryColor } from "@/lib/category-colors";
 import { Skeleton } from "@/components/_ui/Skeleton";
 import { Card } from "@/components/_ui/Card";
 import { Button } from "@/components/_ui/Button";
+import { PageHeader } from "@/components/shared/PageHeader";
 import { Progress } from "@/components/_ui/Progress";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -69,197 +70,167 @@ export function AnalyticsClient() {
     ? recentExpenses.reduce((sum, v) => sum + v, 0) / recentExpenses.length
     : null;
 
+  const monthLabel = activeMonth ? format(new Date(activeMonth.year, activeMonth.month - 1, 1), "MMMM yyyy") : "—";
+  const net = activeStats ? activeStats.income - activeStats.expense : 0;
+  const savingsRate = activeStats && activeStats.income > 0 ? Math.round((net / activeStats.income) * 100) : null;
+  const sectionLabel = { font: "var(--text-label)", color: "var(--ink-3)" } as const;
+
+  const monthStepper = (
+    <div className="flex items-center rounded-full p-0.5" style={{ background: "var(--card)", boxShadow: "var(--shadow-sm)" }}>
+      <Button type="button" variant="ghost" size="icon" className="rounded-full" aria-label="Previous month" disabled={activeIdx === 0} onClick={() => setActiveIdx((i) => Math.max(0, i - 1))}>
+        <ChevronLeft size={18} style={{ color: "var(--ink-2)" }} />
+      </Button>
+      <span className="px-2 min-w-32 text-center tnum" aria-live="polite" style={{ font: "var(--text-body)", fontWeight: 600, color: "var(--ink)" }}>
+        {monthLabel}
+      </span>
+      <Button type="button" variant="ghost" size="icon" className="rounded-full" aria-label="Next month" disabled={activeIdx === months.length - 1} onClick={() => setActiveIdx((i) => Math.min(months.length - 1, i + 1))}>
+        <ChevronRight size={18} style={{ color: "var(--ink-2)" }} />
+      </Button>
+    </div>
+  );
+
+  const legend = (color: string, text: string) => (
+    <span className="flex items-center gap-1.5" style={{ font: "var(--text-label)", color: "var(--ink-2)" }}>
+      <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: color }} />
+      {text}
+    </span>
+  );
+
   return (
-    <div className="flex flex-col gap-5">
-      {/* Chart card */}
-      <Card radius="lg" className="p-5">
-        <div className="flex items-center justify-between mb-5">
-          <div>
-            <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
-              6-Month Overview
-            </div>
-            <div className="text-lg font-extrabold mt-0.5" style={{ color: "var(--ink)" }}>
-              Income vs Expenses
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-full inline-block" style={{ background: "var(--violet)" }} />
-              <span className="text-xs font-semibold" style={{ color: "var(--ink-2)" }}>Income</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-full inline-block" style={{ background: "var(--green)" }} />
-              <span className="text-xs font-semibold" style={{ color: "var(--ink-2)" }}>Expense</span>
-            </div>
-          </div>
-        </div>
+    <div className="page-stack">
+      <PageHeader title="Analytics" subtitle="Last six months of income, spending and net worth" actions={monthStepper} />
 
-        {isLoading ? (
-          <Skeleton className="h-55 w-full rounded-(--r-md)" />
+      {/* KPI strip */}
+      <div className="grid-cards" style={{ "--card-min": "200px" } as React.CSSProperties}>
+        {isLoading || !activeStats ? (
+          [0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-32 rounded-(--r-lg)" />)
         ) : (
-          <AnalyticsBarChart data={data ?? []} />
+          <>
+            <IOCard type="income" amount={activeStats.income} />
+            <IOCard type="expense" amount={activeStats.expense} hint={projectedSpend !== null ? `Projected ${formatCurrency(projectedSpend)} by month end` : undefined} />
+            <IOCard type="net" amount={net} label="Net" hint={savingsRate !== null ? `${savingsRate}% of income ${net >= 0 ? "saved" : "overspent"}` : undefined} />
+            <Card radius="lg" className="p-5 flex flex-col gap-3 min-w-0">
+              <span style={{ font: "var(--text-label)", color: "var(--ink-2)" }}>Net worth</span>
+              <div className="tnum truncate" style={{ font: "var(--text-stat)", color: "var(--ink)" }}>{formatCurrency(currentTotalBalance)}</div>
+              <div style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>Across all accounts</div>
+            </Card>
+          </>
         )}
-      </Card>
-
-      {/* Net worth trend */}
-      <Card radius="lg" className="p-5">
-        <div className="mb-4">
-          <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
-            Net Worth
-          </div>
-          <div className="text-lg font-extrabold mt-0.5 tnum" style={{ color: "var(--ink)" }}>
-            {formatCurrency(currentTotalBalance)}
-          </div>
-        </div>
-        {isLoading ? (
-          <Skeleton className="h-48 w-full rounded-(--r-md)" />
-        ) : (
-          <NetWorthTrendChart data={data ?? []} currentTotalBalance={currentTotalBalance} />
-        )}
-      </Card>
-
-      {/* Month navigator */}
-      <div className="flex items-center justify-between px-1">
-        <Button type="button" variant="ghost" size="icon" aria-label="Previous month" onClick={() => setActiveIdx((i) => Math.max(0, i - 1))}>
-          <ChevronLeft size={20} style={{ color: "var(--ink-3)" }} />
-        </Button>
-        <span className="text-sm font-bold" style={{ color: "var(--ink)" }}>
-          {activeMonth
-            ? format(new Date(activeMonth.year, activeMonth.month - 1, 1), "MMMM yyyy")
-            : "—"}
-        </span>
-        <Button type="button" variant="ghost" size="icon" aria-label="Next month" onClick={() => setActiveIdx((i) => Math.min(months.length - 1, i + 1))}>
-          <ChevronRight size={20} style={{ color: "var(--ink-3)" }} />
-        </Button>
       </div>
 
-      {/* IO summary cards */}
-      {isLoading || !activeStats ? (
-        <div className="grid grid-cols-2 gap-4">
-          <Skeleton className="h-28 rounded-(--r-md)" />
-          <Skeleton className="h-28 rounded-(--r-md)" />
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 gap-4">
-          <IOCard type="income" amount={activeStats.income} />
-          <IOCard type="expense" amount={activeStats.expense} />
-        </div>
-      )}
-
-      {projectedSpend !== null && (
-        <div className="flex items-center gap-2 px-1 -mt-2">
-          <TrendingUp size={14} style={{ color: "var(--amber)" }} />
-          <span className="text-xs font-semibold" style={{ color: "var(--ink-2)" }}>
-            Projected by month end: <span className="tnum font-bold" style={{ color: "var(--ink)" }}>{formatCurrency(projectedSpend)}</span>
-          </span>
-        </div>
-      )}
-
-      {/* Tab toggle + breakdown */}
-      <Card radius="lg" className="p-5">
-        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
-          <TabsList className="w-full grid grid-cols-2 rounded-(--r-sm) p-1 mb-5" style={{ background: "var(--card-2)" }}>
-            <TabsTrigger value="income" className="rounded-[calc(var(--r-sm)-4px)] text-[13px] font-bold">Income</TabsTrigger>
-            <TabsTrigger value="expense" className="rounded-[calc(var(--r-sm)-4px)] text-[13px] font-bold">Expenses</TabsTrigger>
-          </TabsList>
-        </Tabs>
-
-        {/* Expenses tab — category breakdown */}
-        {tab === "expense" && activeStats && activeStats.byCategory.length > 0 && (
-          <div className="flex flex-col gap-5">
-            <CategoryRingGrid byCategory={activeStats.byCategory} total={activeStats.expense} />
-            <div className="flex flex-col gap-3">
-              {activeStats.byCategory.map(({ category, total }) => {
-                const pct = activeStats.expense > 0 ? (total / activeStats.expense) * 100 : 0;
-                return (
-                  <div key={category} className="flex flex-col gap-1.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-semibold capitalize" style={{ color: "var(--ink)" }}>
-                        {category}
-                      </span>
-                      <span className="text-sm font-bold tnum" style={{ color: "var(--ink-2)" }}>
-                        {formatCurrency(total)}
-                        <span className="text-[11px] ml-1.5" style={{ color: "var(--ink-3)" }}>
-                          {Math.round(pct)}%
-                        </span>
-                      </span>
-                    </div>
-                    <Progress value={pct} height={8} trackColor="var(--line)" color={getCategoryColor(category)} />
-                  </div>
-                );
-              })}
+      <div className="grid-split">
+        <div className="page-stack">
+          {/* Trend */}
+          <Card radius="lg" className="p-5 sm:p-6">
+            <div className="section-head">
+              <h2>Income vs expenses</h2>
+              <div className="flex items-center gap-4">
+                {legend("var(--green)", "Income")}
+                {legend("var(--violet)", "Expense")}
+              </div>
             </div>
-          </div>
-        )}
+            {isLoading ? <Skeleton className="h-64 lg:h-80 w-full rounded-(--r-md)" /> : <AnalyticsBarChart data={data ?? []} />}
+          </Card>
 
-        {tab === "expense" && activeStats && activeStats.byCategory.length === 0 && (
-          <div className="text-center py-6 text-sm font-semibold" style={{ color: "var(--ink-3)" }}>
-            No expense categories this month.
-          </div>
-        )}
+          {/* Breakdown */}
+          <Card radius="lg" className="p-5 sm:p-6">
+            <div className="section-head">
+              <h2>{tab === "expense" ? "Where it went" : "Income by month"}</h2>
+              <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+                <TabsList className="rounded-full p-0.5" style={{ background: "var(--card-2)" }}>
+                  <TabsTrigger value="expense" className="rounded-full px-3.5 text-[13px] font-semibold">Expenses</TabsTrigger>
+                  <TabsTrigger value="income" className="rounded-full px-3.5 text-[13px] font-semibold">Income</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </div>
 
-        {/* Income tab — monthly income progression */}
-        {tab === "income" && (
-          <div className="flex flex-col gap-3">
-            {isLoading
-              ? [0, 1, 2].map((i) => <Skeleton key={i} className="h-10 rounded-(--r-sm)" />)
-              : (data ?? []).slice().reverse().map((h) => {
-                  const maxIncome = Math.max(...(data ?? []).map((d) => d.stats?.income ?? 0), 1);
-                  const pct = ((h.stats?.income ?? 0) / maxIncome) * 100;
-                  return (
-                    <div key={`${h.year}-${h.month}`} className="flex flex-col gap-1.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-semibold" style={{ color: "var(--ink)" }}>
-                          {format(new Date(h.year, h.month - 1, 1), "MMM yyyy")}
-                        </span>
-                        <span className="text-sm font-bold tnum" style={{ color: "var(--violet)" }}>
-                          {h.stats ? formatCurrency(h.stats.income) : "—"}
-                        </span>
+            {tab === "expense" && activeStats && activeStats.byCategory.length > 0 && (
+              <div className="flex flex-col gap-6">
+                <CategoryRingGrid byCategory={activeStats.byCategory} total={activeStats.expense} />
+                <div className="grid gap-x-10 gap-y-4 md:grid-cols-2">
+                  {activeStats.byCategory.map(({ category, total }) => {
+                    const pct = activeStats.expense > 0 ? (total / activeStats.expense) * 100 : 0;
+                    return (
+                      <div key={category} className="flex flex-col gap-1.5 min-w-0">
+                        <div className="flex items-baseline justify-between gap-3">
+                          <span className="capitalize truncate" style={{ font: "var(--text-body)", fontWeight: 600, color: "var(--ink)" }}>{category}</span>
+                          <span className="tnum flex-none" style={{ font: "var(--text-figure-sm)", color: "var(--ink-2)" }}>
+                            {formatCurrency(total)}
+                            <span className="ml-1.5" style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>{Math.round(pct)}%</span>
+                          </span>
+                        </div>
+                        <Progress value={pct} height={6} trackColor="var(--line)" color={getCategoryColor(category)} />
                       </div>
-                      <Progress value={pct} height={8} trackColor="var(--line)" color="var(--violet)" />
-                    </div>
-                  );
-                })}
-          </div>
-        )}
-      </Card>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
-      {/* Monthly history */}
-      <Card radius="lg" className="p-5">
-        <div className="text-[11px] font-bold uppercase tracking-wider mb-4" style={{ color: "var(--ink-3)" }}>
-          Monthly History
+            {tab === "expense" && activeStats && activeStats.byCategory.length === 0 && (
+              <div className="text-center py-8" style={{ font: "var(--text-body)", color: "var(--ink-3)" }}>
+                No expense categories this month.
+              </div>
+            )}
+
+            {tab === "income" && (
+              <div className="grid gap-x-10 gap-y-4 md:grid-cols-2">
+                {isLoading
+                  ? [0, 1, 2].map((i) => <Skeleton key={i} className="h-10 rounded-(--r-sm)" />)
+                  : (data ?? []).slice().reverse().map((h) => {
+                      const maxIncome = Math.max(...(data ?? []).map((d) => d.stats?.income ?? 0), 1);
+                      const pct = ((h.stats?.income ?? 0) / maxIncome) * 100;
+                      return (
+                        <div key={`${h.year}-${h.month}`} className="flex flex-col gap-1.5">
+                          <div className="flex items-baseline justify-between">
+                            <span style={{ font: "var(--text-body)", fontWeight: 600, color: "var(--ink)" }}>{format(new Date(h.year, h.month - 1, 1), "MMM yyyy")}</span>
+                            <span className="tnum" style={{ font: "var(--text-figure-sm)", color: "var(--green)" }}>{h.stats ? formatCurrency(h.stats.income) : "—"}</span>
+                          </div>
+                          <Progress value={pct} height={6} trackColor="var(--line)" color="var(--green)" />
+                        </div>
+                      );
+                    })}
+              </div>
+            )}
+          </Card>
         </div>
-        <div className="flex flex-col gap-2">
-          {isLoading
-            ? [0, 1, 2].map((i) => <Skeleton key={i} className="h-16 rounded-(--r-md)" />)
-            : (data ?? []).slice().reverse().map((h, revIdx) => {
-                const idx = (data?.length ?? 0) - 1 - revIdx;
-                // Skip months with no income/expense activity at all — kept
-                // showing up as a flat row of five ₹0.00 months before any
-                // real data existed. Always keep the current month, even
-                // when it's zero too, so the list is never empty.
-                const hasActivity = (h.stats?.income ?? 0) > 0 || (h.stats?.expense ?? 0) > 0;
-                const isCurrentMonth = idx === (data?.length ?? 0) - 1;
-                if (!hasActivity && !isCurrentMonth) return null;
-                return (
-                  <HistoryRow
-                    key={`${h.year}-${h.month}`}
-                    history={h}
-                    isActive={idx === activeIdx}
-                    onClick={() => setActiveIdx(idx)}
-                  />
-                );
-              })}
-        </div>
-        {!isLoading && nextMonthEstimate !== null && (
-          <div className="flex items-center gap-2 mt-4 pt-4" style={{ borderTop: "1px solid var(--line)" }}>
-            <TrendingUp size={14} style={{ color: "var(--ink-3)" }} />
-            <span className="text-xs font-semibold" style={{ color: "var(--ink-3)" }}>
-              Next month, at this pace: <span className="tnum font-bold" style={{ color: "var(--ink-2)" }}>~{formatCurrency(nextMonthEstimate)}</span>
-            </span>
+
+        <div className="rail page-stack">
+          {/* Net worth */}
+          <Card radius="lg" className="p-5">
+            <div className="mb-3">
+              <div style={sectionLabel}>Net worth trend</div>
+              <div className="tnum mt-1" style={{ font: "var(--text-stat)", color: "var(--ink)" }}>{formatCurrency(currentTotalBalance)}</div>
+            </div>
+            {isLoading ? <Skeleton className="h-48 w-full rounded-(--r-md)" /> : <NetWorthTrendChart data={data ?? []} currentTotalBalance={currentTotalBalance} />}
+          </Card>
+
+          {/* Monthly history */}
+          <div>
+            <div className="section-head"><h2>Monthly history</h2></div>
+            {isLoading ? (
+              <Skeleton className="h-40 rounded-(--r-md)" />
+            ) : (
+              <div className="inset-group" style={{ "--inset": "28px" } as React.CSSProperties}>
+                {(data ?? []).slice().reverse().map((h, revIdx) => {
+                  const idx = (data?.length ?? 0) - 1 - revIdx;
+                  // Skip months with no activity, but always keep the current month so the list is never empty.
+                  const hasActivity = (h.stats?.income ?? 0) > 0 || (h.stats?.expense ?? 0) > 0;
+                  const isCurrentMonth = idx === (data?.length ?? 0) - 1;
+                  if (!hasActivity && !isCurrentMonth) return null;
+                  return <HistoryRow key={`${h.year}-${h.month}`} history={h} isActive={idx === activeIdx} onClick={() => setActiveIdx(idx)} />;
+                })}
+              </div>
+            )}
+            {!isLoading && nextMonthEstimate !== null && (
+              <div className="flex items-center gap-2 mt-3 px-1" style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>
+                <TrendingUp size={14} aria-hidden />
+                <span>Next month, at this pace: <span className="tnum" style={{ color: "var(--ink-2)", fontWeight: 600 }}>~{formatCurrency(nextMonthEstimate)}</span></span>
+              </div>
+            )}
           </div>
-        )}
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

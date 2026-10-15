@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Archive, ChevronRight, CreditCard } from "lucide-react";
+import { Plus, Archive, ChevronRight, CreditCard, Landmark } from "lucide-react";
 import Link from "next/link";
 import { useAccounts } from "@/features/dashboard/hooks/useDashboard";
 import { useRecurringSeriesList } from "@/features/recurring/hooks/useRecurringSeries";
@@ -20,6 +20,8 @@ import { Input } from "@/components/_ui/Input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { PageHeader } from "@/components/shared/PageHeader";
 import { toast } from "sonner";
 import { ACCOUNT_TYPE_ICONS } from "@/lib/icons";
 import { accountCreateSchema } from "@/features/accounts/schemas/account.schema";
@@ -33,6 +35,23 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "credit_card", label: "Credit Cards" },
   { key: "other", label: "Banks & More" },
 ];
+
+const ICON_TILE = "w-11 h-11 rounded-[13px] grid place-items-center flex-none";
+
+function ArchiveButton({ name, onArchive }: { name: string; onArchive: () => void }) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label={`Archive ${name}`}
+      onClick={(e) => { e.preventDefault(); e.stopPropagation(); onArchive(); }}
+      className="w-8 h-8 rounded-full flex-none opacity-60 hover:opacity-100 active:scale-[0.96] transition"
+    >
+      <Archive size={14} style={{ color: "var(--ink-3)" }} />
+    </Button>
+  );
+}
 
 function CreditRow({
   acc,
@@ -56,71 +75,57 @@ function CreditRow({
   const available = Math.max(0, limit - displayBalance);
 
   return (
-    <Card as={Link} href={`/accounts/${String(acc._id)}`} elevation="raised" radius="md" interactive className="flex items-center gap-4 px-4 py-4 group">
-      <div className="w-12 h-12 rounded-[14px] grid place-items-center flex-none" style={{ background: "var(--card-2)" }}>
-        <CreditCard size={22} style={{ color: "var(--ink-2)" }} />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <div className="font-bold text-sm truncate" style={{ color: "var(--ink)" }}>{acc.name}</div>
-          {meta?.network && (
-            <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded" style={{ background: "var(--card-2)", color: "var(--ink-3)" }}>
-              {meta.network}
-            </span>
-          )}
-          {meta?.lastFourDigits && (
-            <span className="text-[11px] font-medium" style={{ color: "var(--ink-3)" }}>••{meta.lastFourDigits}</span>
-          )}
+    <Card as={Link} href={`/accounts/${String(acc._id)}`} elevation="raised" radius="lg" interactive className="flex flex-col gap-4 p-5 group min-w-0 active:scale-[0.99] transition-transform">
+      <div className="flex items-center gap-3 min-w-0">
+        <div className={ICON_TILE} style={{ background: "var(--card-2)" }}>
+          <CreditCard size={20} style={{ color: "var(--ink-2)" }} />
         </div>
-        {limit > 0 ? (
-          <div className="mt-1.5">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[11px] font-medium" style={{ color: "var(--ink-3)" }}>
-                {formatCurrency(displayBalance)} used · {formatCurrency(available)} available
-              </span>
-              <span className="text-[11px] font-bold" style={{ color: utilCol }}>
-                {utilPct.toFixed(0)}%
-              </span>
-            </div>
-            <Progress value={utilPct} color={utilCol} height={6} />
-            <div className="text-[10px] font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>
-              Limit {formatCurrency(limit)}
-            </div>
-            {summary && (
-              <div className="grid grid-cols-2 gap-2 mt-1.5 text-[10px] font-bold">
-                <span className="tnum truncate" style={{ color: "var(--ink-3)" }}>
-                  Payable {formatCurrency(summary.payableStatementDue ?? 0)}
-                </span>
-                <span className="tnum truncate text-right" style={{ color: "var(--ink-3)" }}>
-                  Unbilled {formatCurrency(summary.unbilledUsage ?? 0)}
-                </span>
-              </div>
-            )}
+        <div className="flex-1 min-w-0">
+          <div className="font-semibold truncate" style={{ font: "var(--text-body)", fontWeight: 600, color: "var(--ink)" }}>{acc.name}</div>
+          <div className="flex items-center gap-1.5 mt-0.5" style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>
+            <span>Credit card</span>
+            {meta?.network && <span className="uppercase">· {meta.network}</span>}
+            {meta?.lastFourDigits && <span className="tnum">· ••{meta.lastFourDigits}</span>}
           </div>
-        ) : (
-          <div className="text-xs font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>Credit card · Setup billing cycle</div>
-        )}
-        {emiCommitment > 0 && (
-          <div className="flex items-center gap-1 mt-1">
-            <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>EMI</span>
-            <span className="text-[10px] font-medium tnum" style={{ color: "var(--ink-3)" }}>
-              {formatCurrency(emiCommitment)} commitment included
+        </div>
+        <ArchiveButton name={acc.name} onArchive={onArchive} />
+      </div>
+
+      {limit > 0 ? (
+        <>
+          <div className="flex items-end justify-between gap-3">
+            <div className="min-w-0">
+              <div style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>Used</div>
+              <div className="tnum truncate" style={{ fontFamily: "var(--font-mono)", fontSize: 22, fontWeight: 600, letterSpacing: "-0.02em", color: "var(--ink)" }}>
+                {formatCurrency(displayBalance)}
+              </div>
+            </div>
+            <span className="tnum rounded-full px-2.5 py-1" style={{ font: "var(--text-micro)", fontWeight: 600, color: utilCol, background: "var(--card-2)" }}>
+              {utilPct.toFixed(0)}% used
             </span>
           </div>
-        )}
-      </div>
-      <ChevronRight size={16} className="flex-none opacity-40 group-hover:opacity-70 transition-opacity" style={{ color: "var(--ink-2)" }} />
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        aria-label={`Archive ${acc.name}`}
-        onClick={(e) => { e.preventDefault(); onArchive(); }}
-        className="w-8 h-8 rounded-full flex-none"
-        style={{ background: "var(--card-2)" }}
-      >
-        <Archive size={14} style={{ color: "var(--ink-3)" }} />
-      </Button>
+          <div>
+            <Progress value={utilPct} color={utilCol} trackColor="var(--line)" height={6} />
+            <div className="flex justify-between mt-2 tnum" style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>
+              <span>{formatCurrency(available)} available</span>
+              <span>Limit {formatCurrency(limit)}</span>
+            </div>
+          </div>
+          {summary && (
+            <div className="grid grid-cols-2 gap-2 pt-3 tnum" style={{ borderTop: "1px solid var(--line)", font: "var(--text-micro)", color: "var(--ink-3)" }}>
+              <span className="truncate">Payable {formatCurrency(summary.payableStatementDue ?? 0)}</span>
+              <span className="truncate text-right">Unbilled {formatCurrency(summary.unbilledUsage ?? 0)}</span>
+            </div>
+          )}
+        </>
+      ) : (
+        <div style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>Set up billing cycle</div>
+      )}
+      {emiCommitment > 0 && (
+        <div className="tnum" style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>
+          EMI {formatCurrency(emiCommitment)} commitment included
+        </div>
+      )}
     </Card>
   );
 }
@@ -128,33 +133,36 @@ function CreditRow({
 function RegularRow({ acc, onArchive, formatCurrency }: { acc: IAccount; onArchive: () => void; formatCurrency: (n: number) => string }) {
   const TypeIcon = ACCOUNT_TYPE_ICONS[acc.type] ?? CreditCard;
   return (
-    <Card as={Link} href={`/accounts/${String(acc._id)}`} elevation="raised" radius="md" interactive className="flex items-center gap-4 px-4 py-4 group">
-      <div className="w-12 h-12 rounded-[14px] grid place-items-center flex-none" style={{ background: "var(--card-2)" }}>
-        <TypeIcon size={22} style={{ color: "var(--ink-2)" }} />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="font-bold text-sm" style={{ color: "var(--ink)" }}>{acc.name}</div>
-        <div className="text-xs font-medium mt-0.5 capitalize" style={{ color: "var(--ink-3)" }}>
-          {acc.type.replace("_", " ")}
+    <Card as={Link} href={`/accounts/${String(acc._id)}`} elevation="raised" radius="lg" interactive className="flex flex-col gap-5 p-5 group min-w-0 active:scale-[0.99] transition-transform">
+      <div className="flex items-center gap-3 min-w-0">
+        <div className={ICON_TILE} style={{ background: acc.color || "var(--card-2)" }}>
+          <TypeIcon size={20} style={{ color: acc.color ? "var(--violet-fg)" : "var(--ink-2)" }} />
         </div>
+        <div className="flex-1 min-w-0">
+          <div className="truncate" style={{ font: "var(--text-body)", fontWeight: 600, color: "var(--ink)" }}>{acc.name}</div>
+          <div className="capitalize mt-0.5" style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>
+            {acc.type.replace("_", " ")} · {acc.currency}
+          </div>
+        </div>
+        <ArchiveButton name={acc.name} onArchive={onArchive} />
       </div>
-      <div className="text-right mr-2">
-        <div className="font-extrabold tnum text-[15px]" style={{ color: acc.balance >= 0 ? "var(--ink)" : "var(--red)" }}>
+      <div className="flex items-end justify-between gap-2">
+        <div className="tnum truncate" style={{ fontFamily: "var(--font-mono)", fontSize: 24, fontWeight: 600, letterSpacing: "-0.02em", color: acc.balance >= 0 ? "var(--ink)" : "var(--red)" }}>
           {formatCurrency(acc.balance)}
         </div>
+        <ChevronRight size={16} className="flex-none opacity-40 group-hover:opacity-70 transition-opacity mb-1.5" style={{ color: "var(--ink-2)" }} />
       </div>
-      <ChevronRight size={16} className="flex-none opacity-40 group-hover:opacity-70 transition-opacity" style={{ color: "var(--ink-2)" }} />
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        aria-label={`Archive ${acc.name}`}
-        onClick={(e) => { e.preventDefault(); onArchive(); }}
-        className="w-8 h-8 rounded-full flex-none"
-        style={{ background: "var(--card-2)" }}
-      >
-        <Archive size={14} style={{ color: "var(--ink-3)" }} />
-      </Button>
+    </Card>
+  );
+}
+
+function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
+  return (
+    <Card radius="lg" className="p-5 min-w-0">
+      <div style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>{label}</div>
+      <div className="tnum truncate mt-1" style={{ font: "var(--text-stat)", letterSpacing: "-0.02em", color: color ?? "var(--ink)" }}>
+        {value}
+      </div>
     </Card>
   );
 }
@@ -250,41 +258,46 @@ export function AccountsClient() {
     .filter(a => a.type !== "credit_card")
     .reduce((s, a) => s + a.balance, 0);
 
+  const nameError = form.name.trim() === "" ? "Name is required" : null;
+  const hasAccounts = (accounts ?? []).length > 0;
+  const closeAdd = () => { setShowAdd(false); setCreditMeta({}); setSmsDigits(""); };
+
   return (
-    <div className="flex flex-col gap-5">
-      {/* Summary cards */}
-      {!isLoading && (accounts ?? []).length > 0 && (
-        <div className="grid grid-cols-2 gap-3">
-          <Card radius="lg" className="p-4">
-            <div className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: "var(--ink-3)" }}>Net Assets</div>
-            <div className="text-[22px] font-extrabold tnum" style={{ color: "var(--ink)" }}>
-              {formatCurrency(nonCreditBalance)}
-            </div>
-          </Card>
+    <div className="page-stack">
+      <PageHeader
+        title="Accounts"
+        subtitle="Everything you own and owe, in one place."
+        actions={
+          <Button type="button" onClick={openAdd} className="h-11 px-5 rounded-full font-semibold btn-interactive">
+            <Plus size={16} />
+            Add account
+          </Button>
+        }
+      />
+
+      {!isLoading && hasAccounts && (
+        <div className="grid-cards" style={{ "--card-min": "220px" } as React.CSSProperties}>
+          <Stat label="Net worth" value={formatCurrency(nonCreditBalance - totalCreditDebt)} color={nonCreditBalance - totalCreditDebt < 0 ? "var(--red)" : undefined} />
+          <Stat label="Assets" value={formatCurrency(nonCreditBalance)} />
           {creditCards.length > 0 && (
-            <Card radius="lg" className="p-4">
-              <div className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: "var(--ink-3)" }}>Credit Exposure</div>
-              <div className="text-[22px] font-extrabold tnum" style={{ color: totalCreditDebt > 0 ? "var(--red)" : "var(--green)" }}>
-                {formatCurrency(totalCreditDebt)}
-              </div>
-            </Card>
+            <Stat label="Credit exposure" value={formatCurrency(totalCreditDebt)} color={totalCreditDebt > 0 ? "var(--red)" : "var(--green)"} />
           )}
         </div>
       )}
 
-      {/* Filter tabs */}
-      {!isLoading && (accounts ?? []).length > 0 && (
+      {!isLoading && hasAccounts && (
         <Tabs value={filter} onValueChange={(v) => setFilter(v as FilterKey)}>
-          <TabsList className="h-auto w-max bg-transparent p-0 gap-2">
+          <TabsList className="h-10 w-max p-1 rounded-full" style={{ background: "var(--card-2)" }}>
             {FILTERS.map(f => (
               <TabsTrigger
                 key={f.key}
                 value={f.key}
-                className="h-auto px-3.5 py-1.5 rounded-full text-[12px] font-bold"
+                className="h-8 px-4 rounded-full font-semibold border-0 shadow-none data-[state=active]:shadow-(--shadow-sm) active:scale-[0.97] transition"
                 style={{
-                  background: filter === f.key ? "var(--violet)" : "var(--card)",
-                  color: filter === f.key ? "var(--violet-fg)" : "var(--ink-2)",
-                  boxShadow: filter === f.key ? "none" : "var(--shadow-sm)",
+                  font: "var(--text-label)",
+                  fontWeight: 600,
+                  background: filter === f.key ? "var(--card)" : "transparent",
+                  color: filter === f.key ? "var(--ink)" : "var(--ink-2)",
                 }}
               >
                 {f.label}
@@ -294,23 +307,23 @@ export function AccountsClient() {
         </Tabs>
       )}
 
-      {/* Account list */}
       {isLoading ? (
-        <div className="flex flex-col gap-3">
-          {[0, 1, 2].map(i => <Skeleton key={i} className="h-20 rounded-(--r-md)" />)}
+        <div className="grid-cards" style={{ "--card-min": "300px" } as React.CSSProperties}>
+          {[0, 1, 2].map(i => <Skeleton key={i} className="h-36 rounded-(--r-lg)" />)}
         </div>
-      ) : filteredAccounts.length === 0 && !showAdd ? (
-        <Card radius="lg" className="flex flex-col items-center justify-center gap-3 py-16">
-          <div className="text-4xl">🏦</div>
-          <p className="text-sm font-medium" style={{ color: "var(--ink-2)" }}>
+      ) : filteredAccounts.length === 0 ? (
+        <Card radius="lg" className="flex flex-col items-center justify-center gap-3 py-20 text-center px-6">
+          <div className="w-14 h-14 rounded-2xl grid place-items-center" style={{ background: "var(--card-2)" }}>
+            <Landmark size={26} style={{ color: "var(--ink-2)" }} />
+          </div>
+          <p style={{ font: "var(--text-body)", fontWeight: 600, color: "var(--ink)" }}>
             {filter === "credit_card" ? "No credit cards yet" : filter === "other" ? "No bank accounts yet" : "No accounts yet"}
           </p>
-          <Button onClick={openAdd} className="h-auto text-sm px-4 py-2 rounded-full">
-            Add account
-          </Button>
+          <p style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>Add one to start tracking balances.</p>
+          <Button onClick={openAdd} className="h-11 px-5 rounded-full font-semibold btn-interactive">Add account</Button>
         </Card>
       ) : (
-        <div className="flex flex-col gap-3">
+        <div className="grid-cards" style={{ "--card-min": "300px" } as React.CSSProperties}>
           {filteredAccounts.map(acc =>
             acc.type === "credit_card" ? (
               <CreditRow
@@ -333,108 +346,101 @@ export function AccountsClient() {
         </div>
       )}
 
-      {/* Add account form */}
-      {showAdd && (
-        <Card radius="lg" elevation="floating" className="p-5 flex flex-col gap-4">
-          <div className="text-sm font-bold" style={{ color: "var(--ink)" }}>New Account</div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1.5 col-span-2">
-              <Label htmlFor="accounts-client-account-name-1" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Account name</Label>
+      <Dialog open={showAdd} onOpenChange={(o) => { if (!o) closeAdd(); }}>
+        <DialogContent className="max-h-[90dvh] overflow-y-auto p-0 gap-0 border-0 sm:max-w-lg" style={{ background: "var(--card)", borderRadius: "var(--r-lg)", boxShadow: "var(--shadow-lg)" }}>
+          <DialogHeader className="px-6 pt-6 pb-2">
+            <DialogTitle style={{ font: "var(--text-h2)", letterSpacing: "var(--track-h2)", color: "var(--ink)" }}>New account</DialogTitle>
+            <DialogDescription style={{ color: "var(--ink-3)" }}>Name it, pick a type, and you are set.</DialogDescription>
+          </DialogHeader>
+          <form
+            className="flex flex-col gap-5 px-6 pb-6 pt-3"
+            onSubmit={(e) => { e.preventDefault(); if (!nameError) createAccount.mutate(); }}
+          >
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="accounts-client-account-name-1" style={{ font: "var(--text-label)", color: "var(--ink-2)" }}>Account name</Label>
               <Input id="accounts-client-account-name-1"
                 value={form.name}
                 onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                 placeholder="e.g. Chase Sapphire"
+                autoFocus
+                className="h-11"
               />
+              {nameError && form.name.length > 0 && <span style={{ font: "var(--text-micro)", color: "var(--red)" }}>{nameError}</span>}
             </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="new-account-type" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Type</Label>
-              <Select
-                value={form.type}
-                onValueChange={(value) => {
-                  setForm(f => ({ ...f, type: value as IAccount["type"] }));
-                  if (value !== "credit_card") setCreditMeta({});
-                }}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="new-account-type" style={{ font: "var(--text-label)", color: "var(--ink-2)" }}>Type</Label>
+                <Select
+                  value={form.type}
+                  onValueChange={(value) => {
+                    setForm(f => ({ ...f, type: value as IAccount["type"] }));
+                    if (value !== "credit_card") setCreditMeta({});
+                  }}
+                >
+                  <SelectTrigger id="new-account-type" className="capitalize h-11 w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ACCOUNT_TYPES.map(t => (
+                      <SelectItem key={t} value={t} className="capitalize">{t.replace("_", " ")}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="new-account-currency" style={{ font: "var(--text-label)", color: "var(--ink-2)" }}>Currency</Label>
+                <Select value={form.currency} onValueChange={(value) => setForm(f => ({ ...f, currency: value }))}>
+                  <SelectTrigger id="new-account-currency" className="h-11 w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {["USD", "EUR", "GBP", "INR", "JPY", "CAD", "AUD"].map(c => (
+                      <SelectItem key={c} value={c}>{c}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {form.type === "credit_card" && (
+              <CreditCardForm value={creditMeta} onChange={setCreditMeta} />
+            )}
+
+            {(form.type === "bank" || form.type === "savings") && (
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="new-account-sms-digits" style={{ font: "var(--text-label)", color: "var(--ink-2)" }}>
+                  SMS match digits <span style={{ color: "var(--ink-3)" }}>(optional)</span>
+                </Label>
+                <Input
+                  id="new-account-sms-digits"
+                  value={smsDigits}
+                  inputMode="numeric"
+                  onChange={(e) => setSmsDigits(e.target.value.replace(/[^\d,\s]/g, ""))}
+                  placeholder="e.g. 6390"
+                  aria-describedby="new-account-sms-digits-hint"
+                  className="h-11"
+                />
+                <span id="new-account-sms-digits-hint" style={{ font: "var(--text-micro)", color: "var(--ink-3)" }}>
+                  The last 4 digits your bank shows in SMS, like “A/C *6390”. Payments with them go to this account.
+                </span>
+              </div>
+            )}
+
+            <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end pt-1">
+              <Button type="button" variant="ghost" onClick={closeAdd} className="h-11 px-5 rounded-full font-semibold">
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={createAccount.isPending || !!nameError}
+                className="h-11 px-6 rounded-full font-semibold btn-interactive"
               >
-                <SelectTrigger id="new-account-type" className="capitalize">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {ACCOUNT_TYPES.map(t => (
-                    <SelectItem key={t} value={t} className="capitalize">{t.replace("_", " ")}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                {createAccount.isPending ? "Saving..." : "Create account"}
+              </Button>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="new-account-currency" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Currency</Label>
-              <Select value={form.currency} onValueChange={(value) => setForm(f => ({ ...f, currency: value }))}>
-                <SelectTrigger id="new-account-currency">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {["USD", "EUR", "GBP", "INR", "JPY", "CAD", "AUD"].map(c => (
-                    <SelectItem key={c} value={c}>{c}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          {form.type === "credit_card" && (
-            <CreditCardForm value={creditMeta} onChange={setCreditMeta} />
-          )}
-
-          {(form.type === "bank" || form.type === "savings") && (
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="new-account-sms-digits" className="text-sm font-medium" style={{ color: "var(--ink-2)" }}>
-                SMS match digits <span style={{ color: "var(--ink-3)" }}>(optional)</span>
-              </Label>
-              <Input
-                id="new-account-sms-digits"
-                value={smsDigits}
-                inputMode="numeric"
-                onChange={(e) => setSmsDigits(e.target.value.replace(/[^\d,\s]/g, ""))}
-                placeholder="e.g. 6390"
-                aria-describedby="new-account-sms-digits-hint"
-              />
-              <span id="new-account-sms-digits-hint" className="text-xs" style={{ color: "var(--ink-3)" }}>
-                The last 4 digits your bank shows in SMS, like “A/C *6390”. Payments with them go to this account.
-              </span>
-            </div>
-          )}
-
-          <div className="flex gap-3">
-            <Button
-              onClick={() => createAccount.mutate()}
-              disabled={createAccount.isPending || !form.name}
-              className="flex-1 h-auto py-2.5 rounded-(--r-sm) font-bold"
-            >
-              {createAccount.isPending ? "Saving..." : "Create Account"}
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => { setShowAdd(false); setCreditMeta({}); setSmsDigits(""); }}
-              className="h-auto px-5 py-2.5 rounded-(--r-sm) font-bold"
-            >
-              Cancel
-            </Button>
-          </div>
-        </Card>
-      )}
-
-      {!showAdd && (accounts ?? []).length > 0 && (
-        <Button
-          type="button"
-          variant="secondary"
-          onClick={openAdd}
-          className="h-auto flex items-center justify-center gap-2 rounded-(--r-md) py-3.5 font-bold"
-          style={{ color: "var(--violet)" }}
-        >
-          <Plus size={17} />
-          Add Account
-        </Button>
-      )}
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

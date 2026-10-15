@@ -28,16 +28,15 @@ export function ProfileCard({ user }: Props) {
   };
 
   return (
-    <Card radius="lg" elevation="floating" className="p-6 flex items-center gap-5">
-      <Avatar name={user.name} src={user.avatar ?? undefined} size={72} className="rounded-[22px]" />
+    <Card radius="lg" className="p-5 sm:p-6 flex items-center gap-4 sm:gap-5">
+      <Avatar name={user.name} src={user.avatar ?? undefined} size={64} className="flex-none" />
 
       {/* Info */}
       <div className="flex-1 min-w-0">
         {editing ? (
           <div className="flex items-center gap-2">
             <Input
-              className="flex-1 font-bold min-w-0"
-              style={{ border: "1.5px solid var(--violet)" }}
+              className="flex-1 min-w-0"
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => {
@@ -60,15 +59,15 @@ export function ProfileCard({ user }: Props) {
             </Button>
           </div>
         ) : (
-          <div className="text-lg font-extrabold truncate" style={{ color: "var(--ink)" }}>
+          <div className="truncate" style={{ font: "var(--text-h2)", letterSpacing: "var(--track-h2)", color: "var(--ink)" }}>
             {user.name}
           </div>
         )}
-        <div className="text-sm font-medium mt-0.5 truncate" style={{ color: "var(--ink-3)" }}>
+        <div className="mt-0.5 truncate" style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>
           {user.email}
         </div>
         <div
-          className="mt-1.5 inline-block text-[11px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full"
+          className="mt-2 inline-block text-[11px] font-semibold capitalize px-2.5 py-0.5 rounded-full"
           style={{ background: "var(--card-2)", color: "var(--violet)" }}
         >
           {user.role}
@@ -83,7 +82,7 @@ export function ProfileCard({ user }: Props) {
           size="icon"
           aria-label="Edit name"
           onClick={() => setEditing(true)}
-          className="w-10 h-10 rounded-(--r-sm)"
+          className="size-10 rounded-full"
           style={{ background: "var(--card-2)" }}
         >
           <Pencil size={16} style={{ color: "var(--ink-2)" }} />

@@ -1,161 +1,128 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
-import {
-  Sun, Lock, Bell, LogOut, ChevronRight, Shield, HelpCircle, KeyRound,
-} from "lucide-react";
+import { Sun, Lock, Bell, LogOut, ChevronRight, Shield, HelpCircle, KeyRound } from "lucide-react";
 import { CURRENCY_ICON } from "@/lib/icons";
+import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/_ui/Skeleton";
-import { Card } from "@/components/_ui/Card";
-import { Button } from "@/components/_ui/Button";
 import { Avatar } from "@/components/_ui/Avatar";
-import {
-  Accordion, AccordionItem, AccordionTrigger, AccordionContent,
-} from "@/components/ui/accordion";
+import { PageHeader } from "@/components/shared/PageHeader";
 import { useProfile } from "@/features/settings/hooks/useProfile";
-import {
-  PreferencesFields, AppearanceFields, NotificationFields,
-  SecurityFields, PrivacyFields, HelpFields,
-} from "./SettingsSubpages";
-import { ApiKeysFields } from "./ApiKeysSection";
+import { ProfileSettingsPage } from "./SettingsSubpages";
+import { SettingsRow } from "./SettingsRow";
+import { Group } from "./SettingsUi";
 
-function SectionTrigger({
-  icon: Icon,
-  label,
-  sub,
-}: {
-  icon: React.ElementType;
-  label: string;
-  sub?: string;
-}) {
+/**
+ * Settings frame (rendered by settings/layout.tsx).
+ * >=1024px: macOS System Settings, list left + detail right.
+ * <1024px: iOS Settings drill-down. /settings shows the list, a subpage
+ * shows only its detail (back chip lives in MobileHeader).
+ */
+export function SettingsShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const isHub = pathname === "/settings";
+
   return (
-    <AccordionTrigger className="px-5 py-4 hover:no-underline [&>svg]:text-(--ink-3)">
-      <div className="flex items-center gap-3 min-w-0">
-        <div
-          className="w-9 h-9 rounded-[10px] grid place-items-center flex-none"
-          style={{ background: "var(--card-2)" }}
-        >
-          <Icon size={16} style={{ color: "var(--violet)" }} />
-        </div>
-        <div className="min-w-0 text-left">
-          <div className="text-sm font-semibold" style={{ color: "var(--ink)" }}>{label}</div>
-          {sub && (
-            <div className="text-xs mt-0.5 truncate font-normal" style={{ color: "var(--ink-3)" }}>{sub}</div>
-          )}
-        </div>
+    <div className="page-stack">
+      <div className={cn(!isHub && "hidden lg:block")}>
+        <PageHeader title="Settings" subtitle="Manage your profile, preferences and security." />
       </div>
-    </AccordionTrigger>
+
+      <div className="grid items-start gap-6 lg:grid-cols-[minmax(280px,340px)_minmax(0,1fr)] xl:gap-10">
+        <aside
+          className={cn(
+            "min-w-0 lg:sticky lg:top-[calc(var(--topbar-h)+20px)] lg:max-h-[calc(100dvh-var(--topbar-h)-40px)] lg:overflow-y-auto",
+            !isHub && "hidden lg:block"
+          )}
+        >
+          <SettingsNav pathname={pathname} />
+        </aside>
+        <section className={cn("min-w-0", isHub && "hidden lg:block")}>
+          <div className="max-w-3xl">{children}</div>
+        </section>
+      </div>
+    </div>
   );
 }
 
-export function SettingsClient() {
+function SettingsNav({ pathname }: { pathname: string }) {
   const { data: profile, isLoading } = useProfile();
   const pushOn = profile?.preferences?.pushNotifications ?? false;
   const emailOn = profile?.preferences?.emailNotifications ?? true;
   const notifSub = pushOn && emailOn ? "Push and email on" : pushOn ? "Push on" : emailOn ? "Email on" : "All off";
   const currency = profile?.preferences?.currency ?? "INR";
 
+  // "/settings" itself shows Profile in the detail pane on desktop.
+  const is = (slug: string) => pathname === `/settings/${slug}` || (slug === "profile" && pathname === "/settings");
+
   if (isLoading) {
     return (
-      <div className="flex flex-col gap-4">
-        {[92, 420].map((h, i) => (
-          <Skeleton key={i} className="rounded-(--r-lg)" style={{ height: h }} />
+      <div className="flex flex-col gap-5">
+        {[76, 168, 168, 56].map((h, i) => (
+          <Skeleton key={i} className="rounded-(--r-md)" style={{ height: h }} />
         ))}
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-5 pb-8">
-
-      {/* ── Profile summary ─────────────────────────────────── */}
-      <Link href="/settings/profile">
-        <Card radius="lg" className="p-5 flex items-center gap-4 transition-colors hover:bg-(--card-2)">
-          <Avatar name={profile?.name ?? "User"} size={56} className="rounded-2xl flex-none" style={{ boxShadow: "0 8px 20px rgba(0,0,0,.28)" }} />
-          <div className="flex-1 min-w-0">
-            <div className="font-bold text-[15px] truncate" style={{ color: "var(--ink)" }}>
-              {profile?.name ?? "—"}
+    <nav aria-label="Settings sections" className="flex flex-col gap-6 pb-4">
+      <div className="inset-group" style={{ "--inset": "76px" } as React.CSSProperties}>
+        <Link
+          href="/settings/profile"
+          aria-current={is("profile") ? "page" : undefined}
+          className={cn(
+            "flex min-h-[76px] items-center gap-4 px-4 py-3 outline-none transition-colors hover:bg-(--card-2) active:bg-(--card-2) focus-visible:bg-(--card-2)",
+            is("profile") && "bg-[color-mix(in_srgb,var(--violet)_10%,transparent)]"
+          )}
+        >
+          <Avatar name={profile?.name ?? "User"} src={profile?.avatar ?? undefined} size={52} className="flex-none" />
+          <div className="min-w-0 flex-1">
+            <div className="truncate" style={{ font: "var(--text-h2)", letterSpacing: "var(--track-h2)", color: "var(--ink)" }}>
+              {profile?.name ?? "Your profile"}
             </div>
-            <div className="text-sm mt-0.5 truncate" style={{ color: "var(--ink-3)" }}>
+            <div className="mt-0.5 truncate" style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>
               {profile?.email}
             </div>
-            <span
-              className="inline-flex items-center mt-1.5 px-2 py-0.5 rounded-full text-[10.5px] font-bold capitalize"
-              style={{ background: "rgba(0,0,0,.10)", color: "var(--violet)" }}
-            >
-              {profile?.role ?? "user"}
-            </span>
           </div>
-          <ChevronRight size={18} style={{ color: "var(--ink-3)" }} className="flex-none" />
-        </Card>
-      </Link>
+          <ChevronRight size={16} className="flex-none" style={{ color: "var(--ink-3)" }} />
+        </Link>
+      </div>
 
-      {/* ── Everything else, one section open at a time ─────── */}
-      <Card radius="lg" className="overflow-hidden">
-        <Accordion type="single" collapsible>
-          <AccordionItem value="preferences" className="border-(--line) px-0">
-            <SectionTrigger icon={CURRENCY_ICON} label="Currency & Region" sub={`${currency} · week start`} />
-            <AccordionContent className="px-5 pt-1 flex flex-col gap-4">
-              <PreferencesFields />
-            </AccordionContent>
-          </AccordionItem>
+      <Group inset={60}>
+        <SettingsRow icon={CURRENCY_ICON} title="Currency & Region" subtitle={`${currency} · week start`} href="/settings/preferences" selected={is("preferences")} />
+        <SettingsRow icon={Sun} title="Appearance" subtitle="Theme and glass" href="/settings/appearance" selected={is("appearance")} />
+        <SettingsRow icon={Bell} title="Notifications" subtitle={notifSub} href="/settings/notifications" selected={is("notifications")} />
+      </Group>
 
-          <AccordionItem value="appearance" className="border-(--line) px-0">
-            <SectionTrigger icon={Sun} label="Appearance" sub="Theme" />
-            <AccordionContent className="px-5 pt-1">
-              <AppearanceFields />
-            </AccordionContent>
-          </AccordionItem>
+      <Group inset={60}>
+        <SettingsRow icon={Lock} title="Security" subtitle="Password" href="/settings/security" selected={is("security")} />
+        <SettingsRow icon={KeyRound} title="API keys" subtitle="Mobile app, n8n, integrations" href="/settings/api-keys" selected={is("api-keys")} />
+        <SettingsRow icon={Shield} title="Privacy" subtitle="Data export and deletion" href="/settings/privacy" selected={is("privacy")} />
+      </Group>
 
-          <AccordionItem value="notifications" className="border-(--line) px-0">
-            <SectionTrigger icon={Bell} label="Notifications" sub={notifSub} />
-            <AccordionContent className="px-5 pt-1 flex flex-col gap-4">
-              <NotificationFields />
-            </AccordionContent>
-          </AccordionItem>
+      <Group inset={60}>
+        <SettingsRow icon={HelpCircle} title="Help & Support" href="/settings/help" selected={is("help")} />
+      </Group>
 
-          <AccordionItem value="security" className="border-(--line) px-0">
-            <SectionTrigger icon={Lock} label="Security" sub="Password" />
-            <AccordionContent className="px-5 pt-1 flex flex-col gap-3">
-              <SecurityFields />
-            </AccordionContent>
-          </AccordionItem>
-
-          <AccordionItem value="api-keys" className="border-(--line) px-0">
-            <SectionTrigger icon={KeyRound} label="API keys" sub="Mobile app, n8n, integrations" />
-            <AccordionContent className="px-5 pt-1 flex flex-col gap-3">
-              <ApiKeysFields />
-            </AccordionContent>
-          </AccordionItem>
-
-          <AccordionItem value="privacy" className="border-(--line) px-0">
-            <SectionTrigger icon={Shield} label="Privacy" />
-            <AccordionContent className="px-5 pt-1 flex flex-col gap-3">
-              <PrivacyFields />
-            </AccordionContent>
-          </AccordionItem>
-
-          <AccordionItem value="help" className="border-(--line) px-0 border-b-0">
-            <SectionTrigger icon={HelpCircle} label="Help & Support" />
-            <AccordionContent className="px-5 pt-1 flex flex-col gap-3">
-              <HelpFields />
-            </AccordionContent>
-          </AccordionItem>
-        </Accordion>
-      </Card>
-
-      {/* ── Sign out ────────────────────────────────────────── */}
-      <Button
-        type="button"
-        variant="secondary"
-        onClick={() => signOut({ callbackUrl: "/login" })}
-        className="h-auto flex items-center justify-center gap-2 rounded-(--r-md) py-4 font-bold"
-        style={{ color: "var(--red)" }}
-      >
-        <LogOut size={16} />
-        Sign out
-      </Button>
-    </div>
+      <Group>
+        <button
+          type="button"
+          onClick={() => signOut({ callbackUrl: "/login" })}
+          className="flex min-h-12 w-full items-center justify-center gap-2 px-4 py-3 outline-none transition-colors hover:bg-(--card-2) active:bg-(--card-2) focus-visible:bg-(--card-2)"
+          style={{ font: "var(--text-body)", fontWeight: 600, color: "var(--red)" }}
+        >
+          <LogOut size={16} />
+          Sign out
+        </button>
+      </Group>
+    </nav>
   );
+}
+
+/** Detail pane shown at /settings on desktop (mobile shows the list instead). */
+export function SettingsClient() {
+  return <ProfileSettingsPage />;
 }

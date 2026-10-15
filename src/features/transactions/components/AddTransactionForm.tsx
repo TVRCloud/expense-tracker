@@ -16,6 +16,7 @@ import { useAccounts } from "@/features/dashboard/hooks/useDashboard";
 import { useCurrency } from "@/hooks/useCurrency";
 import { DatePickerField } from "@/components/shared/DatePickerField";
 import { BillingCycleHint } from "@/features/credit-cards/components/BillingCycleHint";
+import { PageHeader } from "@/components/shared/PageHeader";
 import { Card } from "@/components/_ui/Card";
 import { Button } from "@/components/_ui/Button";
 import { Input } from "@/components/_ui/Input";
@@ -237,28 +238,30 @@ export function AddTransactionForm() {
 
   const isIncome = txType === "income";
 
+  const rowLabel = "w-28 flex-none text-[15px]";
+  const rowInput =
+    "flex-1 h-auto border-0 bg-transparent p-0 text-[15px] shadow-none text-(--ink) placeholder:text-(--ink-3) focus-visible:ring-0 focus-visible:ring-offset-0";
+
   return (
-    <div className="grid md:grid-cols-2 gap-4 md:gap-5 h-full min-w-0">
-      {/* LEFT: Numpad card */}
-      <Card radius="lg" elevation="floating" className="p-4 sm:p-6 flex flex-col gap-4 sm:gap-5 min-w-0">
-        {/* Type toggle */}
-        <div
-          className="flex p-1 rounded-full gap-1"
-          style={{ background: "var(--card-2)" }}
-        >
+    <div className="page-stack">
+      <PageHeader title="Add transaction" subtitle="Enter the amount, then fill in the details." />
+
+      <div className="grid gap-5 lg:gap-7 lg:grid-cols-[minmax(320px,440px)_minmax(0,1fr)] items-start min-w-0">
+      {/* LEFT: amount hero + numpad (sticky on desktop) */}
+      <Card radius="lg" className="p-5 sm:p-6 flex flex-col gap-5 min-w-0 lg:sticky lg:top-[calc(var(--topbar-h)+20px)]">
+        {/* Type: segmented control */}
+        <div className="flex p-1 rounded-full gap-0.5" style={{ background: "var(--card-2)" }} role="group" aria-label="Transaction type">
           {(["expense", "income"] as const).map((t) => (
             <Button
               key={t}
               type="button"
               variant="ghost"
+              aria-pressed={txType === t}
               onClick={() => { setTxType(t); if (t === "income") setSplitEnabled(false); }}
-              className="flex-1 h-auto py-2 rounded-full font-bold capitalize"
+              className="flex-1 h-9 rounded-full font-semibold capitalize"
               style={
                 txType === t
-                  ? {
-                      background: t === "expense" ? "var(--red)" : "var(--green)",
-                      color: "#fff",
-                    }
+                  ? { background: "var(--card)", boxShadow: "var(--shadow-sm)", color: t === "expense" ? "var(--red)" : "var(--green)" }
                   : { color: "var(--ink-2)" }
               }
             >
@@ -267,21 +270,22 @@ export function AddTransactionForm() {
           ))}
         </div>
 
-        {/* Amount display */}
-        <div className="flex flex-col items-center py-2 sm:py-4 min-w-0">
+        {/* Amount hero */}
+        <div className="flex flex-col items-center py-3 min-w-0">
           <div
-            className="text-[38px] min-[390px]:text-[44px] sm:text-[52px] font-extrabold tnum leading-none max-w-full overflow-hidden text-center"
-            style={{ color: isIncome ? "var(--green)" : "var(--red)" }}
+            className="tnum leading-none max-w-full overflow-hidden text-center"
+            style={{ font: "var(--text-display)", letterSpacing: "var(--track-title)", color: isIncome ? "var(--green)" : "var(--red)" }}
+            aria-live="polite"
           >
             {isIncome ? "+" : "-"}{formatCurrency(amountInCents)}
           </div>
-          <div className="text-sm mt-2 font-medium" style={{ color: "var(--ink-3)" }}>
+          <div className="mt-2.5" style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>
             {displayAmount} {currency}
           </div>
         </div>
 
         {/* Numpad */}
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-3 gap-2.5">
           {NUMPAD_KEYS.map((key) => (
             <Button
               key={key}
@@ -289,19 +293,8 @@ export function AddTransactionForm() {
               variant="ghost"
               onClick={() => handleNumpad(key)}
               aria-label={key === "⌫" ? "Backspace" : key}
-              className="rounded-(--r-sm) h-12 sm:h-14 text-lg sm:text-xl font-bold active:scale-95"
-              style={
-                key === "⌫"
-                  ? {
-                      background: "var(--red)",
-                      color: "#fff",
-                    }
-                  : {
-                      background: "var(--card-2)",
-                      color: "var(--ink)",
-                      boxShadow: "var(--shadow-sm)",
-                    }
-              }
+              className="rounded-(--r-md) h-14 text-xl font-semibold active:scale-95"
+              style={{ background: "var(--card-2)", color: key === "⌫" ? "var(--ink-2)" : "var(--ink)" }}
             >
               {key === "⌫" ? <Delete size={20} /> : key}
             </Button>
@@ -309,19 +302,14 @@ export function AddTransactionForm() {
         </div>
       </Card>
 
-      {/* RIGHT: Details card */}
-      <Card
-        as="form"
-        onSubmit={onSubmit}
-        radius="lg"
-        elevation="floating"
-        className="p-4 sm:p-6 flex flex-col gap-4 sm:gap-5 min-w-0"
-      >
+      {/* RIGHT: grouped details */}
+      <form onSubmit={onSubmit} className="flex flex-col gap-5 min-w-0">
+        <Card radius="lg" className={`p-5 sm:p-6 flex flex-col gap-5 ${isIncome ? "hidden" : ""}`}>
         {/* Category grid (only for expenses) */}
         {!isIncome && (
           <div>
             <div className="flex items-center justify-between mb-3">
-              <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>
+              <div className="" style={{ font: "var(--text-h2)", letterSpacing: "var(--track-h2)", color: "var(--ink)" }}>
                 Category
               </div>
               <Button
@@ -333,8 +321,8 @@ export function AddTransactionForm() {
                   if (next) setRepeatEnabled(false);
                 }}
                 aria-pressed={splitEnabled}
-                className="h-auto px-2.5 py-1 rounded-full text-[11px] font-bold gap-1"
-                style={splitEnabled ? { background: "var(--violet)", color: "var(--violet-fg)" } : { background: "var(--card-2)", color: "var(--ink-2)" }}
+                className="h-8 px-3 rounded-full text-[13px] font-semibold gap-1.5"
+                style={splitEnabled ? { background: "var(--ink)", color: "var(--bg)" } : { background: "var(--card-2)", color: "var(--ink-2)" }}
               >
                 <SplitSquareHorizontal size={12} />
                 Split
@@ -342,7 +330,7 @@ export function AddTransactionForm() {
             </div>
 
             {!splitEnabled ? (
-              <div className="grid grid-cols-3 min-[390px]:grid-cols-4 gap-2">
+              <div className="grid grid-cols-3 min-[390px]:grid-cols-4 sm:grid-cols-5 gap-2">
                 {CATEGORIES.filter((c) => c.value !== "income" && c.value !== "transfer").map((cat) => {
                   const isActive = selectedCategory === cat.value;
                   return (
@@ -351,12 +339,11 @@ export function AddTransactionForm() {
                       type="button"
                       variant="ghost"
                       onClick={() => setSelectedCategory(cat.value)}
-                      className="h-auto flex-col gap-1.5 rounded-(--r-sm) p-2 sm:p-2.5 min-w-0"
+                      className="h-auto flex-col gap-1.5 rounded-(--r-md) p-2.5 min-w-0 min-h-[64px]"
                       style={
                         isActive
                           ? {
-                              background: "var(--violet)",
-                              boxShadow: "0 4px 12px rgba(0,0,0,.3)",
+                              background: "var(--ink)",
                             }
                           : {
                               background: "var(--card-2)",
@@ -365,8 +352,8 @@ export function AddTransactionForm() {
                     >
                       <span className="text-lg sm:text-xl">{cat.icon}</span>
                       <span
-                        className="text-[10px] font-semibold truncate w-full text-center"
-                        style={{ color: isActive ? "var(--violet-fg)" : "var(--ink-2)" }}
+                        className="text-[11px] font-semibold truncate w-full text-center"
+                        style={{ color: isActive ? "var(--bg)" : "var(--ink-2)" }}
                       >
                         {cat.label}
                       </span>
@@ -433,45 +420,82 @@ export function AddTransactionForm() {
           </div>
         )}
 
-        {/* Account selector */}
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="add-transaction-account" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
-            Account
-          </Label>
-          <Controller
-            control={control}
-            name="accountId"
-            render={({ field }) => (
-              <Select value={field.value} onValueChange={field.onChange}>
-                <SelectTrigger id="add-transaction-account" className="h-auto w-full rounded-(--r-sm) px-4 py-3 text-sm font-semibold" style={{ background: "var(--card-2)", color: "var(--ink)", border: "1.5px solid var(--line)" }}>
-                  <SelectValue placeholder="Select an account" />
-                </SelectTrigger>
-                <SelectContent>
-                  {accounts.map((acc) => (
-                    <SelectItem key={String(acc._id)} value={String(acc._id)}>
-                      {acc.name} {acc.type === "credit_card"
-                        ? `(CC · Limit ${formatCurrency(acc.creditMeta?.creditLimit ?? 0)})`
-                        : `(${formatCurrency(acc.balance)})`}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          />
+        </Card>
+
+        {/* Account / date / description / note: iOS grouped rows */}
+        <div className="inset-group" style={{ "--inset": "16px" } as React.CSSProperties}>
+          <div className="flex items-center gap-3 px-4 min-h-[52px] py-1.5">
+            <Label htmlFor="add-transaction-account" className={rowLabel} style={{ color: "var(--ink)" }}>
+              Account
+            </Label>
+            <Controller
+              control={control}
+              name="accountId"
+              render={({ field }) => (
+                <Select value={field.value} onValueChange={field.onChange}>
+                  <SelectTrigger id="add-transaction-account" className="h-10 flex-1 min-w-0 justify-end gap-2 border-0 bg-transparent px-0 text-[15px] shadow-none focus:ring-0" style={{ color: "var(--ink-2)" }}>
+                    <SelectValue placeholder="Select an account" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {accounts.map((acc) => (
+                      <SelectItem key={String(acc._id)} value={String(acc._id)}>
+                        {acc.name} {acc.type === "credit_card"
+                          ? `(CC · Limit ${formatCurrency(acc.creditMeta?.creditLimit ?? 0)})`
+                          : `(${formatCurrency(acc.balance)})`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            />
+          </div>
           {errors.accountId && (
-            <p className="text-xs" style={{ color: "var(--red)" }}>{errors.accountId.message}</p>
+            <p className="px-4 py-2 text-xs" style={{ color: "var(--red)" }} role="alert">{errors.accountId.message}</p>
           )}
           {selectedAccount?.type === "credit_card" && watchedAccountId && (
-            <BillingCycleHint accountId={watchedAccountId} date={date} />
+            <div className="px-4 py-3">
+              <BillingCycleHint accountId={watchedAccountId} date={date} />
+            </div>
           )}
+          <div className="px-4 py-3">
+            <DatePickerField
+              label={repeatEnabled ? "First installment date" : "Date"}
+              value={date}
+              onChange={(nextDate) => {
+                if (nextDate) setDate(nextDate);
+              }}
+            />
+          </div>
+          <div className="flex items-center gap-3 px-4 min-h-[52px] py-1.5">
+            <Label htmlFor="add-transaction-form-description-1" className={rowLabel} style={{ color: "var(--ink)" }}>
+              Description
+            </Label>
+            <Input id="add-transaction-form-description-1"
+              {...register("description")}
+              placeholder="What was this for?"
+              className={rowInput}
+            />
+          </div>
+          <div className="flex items-start gap-3 px-4 py-3">
+            <Label htmlFor="add-transaction-form-note-optional-2" className={`${rowLabel} pt-0.5`} style={{ color: "var(--ink)" }}>
+              Note
+            </Label>
+            <Textarea id="add-transaction-form-note-optional-2"
+              {...register("note")}
+              placeholder="Optional"
+              rows={2}
+              className="flex-1 min-h-0 resize-none border-0 bg-transparent p-0 text-[15px] shadow-none focus-visible:ring-0"
+              style={{ color: "var(--ink)" }}
+            />
+          </div>
         </div>
 
         {/* Recurring options */}
-        <Card surface="card-2" radius="md" className="p-4 flex flex-col gap-3" style={{ border: "1px solid var(--line)" }}>
+        <Card radius="lg" className="p-5 sm:p-6 flex flex-col gap-4">
           {/* Toggle row */}
           <Label className="flex items-center justify-between gap-3 cursor-pointer">
-            <span className="flex items-center gap-2 text-sm font-bold" style={{ color: "var(--ink)" }}>
-              <Repeat2 size={16} />
+            <span className="flex items-center gap-2 text-[15px] font-medium" style={{ color: "var(--ink)" }}>
+              <Repeat2 size={17} />
               Recurring
             </span>
             <Switch checked={repeatEnabled} onCheckedChange={(v) => { setRepeatEnabled(v); if (v) setSplitEnabled(false); }} />
@@ -486,7 +510,7 @@ export function AddTransactionForm() {
                   variant="ghost"
                   onClick={() => { setTxType("income"); setFreqKey("monthly"); setRecurrenceLabel("Salary"); }}
                   className="flex-1 h-auto rounded-(--r-sm) px-3 py-2 text-xs font-bold"
-                  style={{ background: "var(--card)", color: "var(--green)" }}
+                  style={{ background: "var(--card-2)", color: "var(--green)" }}
                 >
                   💰 Monthly salary
                 </Button>
@@ -495,7 +519,7 @@ export function AddTransactionForm() {
                   variant="ghost"
                   onClick={() => { setTxType("expense"); setSelectedCategory("emi"); setFreqKey("monthly"); setRecurrenceLabel("EMI"); }}
                   className="flex-1 h-auto rounded-(--r-sm) px-3 py-2 text-xs font-bold"
-                  style={{ background: "var(--card)", color: "var(--red)" }}
+                  style={{ background: "var(--card-2)", color: "var(--red)" }}
                 >
                   🏦 Monthly EMI
                 </Button>
@@ -503,7 +527,7 @@ export function AddTransactionForm() {
 
               {/* Frequency chips */}
               <div className="flex flex-col gap-1.5">
-                <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Frequency</span>
+                <span className="" style={{ font: "var(--text-label)", color: "var(--ink-2)" }}>Frequency</span>
                 <div className="flex flex-wrap gap-1.5">
                   {FREQ_OPTIONS.map(f => (
                     <Button
@@ -511,11 +535,11 @@ export function AddTransactionForm() {
                       type="button"
                       variant="ghost"
                       onClick={() => setFreqKey(f.key)}
-                      className="h-auto px-3 py-1.5 rounded-full text-[12px] font-bold"
+                      className="h-9 px-3.5 rounded-full text-[13px] font-semibold"
                       style={
                         freqKey === f.key
-                          ? { background: "var(--violet)", color: "var(--violet-fg)" }
-                          : { background: "var(--card)", color: "var(--ink-2)" }
+                          ? { background: "var(--ink)", color: "var(--bg)" }
+                          : { background: "var(--card-2)", color: "var(--ink-2)" }
                       }
                     >
                       {f.label}
@@ -526,7 +550,7 @@ export function AddTransactionForm() {
 
               {/* End condition */}
               <div className="flex flex-col gap-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "var(--ink-3)" }}>Ends</span>
+                <span className="" style={{ font: "var(--text-label)", color: "var(--ink-2)" }}>Ends</span>
                 <div className="flex gap-1.5">
                   {(["never", "count", "date"] as EndMode[]).map(m => (
                     <Button
@@ -534,11 +558,11 @@ export function AddTransactionForm() {
                       type="button"
                       variant="ghost"
                       onClick={() => setEndMode(m)}
-                      className="flex-1 h-auto py-1.5 rounded-(--r-sm) text-xs font-bold"
+                      className="flex-1 h-9 rounded-full text-[13px] font-semibold px-2"
                       style={
                         endMode === m
-                          ? { background: "var(--violet)", color: "var(--violet-fg)" }
-                          : { background: "var(--card)", color: "var(--ink-2)" }
+                          ? { background: "var(--ink)", color: "var(--bg)" }
+                          : { background: "var(--card-2)", color: "var(--ink-2)" }
                       }
                     >
                       {m === "never" ? "Never" : m === "count" ? "After N payments" : "On a date"}
@@ -555,7 +579,7 @@ export function AddTransactionForm() {
                     onChange={(e) => setRecurrenceCount(e.target.value)}
                     placeholder="e.g. 12 for 1 year monthly"
                     className="w-full"
-                    style={{ background: "var(--card)", color: "var(--ink)", border: "1px solid var(--line)" }}
+                    style={{ background: "var(--card-2)", color: "var(--ink)" }}
                   />
                 )}
                 {endMode === "date" && (
@@ -575,7 +599,7 @@ export function AddTransactionForm() {
                   value={recurrenceLabel}
                   onChange={(e) => setRecurrenceLabel(e.target.value)}
                   placeholder="e.g. House EMI, Netflix, Salary"
-                  style={{ background: "var(--card)", color: "var(--ink)", border: "1px solid var(--line)" }}
+                  style={{ background: "var(--card-2)", color: "var(--ink)" }}
                 />
               </div>
 
@@ -583,7 +607,7 @@ export function AddTransactionForm() {
               {recurringSummary && (
                 <div
                   className="rounded-(--r-sm) px-3 py-2.5 text-[12px] font-medium leading-relaxed"
-                  style={{ background: "color-mix(in srgb, var(--violet) 10%, transparent)", color: "var(--violet)" }}
+                  style={{ background: "var(--card-2)", color: "var(--ink)" }}
                 >
                   🔄 {recurringSummary}
                 </div>
@@ -603,54 +627,11 @@ export function AddTransactionForm() {
           )}
         </Card>
 
-        {/* Date picker */}
-        <DatePickerField
-          label={repeatEnabled ? "First Installment Date" : "Date"}
-          value={date}
-          onChange={(nextDate) => {
-            if (nextDate) setDate(nextDate);
-          }}
-        />
-
-        {/* Description */}
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="add-transaction-form-description-1" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
-            Description
-          </Label>
-          <Input id="add-transaction-form-description-1"
-            {...register("description")}
-            placeholder="What was this for?"
-            style={{
-              background: "var(--card-2)",
-              color: "var(--ink)",
-              border: "1.5px solid var(--line)",
-            }}
-          />
-        </div>
-
-        {/* Note */}
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="add-transaction-form-note-optional-2" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
-            Note (optional)
-          </Label>
-          <Textarea id="add-transaction-form-note-optional-2"
-            {...register("note")}
-            placeholder="Add a note..."
-            rows={2}
-            className="resize-none"
-            style={{
-              background: "var(--card-2)",
-              color: "var(--ink)",
-              border: "1.5px solid var(--line)",
-            }}
-          />
-        </div>
-
         {/* Save button — pinned above the mobile tab bar so it stays in
             thumb reach under the number pad; says why when it can't save. */}
         <div
           className="sticky bottom-[calc(96px+env(safe-area-inset-bottom,0px))] md:static mt-auto pt-2 flex flex-col gap-1.5"
-          style={{ background: "linear-gradient(to bottom, transparent, var(--card) 30%)" }}
+          style={{ background: "linear-gradient(to bottom, transparent, var(--bg) 30%)" }}
         >
           {!isPending && amountInCents <= 0 && (
             <p className="text-xs text-center" style={{ color: "var(--ink-3)" }}>Enter an amount to save.</p>
@@ -662,12 +643,13 @@ export function AddTransactionForm() {
             type="submit"
             disabled={isPending || amountInCents <= 0 || (splitEnabled && !splitValid)}
             aria-busy={isPending}
-            className="h-auto rounded-(--r-md) py-3.5 sm:py-4 font-bold text-sm"
+            className="h-12 rounded-full text-[15px] font-semibold"
           >
             {isPending ? "Saving…" : "Save transaction"}
           </Button>
         </div>
-      </Card>
+      </form>
+      </div>
     </div>
   );
 }

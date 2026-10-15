@@ -18,7 +18,12 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     <ButtonRoot
       ref={ref}
       asChild={asChild}
-      className={cn(!asChild && "btn-interactive", "pointer-coarse:min-h-11 pointer-coarse:min-w-11", className)}
+      className={cn(
+        !asChild && "btn-interactive",
+        "font-semibold tracking-[-0.01em] rounded-(--r-sm) pointer-coarse:min-h-11 pointer-coarse:min-w-11",
+        "focus-visible:ring-[3px] focus-visible:ring-[color-mix(in_srgb,var(--violet)_28%,transparent)] focus-visible:border-(--violet)",
+        className
+      )}
       {...props}
     />
   );

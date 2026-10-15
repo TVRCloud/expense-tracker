@@ -25,10 +25,10 @@ function initialsOf(name: string) {
  * (header, sidebar, settings, auth forms, admin user list). */
 export function Avatar({ name, src, size = 40, className, style }: Props) {
   return (
-    <AvatarRoot className={cn("shrink-0", className)} style={{ width: size, height: size, ...style }}>
+    <AvatarRoot className={cn("shrink-0 ring-1 ring-black/5 dark:ring-white/10", className)} style={{ width: size, height: size, ...style }}>
       {src && <AvatarImage src={src} alt={name} className="object-cover" />}
       <AvatarFallback
-        className="font-extrabold"
+        className="font-semibold tracking-tight"
         style={{
           background: "linear-gradient(150deg,var(--violet),var(--violet-2))",
           color: "var(--violet-fg)",

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { TrendingDown, TrendingUp, ArrowDownToLine, ArrowUpFromLine, ArrowLeftRight } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, ArrowLeftRight } from "lucide-react";
 import { useCurrency } from "@/hooks/useCurrency";
 import { Skeleton } from "@/components/_ui/Skeleton";
 
@@ -22,12 +22,12 @@ export function BalanceCard({ accountBalance, income, expense, isLoading, cardLa
 
   return (
     <div
-      className="relative overflow-hidden rounded-(--r-lg) text-white p-4.5 min-[390px]:p-6 sm:p-7"
+      className="relative overflow-hidden rounded-(--r-lg) text-white p-5 sm:p-7 lg:p-9"
       style={{
         background:
           "linear-gradient(155deg, var(--hero-from) 0%, var(--hero-mid1) 58%, var(--hero-mid2) 88%, var(--hero-to) 115%)",
         boxShadow: "0 20px 48px rgba(13,7,40,.45)",
-        minHeight: 200,
+        minHeight: 180,
       }}
     >
       {/* Dot-grid mesh texture */}
@@ -62,90 +62,43 @@ export function BalanceCard({ accountBalance, income, expense, isLoading, cardLa
         }}
       />
 
-      <div className="relative">
-        <div className="mb-1 opacity-70" style={{ font: "var(--text-label)" }}>
-          Total balance
-        </div>
-
-        <div
-          className="tnum leading-none mb-4 max-w-full overflow-hidden truncate"
-          style={{ font: "var(--text-display)", minHeight: 40 }}
-        >
-          {isLoading ? <Shimmer w={180} /> : formatCurrency(accountBalance)}
-        </div>
-
-        {/* Masked card number — the same account whose balance is shown above,
-            given a physical-card presence instead of stopping at a number. */}
-        <div className="flex items-center justify-between mb-4">
-          <span
-            className="font-mono text-[15px] tracking-[0.25em]"
-            style={{ color: "rgba(255,255,255,.82)" }}
-          >
-            •••• {cardLastFour ?? "••••"}
-          </span>
-          <svg width="34" height="22" viewBox="0 0 34 22" fill="none" aria-hidden style={{ opacity: 0.9 }}>
-            <circle cx="13" cy="11" r="10" fill="rgba(255,255,255,.55)" />
-            <circle cx="21" cy="11" r="10" fill="rgba(212,168,67,.85)" />
-          </svg>
-        </div>
-
-        {/* Shimmer separator */}
-        <div
-          className="mb-4 h-px"
-          style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,.35) 30%, rgba(255,255,255,.60) 60%, transparent)" }}
-        />
-
-        <div className="flex mx-[-20px] sm:mx-[-28px]">
+      <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+        <div className="min-w-0">
+          <div className="mb-2 opacity-70" style={{ font: "var(--text-label)" }}>
+            Total balance
+          </div>
           <div
-            className="flex-1 flex items-center gap-2 sm:gap-3 py-4 sm:py-5 pl-5 sm:pl-7 min-w-0"
-            style={{ borderRight: "1px solid rgba(255,255,255,0.14)" }}
+            className="tnum leading-none max-w-full overflow-hidden truncate"
+            style={{ font: "var(--text-display)", letterSpacing: "var(--track-title)", minHeight: 40 }}
           >
-            <div
-              className="w-9 h-9 rounded-full grid place-items-center flex-none"
-              style={{
-                background: "color-mix(in srgb, var(--green) 22%, transparent)",
-                border: "1px solid color-mix(in srgb, var(--green) 35%, transparent)",
-              }}
-            >
-              <TrendingUp size={16} style={{ color: "var(--green)" }} />
-            </div>
-            <div className="min-w-0">
-              <div style={{ font: "var(--text-micro)", opacity: 0.65 }}>
-                Income
-              </div>
-              <div className="tnum mt-0.5 max-w-full overflow-hidden" style={{ font: "var(--text-figure-sm)" }}>
-                {isLoading ? <Shimmer w={70} /> : formatCurrency(income)}
-              </div>
-            </div>
+            {isLoading ? <Shimmer w={180} /> : formatCurrency(accountBalance)}
           </div>
-
-          <div className="flex-1 flex items-center gap-2 sm:gap-3 py-4 sm:py-5 pl-5 sm:pl-7 min-w-0">
-            <div
-              className="w-9 h-9 rounded-full grid place-items-center flex-none"
-              style={{
-                background: "color-mix(in srgb, var(--red) 22%, transparent)",
-                border: "1px solid color-mix(in srgb, var(--red) 35%, transparent)",
-              }}
-            >
-              <TrendingDown size={16} style={{ color: "var(--red)" }} />
-            </div>
-            <div className="min-w-0">
-              <div style={{ font: "var(--text-micro)", opacity: 0.65 }}>
-                Expenses
-              </div>
-              <div className="tnum mt-0.5 max-w-full overflow-hidden" style={{ font: "var(--text-figure-sm)" }}>
-                {isLoading ? <Shimmer w={70} /> : formatCurrency(expense)}
-              </div>
-            </div>
+          <div className="mt-5 flex items-center gap-x-8 gap-y-3 flex-wrap">
+            <HeroFigure label="Income this month" value={isLoading ? null : formatCurrency(income)} />
+            <HeroFigure label="Spent this month" value={isLoading ? null : formatCurrency(expense)} />
+            <span className="font-mono text-[13px] tracking-[0.25em] hidden sm:inline" style={{ color: "rgba(255,255,255,.6)" }}>
+              •••• {cardLastFour ?? "••••"}
+            </span>
           </div>
         </div>
 
-        {/* Quick actions */}
-        <div className="flex gap-2.5 mt-5">
+        {/* One clear primary action first, the rest quiet */}
+        <div className="flex gap-2.5 lg:w-[340px] flex-none">
+          <QuickAction href="/transactions/add" icon={ArrowUpFromLine} label="Expense" />
           <QuickAction href="/transactions/add" icon={ArrowDownToLine} label="Income" />
           <QuickAction href="/transactions/add" icon={ArrowLeftRight} label="Transfer" />
-          <QuickAction href="/transactions/add" icon={ArrowUpFromLine} label="Expense" />
         </div>
+      </div>
+    </div>
+  );
+}
+
+function HeroFigure({ label, value }: { label: string; value: string | null }) {
+  return (
+    <div className="min-w-0">
+      <div style={{ font: "var(--text-micro)", opacity: 0.62 }}>{label}</div>
+      <div className="tnum mt-0.5 truncate" style={{ font: "var(--text-figure-sm)", fontSize: 16 }}>
+        {value ?? <Shimmer w={70} />}
       </div>
     </div>
   );
@@ -163,7 +116,7 @@ function QuickAction({
   return (
     <Link
       href={href}
-      className="flex-1 flex flex-col items-center gap-1.5 py-3 rounded-2xl transition-transform active:scale-[0.96]"
+      className="flex-1 flex flex-col items-center gap-1.5 py-3 min-h-[60px] justify-center rounded-2xl transition-transform active:scale-[0.97]"
       style={{
         background: "rgba(255,255,255,.12)",
         border: "1px solid rgba(255,255,255,.16)",
