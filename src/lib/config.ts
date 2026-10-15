@@ -55,6 +55,15 @@ export const config = {
       privateKey: getEnv("VAPID_PRIVATE_KEY"),
     };
   },
+  get appUpdate() {
+    return {
+      // The private GitHub repo that holds the Android companion's releases,
+      // and a read-only token for it (fine-grained, "Contents: read" on that
+      // one repo). Without a token the update endpoints report no update.
+      repo: getEnv("APP_RELEASES_REPO", "TVRCloud/expense-tracker-mobile"),
+      token: getEnv("APP_RELEASES_TOKEN"),
+    };
+  },
   get integrations() {
     return {
       // Bearer keys themselves live in the api_keys collection (src/models/ApiKey.ts),

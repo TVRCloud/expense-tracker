@@ -16,6 +16,13 @@ N8N_RATE_WINDOW_MS=60000     # window length in ms (default 60000)
 N8N_IDEMPOTENCY_TTL_SECONDS=86400  # how long idempotency records live (default 24h)
 ```
 
+In-app updates for the Android companion app (see "App updates" below):
+
+```
+APP_RELEASES_REPO=TVRCloud/expense-tracker-mobile   # the private repo with the app's releases
+APP_RELEASES_TOKEN=                                  # fine-grained GitHub token, read-only Contents on that repo
+```
+
 The API key itself is **not** an env var — it lives in the `api_keys` collection
 (`src/models/ApiKey.ts`), one row per caller (n8n, the mobile companion app, etc),
 so each can be revoked independently. Mint one with:
@@ -304,3 +311,36 @@ than a usage quota.
   caller — never full account/transaction documents.
 - Each key is independently revocable (`yarn api-keys revoke --id ...`)
   without affecting any other caller's key.
+
+## App updates
+
+The Android companion app is sideloaded and its releases are assets of a
+private GitHub repo. The phone cannot read them (and must not hold a token), so
+it asks these two routes. Both use the normal API-key auth and rate limit.
+
+`GET /api/integrations/app-update`
+
+```json
+{ "success": true, "data": {
+    "configured": true,
+    "latest": { "version": "1.1.0", "build": 11, "notes": "...", "publishedAt": "2026-10-16T08:00:00Z",
+                "sizeBytes": 26214400, "sha256": "ab12..." } } }
+```
+
+`latest` is `null` when `APP_RELEASES_TOKEN` is not set, no release exists, or
+GitHub is unreachable (the last good answer is served for a while). The phone
+compares `build` with its own versionCode.
+
+`GET /api/integrations/app-update/download`
+
+```json
+{ "success": true, "data": { "url": "https://...signed...", "build": 11, "sizeBytes": 26214400, "sha256": "ab12..." } }
+```
+
+`url` is a signed GitHub storage link that expires within minutes; the phone
+downloads from it directly with no credentials, so no APK bytes pass through
+this server. `404 NOT_FOUND` when there is no release.
+
+Only releases tagged `vMAJOR.MINOR.PATCH+BUILD` with one `.apk` asset, and that
+are neither drafts nor prereleases, count. The mobile repo's CI publishes them
+in exactly that shape. Release lookups are cached for 5 minutes.
