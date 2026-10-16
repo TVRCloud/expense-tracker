@@ -7,6 +7,7 @@ import { SessionProvider } from "@/components/providers/SessionProvider";
 import { QueryProvider } from "@/components/providers/QueryProvider";
 import { MotionProvider } from "@/components/providers/MotionProvider";
 import { SocketProvider } from "@/components/providers/SocketProvider";
+import { RealtimeSync } from "@/components/providers/RealtimeSync";
 import { Toaster } from "sonner";
 import { HydrationMarker } from "@/components/shared/hydration";
 
@@ -55,6 +56,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <QueryProvider>
                 <MotionProvider>
                   <SocketProvider>
+                    <RealtimeSync />
                     {children}
                   </SocketProvider>
                 </MotionProvider>

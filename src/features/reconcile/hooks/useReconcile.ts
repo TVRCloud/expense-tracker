@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import apiClient from "@/lib/api-client";
+import { invalidateForResource } from "@/lib/realtime/invalidation";
 
 // Shapes returned by src/lib/reconcile/inbox.ts.
 
@@ -131,9 +132,8 @@ export const QUEUE_REASON_LABEL: Record<string, string> = {
 };
 
 function invalidateAll(qc: ReturnType<typeof useQueryClient>, transactionId?: string) {
-  void qc.invalidateQueries({ queryKey: ["reconcile"] });
-  void qc.invalidateQueries({ queryKey: ["transactions"] });
-  void qc.invalidateQueries({ queryKey: ["accounts"] });
+  invalidateForResource(qc, "captures");
+  invalidateForResource(qc, "transactions");
   if (transactionId) void qc.invalidateQueries({ queryKey: ["provenance", transactionId] });
 }
 

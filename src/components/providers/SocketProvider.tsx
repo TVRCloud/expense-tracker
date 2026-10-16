@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 
 type EventHandler = (data: unknown) => void;
@@ -8,11 +8,14 @@ type EventHandler = (data: unknown) => void;
 interface SocketContextValue {
   connected: boolean;
   subscribe: (event: string, handler: EventHandler) => () => void;
+  /** Runs each time the stream (re)opens after having been closed/errored. Not on the first open. */
+  onReconnect: (handler: () => void) => () => void;
 }
 
 const SocketContext = createContext<SocketContextValue>({
   connected: false,
   subscribe: () => () => {},
+  onReconnect: () => () => {},
 });
 
 // Real-time updates via Server-Sent Events backed by MongoDB Change Streams
@@ -23,14 +26,27 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession();
   const [connected, setConnected] = useState(false);
   const handlersRef = useRef(new Map<string, Set<EventHandler>>());
+  const reconnectRef = useRef(new Set<() => void>());
 
   useEffect(() => {
     if (!session?.user?.id) return;
 
     const es = new EventSource("/api/events");
+    let hasOpened = false;
+    let wasDown = false;
 
-    es.onopen = () => setConnected(true);
-    es.onerror = () => setConnected(false);
+    es.onopen = () => {
+      setConnected(true);
+      // Reopen after a drop (e.g. Vercel's maxDuration cut): events during
+      // the gap were missed, so let listeners refetch.
+      if (hasOpened && wasDown) for (const h of reconnectRef.current) h();
+      hasOpened = true;
+      wasDown = false;
+    };
+    es.onerror = () => {
+      setConnected(false);
+      wasDown = true;
+    };
 
     es.addEventListener("data-changed", (e: MessageEvent) => {
       let data: unknown = null;
@@ -50,18 +66,29 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     };
   }, [session?.user?.id]);
 
-  const subscribe = (event: string, handler: EventHandler) => {
+  const subscribe = useCallback((event: string, handler: EventHandler) => {
     let set = handlersRef.current.get(event);
     if (!set) {
       set = new Set();
       handlersRef.current.set(event, set);
     }
     set.add(handler);
-    return () => set!.delete(handler);
-  };
+    return () => {
+      set!.delete(handler);
+    };
+  }, []);
+
+  const onReconnect = useCallback((handler: () => void) => {
+    reconnectRef.current.add(handler);
+    return () => {
+      reconnectRef.current.delete(handler);
+    };
+  }, []);
+
+  const value = useMemo(() => ({ connected, subscribe, onReconnect }), [connected, subscribe, onReconnect]);
 
   return (
-    <SocketContext.Provider value={{ connected, subscribe }}>
+    <SocketContext.Provider value={value}>
       {children}
     </SocketContext.Provider>
   );

@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import apiClient from "@/lib/api-client";
 import { type ITransaction } from "@/types/models";
+import { invalidateForResource } from "@/lib/realtime/invalidation";
 
 export interface RecurringSeries {
   _id: string;
@@ -82,12 +83,7 @@ export function useMarkInstallment(recurringId: string) {
       apiClient.patch(`/transactions/recurring/${recurringId}/installments/${id}`, { status }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["recurring-series-detail", recurringId] });
-      void qc.invalidateQueries({ queryKey: ["recurring-series"] });
-      void qc.invalidateQueries({ queryKey: ["upcoming-installments"] });
-      void qc.invalidateQueries({ queryKey: ["transactions"] });
-      void qc.invalidateQueries({ queryKey: ["accounts"] });
-      void qc.invalidateQueries({ queryKey: ["credit-summary"] });
-      void qc.invalidateQueries({ queryKey: ["credit-statements"] });
+      invalidateForResource(qc, "transactions");
     },
   });
 }

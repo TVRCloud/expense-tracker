@@ -18,6 +18,7 @@ import { budgetCreateSchema } from "@/features/budgets/schemas/budget.schema";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { toast } from "sonner";
+import { invalidateForResource } from "@/lib/realtime/invalidation";
 
 interface BudgetWithSpent {
   _id: string;
@@ -85,7 +86,7 @@ export function BudgetsClient() {
       return apiClient.post("/budgets", parsed.data);
     },
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["budgets"] });
+      invalidateForResource(qc, "budgets");
       setShowAdd(false);
       setAddLimit("");
       setAddRollover(false);
@@ -97,7 +98,7 @@ export function BudgetsClient() {
   const deleteBudget = useMutation({
     mutationFn: (id: string) => apiClient.delete(`/budgets/${id}`),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["budgets"] });
+      invalidateForResource(qc, "budgets");
       toast.success("Budget deleted");
     },
   });
@@ -120,7 +121,7 @@ export function BudgetsClient() {
       rollover: editRollover,
     }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["budgets"] });
+      invalidateForResource(qc, "budgets");
       setEditingId(null);
       toast.success("Budget updated");
     },

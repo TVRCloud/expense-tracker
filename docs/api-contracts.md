@@ -153,6 +153,19 @@ Ledger/status requests include `x-logs-device-id`, a tab-scoped random id stored
 | POST | `/api/push/subscribe` | Store subscription |
 | DELETE | `/api/push/unsubscribe` | Deactivate subscription |
 
+## Integrations realtime
+
+Authenticated with an integration API key (`Authorization: Bearer <key>`), like every `/api/integrations/*` route. Full design: [docs/realtime.md](realtime.md).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/integrations/events` | SSE stream: `ready {now}`, `data-changed {resource}`, `ping {}` every 20s |
+| GET | `/api/integrations/changes?since=<epoch ms>` | Polling fallback: which resources changed since |
+
+`GET /api/integrations/changes` responds `200 {"success":true,"data":{"now":<epoch ms>,"changed":["transactions","goals"]},"requestId":"..."}` with `Cache-Control: no-store`. `now` is sampled before the query; store it and pass it as the next `since`. Missing or invalid `since` returns `changed: []`. Errors use the standard integration envelope (`401 UNAUTHORIZED`, `429 RATE_LIMITED`, `500 INTERNAL_ERROR`).
+
+`resource` is one of `transactions`, `accounts`, `budgets`, `goals`, `loans`, `notifications`, `captures`.
+
 ## Admin
 
 | Method | Path | Description |

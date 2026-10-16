@@ -1,11 +1,10 @@
 "use client";
 
-import { useCallback } from "react";
 import { keepPreviousData, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import apiClient from "@/lib/api-client";
 import { type ITransaction } from "@/types/models";
 import { toast } from "sonner";
-import { useSocket } from "@/hooks/useSocket";
+import { invalidateForResource } from "@/lib/realtime/invalidation";
 
 export interface TransactionFilters {
   type?: string;
@@ -21,12 +20,6 @@ export interface TransactionFilters {
 }
 
 export function useTransactions(filters: TransactionFilters = {}) {
-  const qc = useQueryClient();
-  const onDataChanged = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: ["transactions"] });
-  }, [qc]);
-  useSocket("data-changed", onDataChanged);
-
   const params = new URLSearchParams();
   if (filters.type) params.set("type", filters.type);
   if (filters.category) params.set("category", filters.category);
@@ -58,8 +51,7 @@ export function useDeleteTransaction() {
   return useMutation({
     mutationFn: (id: string) => apiClient.delete(`/transactions/${id}`),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["transactions"] });
-      void qc.invalidateQueries({ queryKey: ["accounts"] });
+      invalidateForResource(qc, "transactions");
       toast.success("Transaction deleted");
     },
     onError: (err: Error) => toast.error(err.message),
@@ -72,10 +64,7 @@ export function useCreateTransaction() {
     mutationFn: (data: Record<string, unknown>) =>
       apiClient.post("/transactions", data).then((r) => r.data.data),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["transactions"] });
-      void qc.invalidateQueries({ queryKey: ["accounts"] });
-      void qc.invalidateQueries({ queryKey: ["credit-summary"] });
-      void qc.invalidateQueries({ queryKey: ["credit-statements"] });
+      invalidateForResource(qc, "transactions");
       toast.success("Transaction saved");
     },
     onError: (err: Error) => toast.error(err.message),
