@@ -1,0 +1,45 @@
+name: Bug report
+description: Something is broken or looks wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Add a title above and tell us what is wrong. That is all that is required.** The rest helps, but skip anything you don't know.
+  - type: textarea
+    id: what
+    attributes:
+      label: What is wrong?
+      description: Say what you see, in a sentence or two.
+      placeholder: "Review shows the same payment twice after I confirm it."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can we see it?
+      description: Optional. A few short steps.
+      placeholder: |
+        1. Open Review
+        2. Swipe a payment right
+        3. The list refreshes and it is back
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where?
+      description: Optional.
+      options:
+        - Web app
+        - Android app
+        - API / integrations
+        - Bank message capture
+        - Accounts and transactions
+        - Budgets, goals, loans
+        - Notifications
+        - Sign-in and security
+        - Not sure
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots, errors, device
+      description: Optional. Drop images in. Remove passwords, keys, OTPs and full account numbers first.

@@ -1,0 +1,48 @@
+name: Bank message parsed wrongly
+description: A bank SMS or notification was skipped, queued, or turned into the wrong transaction.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Add a title above and paste the message. That is all that is required.**
+
+        > Hide private parts first: swap names, account numbers and balances for `XXXX`, and never include an OTP. Keep the wording and order of the message exactly as it is.
+  - type: textarea
+    id: message
+    attributes:
+      label: The message
+      description: The whole message, with the sender if you know it (for example VM-HDFCBK).
+      placeholder: |
+        VM-HDFCBK
+        Rs.250.00 debited from A/c XX1234 on 26-09-26 to VPA swiggy@icici. UPI Ref 4269XXXXXXXX
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: What happened?
+      description: Optional.
+      options:
+        - Nothing appeared
+        - Went to Review but should have been automatic
+        - Wrong amount
+        - Debit and credit mixed up
+        - Wrong account
+        - Wrong merchant or name
+        - Added twice
+        - Not a payment, but it was added
+        - Something else
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened?
+      description: Optional. Amount, debit or credit, account, merchant.
+      placeholder: "Debit of 250.00 from HDFC Savings, merchant Swiggy."
+  - type: input
+    id: source
+    attributes:
+      label: Bank and how it arrived
+      description: Optional.
+      placeholder: "HDFC, SMS"
