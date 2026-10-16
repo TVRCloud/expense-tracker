@@ -1,0 +1,40 @@
+name: Task or chore
+description: Internal work with no user-facing change, such as a refactor, dependency update, CI change or cleanup.
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What this achieves and why now.
+      placeholder: "Move the capture parsers behind one interface so each bank format is a small file."
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Plan
+      description: The steps, as a checklist.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: risk
+    attributes:
+      label: Risk and how to check nothing broke
+      description: What could go wrong, and which tests or screens to run.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - Refactor
+        - Dependency or tooling
+        - CI / deploy
+        - Performance
+        - Tests
+        - Documentation
+        - Cleanup
+    validations:
+      required: true

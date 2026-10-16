@@ -1,0 +1,88 @@
+name: Bug report
+description: Something in the web app, the API or the companion app does not work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. A short, specific report gets fixed faster.
+        **Never paste passwords, API keys, OTPs or full account numbers.** Blur them in screenshots.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What is wrong?
+      description: One or two sentences. Say what you see, not what you think the cause is.
+      placeholder: "Review shows the same payment twice after I confirm it."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered, starting from a place anyone can reach (for example "open Activity").
+      placeholder: |
+        1. Open Review
+        2. Swipe a payment right to confirm
+        3. Wait for the list to refresh
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happens instead?
+      description: Include the exact error text if there is one.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where does it happen?
+      options:
+        - Web app
+        - Android companion app
+        - API / integrations
+        - Bank message capture and parsing
+        - Accounts, transactions or balances
+        - Budgets, goals or loans
+        - Notifications / push
+        - Sign-in, security or API keys
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: How bad is it?
+      options:
+        - Blocks me from using the app
+        - Shows or stores wrong money data
+        - Works, but badly or confusingly
+        - Cosmetic
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Where did you see it?
+      description: Browser and version, or phone model, Android version and app version (Settings > About).
+      placeholder: "Pixel 8, Android 15, app 1.0.13"
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshots, recordings or logs
+      description: Drag files in. Remove anything private first.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before sending
+      options:
+        - label: I searched the open issues and this is not already reported.
+          required: true
+        - label: I removed passwords, keys, OTPs and full account numbers from everything above.
+          required: true
