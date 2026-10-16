@@ -21,6 +21,7 @@ import { goalCreateSchema } from "@/features/goals/schemas/goal.schema";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { toast } from "sonner";
+import { invalidateForResource } from "@/lib/realtime/invalidation";
 
 function useGoals() {
   return useQuery<IGoal[]>({
@@ -79,7 +80,7 @@ function GoalEditPanel({ goal, onDone }: { goal: IGoal; onDone: () => void }) {
       roundUpTo: Number(form.roundUpTo),
     }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["goals"] });
+      invalidateForResource(qc, "goals");
       if (form.roundUpEnabled) toast.success("Goal updated — round-up savings now go here (replaces any other goal's round-up)");
       else toast.success("Goal updated");
       onDone();
@@ -188,7 +189,7 @@ export function GoalsClient() {
       return apiClient.post("/goals", parsed.data);
     },
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["goals"] });
+      invalidateForResource(qc, "goals");
       setShowAdd(false);
       setForm(emptyGoalForm);
       toast.success("Goal created");
@@ -199,7 +200,7 @@ export function GoalsClient() {
   const deleteGoal = useMutation({
     mutationFn: (id: string) => apiClient.delete(`/goals/${id}`),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["goals"] });
+      invalidateForResource(qc, "goals");
       toast.success("Goal deleted");
     },
   });
@@ -220,7 +221,7 @@ export function GoalsClient() {
         savedAmount: Math.min(goal.targetAmount, goal.savedAmount + amount),
       }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["goals"] });
+      invalidateForResource(qc, "goals");
       setProgressInputs({});
       toast.success("Goal progress updated");
     },

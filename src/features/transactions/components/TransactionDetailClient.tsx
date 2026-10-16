@@ -19,6 +19,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { DatePickerField } from "@/components/shared/DatePickerField";
 import { ProvenanceCard } from "@/features/reconcile/components/ProvenanceCard";
+import { invalidateForResource } from "@/lib/realtime/invalidation";
 
 interface Props {
   id: string;
@@ -88,10 +89,8 @@ export function TransactionDetailClient({ id }: Props) {
         date: form.date.toISOString(),
       }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["transactions"] });
+      invalidateForResource(qc, "transactions");
       void qc.invalidateQueries({ queryKey: ["transactions", id] });
-      void qc.invalidateQueries({ queryKey: ["credit-summary"] });
-      void qc.invalidateQueries({ queryKey: ["credit-statements"] });
       setEditing(false);
       toast.success("Transaction updated");
     },
@@ -101,10 +100,7 @@ export function TransactionDetailClient({ id }: Props) {
   const deleteTransaction = useMutation({
     mutationFn: () => apiClient.delete(`/transactions/${id}`),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["transactions"] });
-      void qc.invalidateQueries({ queryKey: ["accounts"] });
-      void qc.invalidateQueries({ queryKey: ["credit-summary"] });
-      void qc.invalidateQueries({ queryKey: ["credit-statements"] });
+      invalidateForResource(qc, "transactions");
       toast.success("Transaction deleted");
       router.push("/transactions");
     },
@@ -119,8 +115,7 @@ export function TransactionDetailClient({ id }: Props) {
       }
     },
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["transactions"] });
-      void qc.invalidateQueries({ queryKey: ["accounts"] });
+      invalidateForResource(qc, "transactions");
       toast.success("Split purchase deleted");
       router.push("/transactions");
     },

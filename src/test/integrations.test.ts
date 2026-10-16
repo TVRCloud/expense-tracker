@@ -1495,3 +1495,61 @@ describe("app update routes", () => {
   });
 });
 
+
+// ── GET /api/integrations/changes ──────────────────────────────────────────
+
+describe("GET /api/integrations/changes", () => {
+  const TEST_KEY = "changes-route-api-key";
+  let userId: string;
+
+  function req(query = "", headers: Record<string, string> = { authorization: `Bearer ${TEST_KEY}` }) {
+    return new NextRequest(`http://localhost/api/integrations/changes${query}`, { headers });
+  }
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Changes User", email: "changes@example.com", password: "hash", isActive: true });
+    userId = user._id.toString();
+    await ApiKey.create({ user: user._id, label: "test", keyHash: hashKey(TEST_KEY), lastFour: TEST_KEY.slice(-4) });
+  });
+
+  it("is 401 without a key", async () => {
+    const { GET } = await import("@/app/api/integrations/changes/route");
+    const res = await GET(req("", {}), undefined as never);
+    expect(res.status).toBe(401);
+  });
+
+  it("returns now and no changes without a valid since, uncached", async () => {
+    const { GET } = await import("@/app/api/integrations/changes/route");
+    const before = Date.now();
+    for (const q of ["", "?since=abc"]) {
+      const res = await GET(req(q), undefined as never);
+      const json = await res.json();
+      expect(res.status).toBe(200);
+      expect(res.headers.get("cache-control")).toBe("no-store");
+      expect(json.success).toBe(true);
+      expect(json.data.changed).toEqual([]);
+      expect(json.data.now).toBeGreaterThanOrEqual(before);
+    }
+  });
+
+  it("reports only this user's resources updated after since", async () => {
+    const { default: Goal } = await import("@/models/Goal");
+    const { default: Notification } = await import("@/models/Notification");
+    const { default: User } = await import("@/models/User");
+    const other = await User.create({ name: "Other", email: "other-c@example.com", password: "hash" });
+    const since = Date.now() - 1000;
+    await Goal.create({ user: userId, name: "Trip", targetAmount: 1000 });
+    await Notification.create({ user: other._id, type: "budget_alert", title: "x", body: "y" });
+
+    const { GET } = await import("@/app/api/integrations/changes/route");
+    const json = await (await GET(req(`?since=${since}`), undefined as never)).json();
+    expect(json.data.changed).toEqual(["goals"]);
+
+    const later = await (await GET(req(`?since=${Date.now() + 60_000}`), undefined as never)).json();
+    expect(later.data.changed).toEqual([]);
+  });
+});

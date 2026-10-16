@@ -22,6 +22,7 @@ import { DatePickerField } from "@/components/shared/DatePickerField";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { toast } from "sonner";
+import { invalidateForResource } from "@/lib/realtime/invalidation";
 
 function useLoans(direction?: string) {
   return useQuery<ILoan[]>({
@@ -99,7 +100,7 @@ function LoanEditPanel({ loan, onDone }: { loan: ILoan; onDone: () => void }) {
       externalLoanId: form.externalLoanId || undefined,
     }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["loans"] });
+      invalidateForResource(qc, "loans");
       toast.success("Loan updated");
       onDone();
     },
@@ -186,10 +187,9 @@ function LoanRepaymentsPanel({ loan }: { loan: ILoan }) {
       accountId: accountId || undefined,
     }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["loans"] });
+      invalidateForResource(qc, "loans");
+      invalidateForResource(qc, "transactions");
       void qc.invalidateQueries({ queryKey: ["loans", loan._id, "repayments"] });
-      void qc.invalidateQueries({ queryKey: ["accounts"] });
-      void qc.invalidateQueries({ queryKey: ["transactions"] });
       setAmount("");
       setNote("");
       toast.success("Repayment added");
@@ -282,9 +282,8 @@ export function LoansClient() {
       externalLoanId: form.externalLoanId || undefined,
     }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["loans"] });
-      void qc.invalidateQueries({ queryKey: ["accounts"] });
-      void qc.invalidateQueries({ queryKey: ["transactions"] });
+      invalidateForResource(qc, "loans");
+      invalidateForResource(qc, "transactions");
       setShowAdd(false);
       setForm(createEmptyLoanForm());
       toast.success("Loan recorded");
@@ -295,9 +294,8 @@ export function LoansClient() {
   const deleteLoan = useMutation({
     mutationFn: (id: string) => apiClient.delete(`/loans/${id}`),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["loans"] });
-      void qc.invalidateQueries({ queryKey: ["accounts"] });
-      void qc.invalidateQueries({ queryKey: ["transactions"] });
+      invalidateForResource(qc, "loans");
+      invalidateForResource(qc, "transactions");
       toast.success("Loan deleted");
     },
   });
