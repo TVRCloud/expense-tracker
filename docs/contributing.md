@@ -74,13 +74,12 @@ Must pass before opening a PR.
 
 ## Issues, branches and pull requests
 
-Every change starts as an issue, so the "why" is written down before the code.
+Every change starts as an issue, so the "why" is written down before the code. Keep it short.
 
-1. **Open an issue** with the form that fits (New issue shows them): *Bug report*, *Feature request*, *Task or chore*, or *Bank message parsed wrongly* for capture problems. Blank issues are off on purpose. Report security problems privately through the link on that page, never in a public issue.
+1. **Open an issue** with the form that fits: *Bug report*, *Bank message parsed wrongly*, *Feature request* or *Task or chore*. Only the title and the first box ("What is wrong?", "The message", "What do you need?", "What and why?") are required; everything else is optional, so skip what you don't know. Blank issues are off on purpose. Report security problems privately through the link on the new-issue page, never in a public issue.
 2. **Branch from `main`** named `<issue-number>-<short-slug>`, for example `48-app-update-endpoints`.
-3. **Commit** with the conventional prefixes above (`feat:`, `fix:`, `docs:`, ...). Keep the subject short and say why in the body when it is not obvious.
-4. **Open a pull request** from the branch. The template asks for what changed, why, how to check it, screenshots and rollout notes. Start it with `Closes #<issue>` so merging closes the ticket.
-5. **Rollout items matter.** Tick new environment variables, database changes and API contract changes in the PR, and update the matching doc in the same PR.
+3. **Commit** with the conventional prefixes above (`feat:`, `fix:`, `docs:`, ...).
+4. **Open a pull request.** The template has four short parts: what changed and why, how you checked it, screenshots, and rollout ticks. Start it with `Closes #<issue>` so merging closes the ticket. Delete the parts that don't apply.
+5. **Rollout ticks matter.** New environment variables, database changes and API contract changes belong in the PR, with the matching doc updated in the same PR.
 
 Redact before you paste: no passwords, API keys, OTPs or full account numbers in issues, screenshots or logs.
-

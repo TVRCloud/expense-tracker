@@ -1,0 +1,28 @@
+name: Task or chore
+description: Internal work with no visible change, such as a refactor, dependency, CI or cleanup.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Add a title above and state the goal. That is all that is required.**
+  - type: textarea
+    id: goal
+    attributes:
+      label: What and why?
+      description: One or two sentences.
+      placeholder: "Move each bank's parser into its own file so a new bank is a small change."
+    validations:
+      required: true
+  - type: textarea
+    id: plan
+    attributes:
+      label: Steps
+      description: Optional. A short checklist.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+  - type: textarea
+    id: risk
+    attributes:
+      label: Risks
+      description: Optional. What could break and how to check.
