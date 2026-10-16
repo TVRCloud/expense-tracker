@@ -1,0 +1,44 @@
+name: Feature request
+description: Something new, or a change to how something works.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Add a title above and describe what you need. That is all that is required.**
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you need?
+      description: The problem or the goal, and who is affected.
+      placeholder: "When a bank message is queued I can't tell why without opening it."
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to happen?
+      description: Optional. The result you picture.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where?
+      description: Optional.
+      options:
+        - Web app
+        - Android app
+        - API / integrations
+        - Bank message capture
+        - Accounts and transactions
+        - Budgets, goals, loans
+        - Notifications
+        - Sign-in and security
+        - Docs
+  - type: textarea
+    id: extra
+    attributes:
+      label: Scope, mockups, links
+      description: Optional. What is in, what is out, and anything that helps.
+      placeholder: |
+        In: ...
+        Out: ...
