@@ -1,0 +1,9 @@
+# Shown on the "New issue" page. Blank issues are off so every ticket uses a form.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem (private)
+    url: https://github.com/TVRCloud/expense-tracker/security/advisories/new
+    about: Vulnerabilities, leaked keys or anything that exposes someone's money data. Do not open a public issue.
+  - name: Setup and how-to questions
+    url: https://github.com/TVRCloud/expense-tracker/blob/main/docs/contributing.md
+    about: Read the contributing guide and the docs folder first.

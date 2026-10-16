@@ -1,0 +1,76 @@
+name: Feature request
+description: Something new, or a change to how something works.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem first. The best requests say who is stuck, what they are trying to do, and what "done" looks like.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is the problem?
+      description: Who runs into it, when, and what they do today instead.
+      placeholder: "When a bank SMS is queued I cannot tell why without opening it."
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: What would you like to happen?
+      description: Describe the result. Leave the implementation open unless you have a strong reason.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: In scope
+      description: A short list of what this ticket covers.
+      placeholder: |
+        - ...
+        - ...
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: Related things this ticket should not do, so they can become their own tickets.
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: Checks anyone can run to say it works.
+      placeholder: |
+        - [ ] ...
+        - [ ] Works on the phone and on the web
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Web app
+        - Android companion app
+        - API / integrations
+        - Bank message capture and parsing
+        - Accounts, transactions or balances
+        - Budgets, goals or loans
+        - Notifications / push
+        - Sign-in, security or API keys
+        - Docs
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Other options you considered
+  - type: textarea
+    id: extra
+    attributes:
+      label: Mockups, links or examples
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before sending
+      options:
+        - label: I searched the open issues and this is not already requested.
+          required: true
