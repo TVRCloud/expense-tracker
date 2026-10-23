@@ -2,7 +2,7 @@
 Purpose: API-key surface for n8n and the Android companion app. Contracts: [docs/n8n-integration.md](../../../../docs/n8n-integration.md), [docs/reconcile.md](../../../../docs/reconcile.md), [docs/realtime.md](../../../../docs/realtime.md).
 
 ## Files
-- accounts, summary, home, transactions (+ `[id]`, recurring installments), budgets and goals (+ `[id]` PATCH, DELETE): reads and writes over the shared services.
+- accounts (+ POST, `[id]` PATCH, DELETE), summary, home, transactions (+ `[id]`, recurring installments), budgets and goals (+ `[id]` PATCH, DELETE): reads and writes over the shared services.
 - credit-cards/summary and credit-cards/[accountId]/statements: read-only card dues and statements.
 - captures, sms: bank message ingest (phone app, n8n). review/*: phone review inbox, confirm, correct, resolve, discard, history.
 - events (SSE), changes (`?since=` polling): realtime for the app.
