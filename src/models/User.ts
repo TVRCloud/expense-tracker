@@ -20,6 +20,8 @@ const UserSchema = new Schema(
       pushNotifications: { type: Boolean, default: true },
       emailNotifications: { type: Boolean, default: true },
       weekStartsOn: { type: Number, default: 0 },
+      // IANA zone that decides where a "day" starts for spend limits.
+      timezone: { type: String, default: "Asia/Kolkata" },
       currency: { type: String, default: "INR" },
     },
     passwordResetToken: { type: String },

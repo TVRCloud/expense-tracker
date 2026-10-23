@@ -7,6 +7,7 @@ import CreditStatement from "@/models/CreditStatement";
 import type { AuthUser } from "@/lib/auth-guard";
 import { redis } from "@/lib/redis";
 import { checkBudgetAlert } from "@/lib/budget-alert";
+import { checkSpendLimitAlert } from "@/lib/spend-limit";
 import { applyRoundUp } from "@/lib/goal-service";
 import { computeInstallmentDates, OPEN_ENDED_WINDOW } from "@/lib/recurrence";
 import { appendLedgerBlock } from "@/lib/ledger";
@@ -244,6 +245,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     for (const s of splits) {
       void checkBudgetAlert(userId, s.category, s.amount, startDate);
     }
+    void checkSpendLimitAlert(userId);
     void applyRoundUp(userId, rest.amount, actor).catch((err) =>
       logger.error({ err, userId }, "applyRoundUp failed")
     );
@@ -362,6 +364,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   if (rest.type === "expense") {
     // schema refine guarantees category is set for any non-split expense
     void checkBudgetAlert(userId, rest.category as string, rest.amount, startDate);
+    void checkSpendLimitAlert(userId);
     void applyRoundUp(userId, rest.amount, actor).catch((err) =>
       logger.error({ err, userId }, "applyRoundUp failed")
     );

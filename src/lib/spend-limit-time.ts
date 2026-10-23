@@ -1,0 +1,86 @@
+// Day, week and month boundaries in a user's IANA time zone. A spend limit
+// resets at the user's midnight, not the server's.
+
+export const DEFAULT_TIME_ZONE = "Asia/Kolkata";
+
+export function isValidTimeZone(tz: string) {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+type LocalParts = { year: number; month: number; day: number; hour: number; dayOfWeek: number };
+
+function formatter(timeZone: string) {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+    hourCycle: "h23",
+  });
+}
+
+function localParts(date: Date, timeZone: string): LocalParts & { minute: number; second: number } {
+  const get: Record<string, number> = {};
+  for (const p of formatter(timeZone).formatToParts(date)) {
+    if (p.type !== "literal") get[p.type] = parseInt(p.value, 10);
+  }
+  const dayOfWeek = new Date(Date.UTC(get.year, get.month - 1, get.day)).getUTCDay();
+  return { year: get.year, month: get.month, day: get.day, hour: get.hour, minute: get.minute, second: get.second, dayOfWeek };
+}
+
+// How far the zone is ahead of UTC at this instant, in ms.
+function offsetAt(ms: number, timeZone: string) {
+  const whole = Math.floor(ms / 1000) * 1000;
+  const p = localParts(new Date(whole), timeZone);
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - whole;
+}
+
+// The UTC instant at which the local calendar day y-m-d starts.
+export function localMidnight(timeZone: string, year: number, month: number, day: number) {
+  const wall = Date.UTC(year, month - 1, day);
+  const first = wall - offsetAt(wall, timeZone);
+  return new Date(wall - offsetAt(first, timeZone));
+}
+
+export type DayWindow = {
+  dayStart: Date;
+  dayEnd: Date;
+  weekStart: Date;
+  weekEnd: Date;
+  monthEnd: Date;
+  yesterdayStart: Date;
+  daysLeftInMonth: number; // including today
+  year: number;
+  month: number;
+};
+
+export function dayWindow(now: Date, timeZone: string, weekStartsOn = 0): DayWindow {
+  const tz = isValidTimeZone(timeZone) ? timeZone : DEFAULT_TIME_ZONE;
+  const p = localParts(now, tz);
+  const dayStart = localMidnight(tz, p.year, p.month, p.day);
+  const dayEnd = localMidnight(tz, p.year, p.month, p.day + 1);
+  const back = (p.dayOfWeek - weekStartsOn + 7) % 7;
+  const weekStart = localMidnight(tz, p.year, p.month, p.day - back);
+  const weekEnd = localMidnight(tz, p.year, p.month, p.day - back + 7);
+  const monthEnd = localMidnight(tz, p.year, p.month + 1, 1);
+  const daysInMonth = new Date(Date.UTC(p.year, p.month, 0)).getUTCDate();
+  return {
+    dayStart,
+    dayEnd,
+    weekStart,
+    weekEnd,
+    monthEnd,
+    yesterdayStart: localMidnight(tz, p.year, p.month, p.day - 1),
+    daysLeftInMonth: daysInMonth - p.day + 1,
+    year: p.year,
+    month: p.month,
+  };
+}

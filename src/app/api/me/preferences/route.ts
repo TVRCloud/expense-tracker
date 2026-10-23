@@ -4,6 +4,7 @@ import User from "@/models/User";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
+import { isValidTimeZone } from "@/lib/spend-limit-time";
 
 const schema = z.object({
   theme: z.enum(["light", "dark", "system"]).optional(),
@@ -13,6 +14,10 @@ const schema = z.object({
   emailNotifications: z.boolean().optional(),
   weekStartsOn: z.number().min(0).max(6).optional(),
   currency: z.string().optional(),
+  timezone: z
+    .string()
+    .refine(isValidTimeZone, "Unknown time zone")
+    .optional(),
 });
 
 export async function GET() {
