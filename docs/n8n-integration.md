@@ -65,7 +65,11 @@ Authorization: Bearer <YOUR_API_KEY>
 | GET | `/api/integrations/transactions` | List transactions (filters + pagination) |
 | POST | `/api/integrations/transactions` | Create a transaction |
 | GET | `/api/integrations/budgets` | List budgets with spend |
+| PATCH | `/api/integrations/budgets/[id]` | Edit limitAmount, alertAt, isActive, rollover (needs `Idempotency-Key`) |
+| DELETE | `/api/integrations/budgets/[id]` | Soft delete a budget (needs `Idempotency-Key`) |
 | GET | `/api/integrations/goals` | List goals |
+| PATCH | `/api/integrations/goals/[id]` | Edit a goal; completing it fires `goal_reached` (needs `Idempotency-Key`) |
+| DELETE | `/api/integrations/goals/[id]` | Soft delete a goal (needs `Idempotency-Key`) |
 | GET | `/api/integrations/summary` | Snapshot: accounts, monthly stats, budgets |
 | POST | `/api/integrations/sms` | Parse a bank/NBFC SMS and create a transaction or loan repayment |
 
