@@ -8,7 +8,7 @@ Purpose: server business logic shared by browser routes, integration routes, ser
 - Recurring and reminders: recurrence.ts, recurring-topup.ts, recurring-series.ts (series list, get, cancel; shared by browser and integration routes), reminder-scheduler.ts, emi-notifications.ts, credit-notifications.ts, push.ts.
 - capture/ (ingest, parsers, source priority, account matching), reconcile/ (correct, inbox, http): [docs/reconcile.md](../../docs/reconcile.md).
 - integrations/ (API-key auth, handler, idempotency, rate-limit, response, sms-parser), app-update.ts: [docs/n8n-integration.md](../../docs/n8n-integration.md).
-- realtime/ (changes, sse, invalidation, changed-since): a new resource goes in `RESOURCES`, `MODELS` and `INVALIDATION_MAP`; see [docs/realtime.md](../../docs/realtime.md).
+- realtime/ (changes, sse, invalidation, changed-since): resources: transactions, accounts, budgets, goals, loans, notifications, captures, repayments, statements, spendLimits; a new one goes in `RESOURCES`, `MODELS` and `INVALIDATION_MAP`, see [docs/realtime.md](../../docs/realtime.md).
 - perf/: ttl-cache, session-cache, background (`runInBackground`).
 - Client or UI helpers: api-client.ts, query-client.ts, utils.ts (cents formatting), icons.tsx, category-colors.ts, route-titles.ts, csv.ts, regex.ts.
 

@@ -1568,6 +1568,15 @@ describe("GET /api/integrations/changes", () => {
     const json = await (await GET(req(`?since=${since}`), undefined as never)).json();
     expect(json.data.changed).toEqual(expect.arrayContaining(["repayments", "statements"]));
   });
+
+  it("reports a changed spend limit", async () => {
+    const { default: SpendLimit } = await import("@/models/SpendLimit");
+    const since = Date.now() - 1000;
+    await SpendLimit.create({ user: userId, dailyAmount: 100000 });
+    const { GET } = await import("@/app/api/integrations/changes/route");
+    const json = await (await GET(req(`?since=${since}`), undefined as never)).json();
+    expect(json.data.changed).toContain("spendLimits");
+  });
 });
 
 // ── PATCH and DELETE /api/integrations/{budgets,goals}/[id] ────────────────

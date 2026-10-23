@@ -15,6 +15,10 @@ describe("INVALIDATION_MAP", () => {
     expect(INVALIDATION_MAP.repayments.map((k) => k[0])).toEqual(expect.arrayContaining(["loans", "accounts"]));
     expect(INVALIDATION_MAP.statements.map((k) => k[0])).toEqual(expect.arrayContaining(["credit-statements", "credit-summary"]));
   });
+  it("spend limit changes refresh the limit card, and expenses do too", () => {
+    expect(INVALIDATION_MAP.spendLimits.map((k) => k[0])).toEqual(["spend-limit", "budgets"]);
+    expect(INVALIDATION_MAP.transactions.map((k) => k[0])).toContain("spend-limit");
+  });
   it("captures touch reconcile and notifications", () => {
     expect(INVALIDATION_MAP.captures).toEqual([["reconcile"], ["notifications"]]);
   });
