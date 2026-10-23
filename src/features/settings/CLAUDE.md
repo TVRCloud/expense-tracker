@@ -6,6 +6,7 @@ Purpose: profile, preferences, appearance, notifications, security, API keys, pr
 - components/SettingsSubpages.tsx: every `/settings/*` subpage and its fields.
 - components/AccountClient.tsx, ProfileCard.tsx, BalanceBanner.tsx: `/account` page pieces.
 - components/ApiKeysSection.tsx: mint and revoke keys; raw key shown once.
+- timezones.ts: IANA zone list for the Time zone picker in Currency & Region (same `isValidTimeZone` check as the server).
 - hooks/useProfile.ts (`["me"]`), useApiKeys.ts (`["api-keys"]`), usePushNotification.ts (`["push-status"]`).
 
 ## Talks to
@@ -15,10 +16,11 @@ Purpose: profile, preferences, appearance, notifications, security, API keys, pr
 ## Rules and gotchas
 - Creating a key needs the password again; the raw key is returned once ([docs/n8n-integration.md](../../../docs/n8n-integration.md)).
 - `DELETE /api/me` soft-deletes: email is tombstoned and sessions end.
+- `preferences.timezone` sets where a day starts for spend limits (default `Asia/Kolkata`); the server rejects an unknown zone.
 - Updating the profile updates the cache so `useCurrency()` reflects the change at once.
 
 ## Tests
-- `src/test/integrations.test.ts` (`/api/me/api-keys`).
+- `src/test/integrations.test.ts` (`/api/me/api-keys`, time zone preference); `timezones.test.ts`.
 
 ## Last changed
 - 10a7ed0 feat(ui): Apple-style redesign with full-width responsive layouts

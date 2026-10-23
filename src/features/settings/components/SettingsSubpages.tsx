@@ -20,6 +20,8 @@ import { useChangePassword, useProfile, useUpdatePreferences, useUpdateProfile }
 import { useGlassIntensity } from "@/components/providers/GlassIntensityProvider";
 import { usePushNotification, type PushStatus } from "@/features/settings/hooks/usePushNotification";
 import { parseDeviceLabel } from "@/lib/device-label";
+import { DEFAULT_TIME_ZONE } from "@/lib/spend-limit-time";
+import { timeZoneOptions } from "@/features/settings/timezones";
 import { ApiKeysFields } from "./ApiKeysSection";
 import { FieldLabel, FormBlock, Group, Row, Segmented } from "./SettingsUi";
 
@@ -184,6 +186,7 @@ export function PreferencesFields() {
   const updatePreferences = useUpdatePreferences();
   const currency = profile?.preferences?.currency ?? "INR";
   const weekStart = String(profile?.preferences?.weekStartsOn ?? 1);
+  const timezone = profile?.preferences?.timezone ?? DEFAULT_TIME_ZONE;
 
   if (isLoading) return <Skeleton className="h-56 rounded-(--r-md)" />;
 
@@ -229,6 +232,22 @@ export function PreferencesFields() {
                 <SelectItem value="0">Sunday</SelectItem>
                 <SelectItem value="1">Monday</SelectItem>
                 <SelectItem value="6">Saturday</SelectItem>
+              </SelectContent>
+            </Select>
+          }
+        />
+        <Row
+          title="Time zone"
+          description="Where a day starts for your spend limit."
+          trailing={
+            <Select value={timezone} onValueChange={(v) => updatePreferences.mutate({ timezone: v })}>
+              <SelectTrigger className="h-10 w-56 text-sm font-medium" aria-label="Time zone">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="max-h-72">
+                {timeZoneOptions(timezone).map((z) => (
+                  <SelectItem key={z} value={z}>{z}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
           }

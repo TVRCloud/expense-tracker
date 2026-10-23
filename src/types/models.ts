@@ -34,6 +34,8 @@ export interface UserPreferences {
   emailNotifications: boolean;
   weekStartsOn: 0 | 1;
   currency: string;
+  /** IANA zone; decides where a day starts for spend limits. */
+  timezone?: string;
 }
 
 export interface IUser {

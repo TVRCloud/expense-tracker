@@ -16,3 +16,9 @@ export const budgetCreateSchema = z.object({
 });
 
 export type BudgetCreateInput = z.infer<typeof budgetCreateSchema>;
+
+// Categories offered when creating a budget or excluding spend from a limit.
+export const BUDGET_CATEGORIES = [
+  "groceries","transport","rent","health","shopping","coffee","education",
+  "entertainment","gym","travel","subscription","other",
+] as const;

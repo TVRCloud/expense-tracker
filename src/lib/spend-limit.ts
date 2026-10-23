@@ -1,5 +1,4 @@
 import { Types } from "mongoose";
-import { z } from "zod";
 import connectDB from "@/lib/mongodb";
 import SpendLimit from "@/models/SpendLimit";
 import Transaction from "@/models/Transaction";
@@ -8,6 +7,12 @@ import User from "@/models/User";
 import logger from "@/lib/logger";
 import { sendPushToUser } from "@/lib/push";
 import { listBudgetsWithSpend } from "@/lib/budget-service";
+import {
+  spendLimitUpdateSchema,
+  type LimitBar,
+  type SpendLimitStatus,
+  type SpendLimitUpdate,
+} from "@/features/budgets/schemas/spend-limit.schema";
 import { dayWindow, DEFAULT_TIME_ZONE, isValidTimeZone, localHour } from "@/lib/spend-limit-time";
 
 // Daily and weekly spend limits. "Spend" is expenses only: transfers are a
@@ -15,18 +20,7 @@ import { dayWindow, DEFAULT_TIME_ZONE, isValidTimeZone, localHour } from "@/lib/
 // left out because they are planned and shown separately, and categories the
 // user excluded are skipped. Limits are soft: they warn, they never block.
 
-export const spendLimitUpdateSchema = z.object({
-  // null clears the limit.
-  dailyAmount: z.number().int().positive().nullable().optional(),
-  weeklyAmount: z.number().int().positive().nullable().optional(),
-  alertAt: z.number().int().min(1).max(100).optional(),
-  excludeCategories: z.array(z.string().min(1).max(60)).max(50).optional(),
-  rollover: z.boolean().optional(),
-  // null resumes the limit now.
-  pausedUntil: z.string().datetime().nullable().optional(),
-});
-
-export type SpendLimitUpdate = z.infer<typeof spendLimitUpdateSchema>;
+export { spendLimitUpdateSchema, type SpendLimitUpdate, type LimitBar, type SpendLimitStatus };
 
 type SpendLimitDoc = {
   dailyAmount?: number;
@@ -35,26 +29,6 @@ type SpendLimitDoc = {
   excludeCategories: string[];
   rollover: boolean;
   pausedUntil?: Date;
-};
-
-export type LimitBar = { spent: number; limit: number | null; left: number | null; percent: number | null };
-
-export type SpendLimitStatus = {
-  settings: {
-    dailyAmount: number | null;
-    weeklyAmount: number | null;
-    alertAt: number;
-    excludeCategories: string[];
-    rollover: boolean;
-    pausedUntil: string | null;
-  };
-  timezone: string;
-  paused: boolean;
-  today: LimitBar;
-  week: LimitBar;
-  // What is safe to spend each remaining day this month after budgets and
-  // upcoming recurring bills. Null when the user has no monthly budget.
-  safeToSpend: number | null;
 };
 
 function bar(spent: number, limit: number | null): LimitBar {
