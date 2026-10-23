@@ -1,0 +1,30 @@
+# src/lib
+Purpose: server business logic shared by browser routes, integration routes, server.ts timers and pages; plus a few client helpers. Overview: [docs/architecture.md](../../docs/architecture.md).
+
+## Files
+- Core: mongodb.ts (cached connection), redis.ts (optional), config.ts (env getters), logger.ts (pino), crypto.ts (AES-256-GCM field encryption).
+- Auth: auth-options.ts, auth-guard.ts (`requireAuth`), cron-auth.ts, security-rate-limit.ts, log-security.ts, log-auth-request.ts, device-label.ts, email.ts.
+- Money services: transaction-service.ts, transaction-query.ts, transaction-activity.ts, stats-service.ts, budget-service.ts, budget-alert.ts, goal-service.ts, loan-service.ts, credit-card.ts, credit-balance.ts, ledger.ts.
+- Recurring and reminders: recurrence.ts, recurring-topup.ts, reminder-scheduler.ts, emi-notifications.ts, credit-notifications.ts, push.ts.
+- capture/ (ingest, parsers, source priority, account matching), reconcile/ (correct, inbox, http): [docs/reconcile.md](../../docs/reconcile.md).
+- integrations/ (API-key auth, handler, idempotency, rate-limit, response, sms-parser), app-update.ts: [docs/n8n-integration.md](../../docs/n8n-integration.md).
+- realtime/ (changes, sse, invalidation, changed-since): [docs/realtime.md](../../docs/realtime.md).
+- perf/: ttl-cache, session-cache, background (`runInBackground`).
+- Client or UI helpers: api-client.ts, query-client.ts, utils.ts (cents formatting), icons.tsx, category-colors.ts, route-titles.ts, csv.ts, regex.ts.
+
+## Talks to
+- Models in src/models. Callers: src/app/api, src/app pages, server.ts, scripts/.
+
+## Rules and gotchas
+- Put logic here, not in routes. transaction-service, loan-service, goal-service, budget-service and stats-service exist so web and integration routes cannot drift.
+- No mongoose sessions anywhere; multi-step writes are sequential.
+- `appendLedgerBlock` (ledger.ts) writes a per-user hash chain (`sequence`, `previousHash`, `hash`); concurrent appends retry up to 25 times on the unique {user, sequence} index.
+- Redis and the TTL caches are optional or per instance; code must work without them.
+- capture/ingest.ts reads `CAPTURE_ENCRYPTION_KEY`; log-security.ts reads `TOTP_ENCRYPTION_KEY`.
+- integrations/sms-parser.ts (`parseBankSms`) has no importer in src, scripts or server.ts; ingest uses `parseCapture` from capture/parsers.
+
+## Tests
+- `src/test/integrations.test.ts`, `src/lib/realtime/*.test.ts`.
+
+## Last changed
+- e19229d feat(realtime): live updates for every screen and an app event channel

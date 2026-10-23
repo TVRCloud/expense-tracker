@@ -16,3 +16,16 @@ When creating or editing an issue or PR in this repo, follow the forms in `.gith
 - **Redact first.** Never put passwords, API keys, OTPs, full account or card numbers, or real balances in a ticket, PR, screenshot or log. Raw bank messages are redacted to `XXXX`.
 - Security problems go through GitHub's private vulnerability reporting, never a public issue.
 - The global rule still applies: no Claude attribution in commits, issues or PRs.
+
+## Docs and feature context
+
+Read `docs/feature-map.md` first, then the `CLAUDE.md` in the feature dir you will touch, before opening code. The index of all docs is `docs/README.md`; past decisions are in `docs/adr/`.
+
+@docs/feature-map.md
+
+- **Feature dirs with a `CLAUDE.md`:** `src/features/<name>/`, the main `src/app/api/<area>/` dirs, `src/lib`, `src/models`, `worker`.
+- **On every edit in one of those dirs**, update that dir's `CLAUDE.md` and the matching row in `docs/feature-map.md` in the same change.
+- **A new feature dir** needs a `CLAUDE.md` (template: Purpose, Files, Talks to, Rules and gotchas, Tests, Last changed; max about 30 lines) and a feature-map row.
+- **Check before a PR:** `bash scripts/check-feature-docs.sh` (default base `origin/main`).
+- **Commands** (from `package.json`): `yarn lint`, `yarn typecheck`, `yarn test` (Vitest), `yarn build`, `yarn dev`. There is one test package, run from the repo root.
+- Only write Next.js facts that you read in this repo or in `node_modules/next/dist/docs/` (see AGENTS.md).

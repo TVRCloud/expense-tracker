@@ -121,6 +121,8 @@ See [docs/architecture.md](docs/architecture.md) for full details.
 
 ## Documentation
 
+Start at [docs/README.md](docs/README.md): index of every doc, reading order, feature map and ADRs.
+
 - [Architecture](docs/architecture.md)
 - [Database Schema](docs/database-schema.md)
 - [API Contracts](docs/api-contracts.md)

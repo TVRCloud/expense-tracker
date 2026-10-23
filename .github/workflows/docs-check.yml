@@ -1,0 +1,18 @@
+# Fails a PR that changes files in a feature dir without updating that dir's CLAUDE.md.
+name: Docs check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  feature-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: bash scripts/check-feature-docs.sh "origin/${{ github.base_ref }}"

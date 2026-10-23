@@ -16,3 +16,8 @@ Closes #
 - [ ] Database change or backfill:
 - [ ] API contract changed (docs updated)
 - [ ] Mobile app needs a matching release
+
+## Checklist
+- [ ] `yarn lint` passes
+- [ ] `yarn test` passes
+- [ ] Updated the feature CLAUDE.md and docs/feature-map.md if files or purpose changed

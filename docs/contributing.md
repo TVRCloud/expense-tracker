@@ -83,3 +83,15 @@ Every change starts as an issue, so the "why" is written down before the code. K
 5. **Rollout ticks matter.** New environment variables, database changes and API contract changes belong in the PR, with the matching doc updated in the same PR.
 
 Redact before you paste: no passwords, API keys, OTPs or full account numbers in issues, screenshots or logs.
+
+## Documentation
+
+Docs are part of the change, not a follow-up. Start from [docs/README.md](README.md).
+
+- **Feature `CLAUDE.md`:** every `src/features/<name>/` dir, the main `src/app/api/<area>/` dirs, `src/lib`, `src/models` and `worker` have a `CLAUDE.md` (purpose, files, what it talks to, rules, tests). If you change files or behaviour in one of these dirs, update its `CLAUDE.md` in the same PR. A new feature dir needs one before merge.
+- **Feature map:** update the matching row in [feature-map.md](feature-map.md) when pages, routes, models or purpose change.
+- **Check:** `bash scripts/check-feature-docs.sh [base]` (default base `origin/main`) lists dirs whose `CLAUDE.md` was not touched. Run it before opening a PR.
+- **Decisions:** record a hard-to-undo or cross-feature choice as an ADR in [adr/](adr/README.md). Do not edit an accepted ADR; supersede it.
+- **Contracts:** API or schema changes also update [api-contracts.md](api-contracts.md), [n8n-integration.md](n8n-integration.md) or [database-schema.md](database-schema.md), as the PR template's rollout ticks remind you.
+- **Changelog:** add a short line under `Unreleased` in [../CHANGELOG.md](../CHANGELOG.md) for changes people would notice.
+- **Issues and PRs:** use the forms in `.github/ISSUE_TEMPLATE/` and `.github/PULL_REQUEST_TEMPLATE.md` (rules above).
