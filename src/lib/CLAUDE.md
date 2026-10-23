@@ -17,6 +17,7 @@ Purpose: server business logic shared by browser routes, integration routes, ser
 
 ## Rules and gotchas
 - budget-service and goal-service own create, update and soft delete; the browser `[id]` routes and the integration `[id]` routes both call them.
+- loan-service owns loan create, update, delete and repayments; the browser and integration loan routes both call it.
 - Put logic here, not in routes. transaction-service, loan-service, goal-service, budget-service and stats-service exist so web and integration routes cannot drift.
 - No mongoose sessions anywhere; multi-step writes are sequential.
 - `appendLedgerBlock` (ledger.ts) writes a per-user hash chain (`sequence`, `previousHash`, `hash`); concurrent appends retry up to 25 times on the unique {user, sequence} index.
