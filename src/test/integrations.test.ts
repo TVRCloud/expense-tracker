@@ -1976,3 +1976,138 @@ describe("integration account create, edit and archive", () => {
     expect((await DELETE(req(`accounts/${theirs}`, "DELETE"), ctx(theirs))).status).toBe(404);
   });
 });
+
+// ── GET and DELETE /api/integrations/transactions/recurring ────────────────
+
+describe("integration recurring series", () => {
+  const KEY = "test-recurring-api-key";
+  let userId: string;
+  let accountId: string;
+  let actor: { id: string; name: string; email: string; role: string };
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Rec User", email: `rec${Date.now()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    const account = await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 100000, currency: "INR" });
+    userId = user._id.toString();
+    accountId = account._id.toString();
+    actor = { id: userId, name: user.name, email: user.email, role: "user" };
+  });
+
+  function req(path: string, method: "GET" | "DELETE" = "GET", headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/transactions/recurring${path}`, {
+      method,
+      headers: { authorization: `Bearer ${KEY}`, ...(method === "DELETE" ? { "idempotency-key": `rec-key-${n}` } : {}), ...headers },
+    });
+  }
+  const ctx = (recurringId: string) => ({ params: Promise.resolve({ recurringId }) });
+
+  async function makeSeries(count = 3) {
+    const { createTransaction } = await import("@/lib/transaction-service");
+    const { default: Transaction } = await import("@/models/Transaction");
+    await createTransaction({
+      userId,
+      actor,
+      accountId,
+      type: "expense",
+      amount: 2000,
+      currency: "INR",
+      category: "Rent",
+      tags: [],
+      isRecurring: true,
+      recurrenceFrequency: "monthly",
+      recurrenceCount: count,
+      recurrenceLabel: "Rent",
+      date: new Date().toISOString(),
+    });
+    const first = await Transaction.findOne({ user: userId, recurringId: { $exists: true } }).lean<{ recurringId: unknown }>();
+    return String(first!.recurringId);
+  }
+
+  it("GET lists one row per series with counts and the next due date", async () => {
+    const { GET } = await import("@/app/api/integrations/transactions/recurring/route");
+    await makeSeries(3);
+    const res = await GET(req(""), {});
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json.data).toHaveLength(1);
+    expect(json.data[0]).toMatchObject({ label: "Rent", amount: 2000, count: 3, paidCount: 0, remainingCount: 3, frequency: "monthly" });
+  });
+
+  it("GET is scoped to the caller and honours accountId", async () => {
+    const { GET } = await import("@/app/api/integrations/transactions/recurring/route");
+    await makeSeries(2);
+    const none = await (await GET(req("?accountId=64f000000000000000000000"), {})).json();
+    expect(none.data).toEqual([]);
+    expect((await GET(req("?accountId=nope"), {})).status).toBe(400);
+
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { default: User } = await import("@/models/User");
+    const other = await User.create({ name: "O", email: `o${Date.now()}@x.com`, password: "hash", isActive: true });
+    await Transaction.updateMany({}, { $set: { user: other._id } });
+    expect((await (await GET(req(""), {})).json()).data).toEqual([]);
+  });
+
+  it("GET ?upcoming returns only unpaid installments due within 7 days", async () => {
+    const { GET } = await import("@/app/api/integrations/transactions/recurring/route");
+    await makeSeries(3);
+    const json = await (await GET(req("?upcoming=5"), {})).json();
+    expect(json.data).toHaveLength(1);
+    expect(json.data[0].installmentIndex).toBe(0);
+  });
+
+  it("GET [recurringId] returns installments and a summary, 404 for an unknown series, 400 for a bad id", async () => {
+    const { GET } = await import("@/app/api/integrations/transactions/recurring/[recurringId]/route");
+    const id = await makeSeries(3);
+    const res = await GET(req(`/${id}`), ctx(id));
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json.data.installments).toHaveLength(3);
+    expect(json.data.series).toMatchObject({ recurringId: id, count: 3, paidCount: 0, remainingAmount: 6000, accountId });
+    expect((await GET(req("/64f000000000000000000000"), ctx("64f000000000000000000000"))).status).toBe(404);
+    expect((await GET(req("/nope"), ctx("nope"))).status).toBe(400);
+  });
+
+  it("DELETE cancels unpaid installments, keeps paid ones and replays on the same key", async () => {
+    const { DELETE } = await import("@/app/api/integrations/transactions/recurring/[recurringId]/route");
+    const { setInstallmentStatus } = await import("@/lib/transaction-service");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { default: Account } = await import("@/models/Account");
+    const id = await makeSeries(3);
+    const firstRow = await Transaction.findOne({ recurringId: id, installmentIndex: 0 }).lean<{ _id: unknown }>();
+    await setInstallmentStatus(userId, id, String(firstRow!._id), "paid", actor);
+
+    const first = await DELETE(req(`/${id}`, "DELETE", { "idempotency-key": "same" }), ctx(id));
+    const firstJson = await first.json();
+    expect(first.status).toBe(200);
+    expect(firstJson.data).toEqual({ recurringId: id, deletedCount: 2 });
+    expect(await Transaction.countDocuments({ recurringId: id, isDeleted: { $ne: true } })).toBe(1);
+    expect(await Transaction.countDocuments({ recurringId: id, recurrenceCancelled: true })).toBe(3);
+    expect((await Account.findById(accountId))!.balance).toBe(-2000);
+
+    const replay = await DELETE(req(`/${id}`, "DELETE", { "idempotency-key": "same" }), ctx(id));
+    expect((await replay.json()).data.deletedCount).toBe(2);
+
+    const again = await DELETE(req(`/${id}`, "DELETE"), ctx(id));
+    expect((await again.json()).data.deletedCount).toBe(0);
+  });
+
+  it("DELETE needs an Idempotency-Key and a valid id, and rejects a bad API key", async () => {
+    const { DELETE } = await import("@/app/api/integrations/transactions/recurring/[recurringId]/route");
+    const id = await makeSeries(2);
+    const noKey = new NextRequest(`http://localhost/api/integrations/transactions/recurring/${id}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${KEY}` },
+    });
+    expect((await DELETE(noKey, ctx(id))).status).toBe(400);
+    expect((await DELETE(req("/nope", "DELETE"), ctx("nope"))).status).toBe(400);
+    expect((await DELETE(req(`/${id}`, "DELETE", { authorization: "Bearer wrong" }), ctx(id))).status).toBe(401);
+  });
+});

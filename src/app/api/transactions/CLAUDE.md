@@ -5,7 +5,7 @@ Purpose: browser CRUD, stats, recurring series and reconcile actions for transac
 - route.ts: list (`GET`, filters, `?format=csv`, `?splitGroupId=`) and create.
 - [id]/route.ts: get, patch, delete. [id]/confirm, [id]/corrections: reconcile actions.
 - stats, stats/range: month totals and multi-month totals.
-- recurring/*: series list (`?upcoming=`), series get and delete, installment status patch.
+- recurring/*: series list (`?upcoming=`), series get and delete, installment status patch (list, get and cancel logic is in `src/lib/recurring-series.ts`).
 
 ## Talks to
 - Libs: transaction-service (create/update), transaction-query (list), stats-service, ledger, reconcile/correct and inbox, emi-notifications, csv, redis.

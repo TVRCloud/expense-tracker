@@ -66,7 +66,10 @@ Authorization: Bearer <YOUR_API_KEY>
 | PATCH | `/api/integrations/accounts/[id]` | Edit name, color, icon, creditMeta, smsLastFour, isArchived. No balance field (needs `Idempotency-Key`) |
 | DELETE | `/api/integrations/accounts/[id]` | Archive an account, returns `{id, archived: true}` (needs `Idempotency-Key`) |
 | GET | `/api/integrations/transactions` | List transactions (filters + pagination) |
-| POST | `/api/integrations/transactions` | Create a transaction |
+| POST | `/api/integrations/transactions` | Create a transaction (with recurrence fields it creates a series) |
+| GET | `/api/integrations/transactions/recurring` | Recurring series, or `?upcoming=N` for unpaid installments due in 7 days |
+| GET | `/api/integrations/transactions/recurring/[recurringId]` | Installments and summary of one series |
+| DELETE | `/api/integrations/transactions/recurring/[recurringId]` | Cancel unpaid installments (needs `Idempotency-Key`) |
 | GET | `/api/integrations/budgets` | List budgets with spend |
 | PATCH | `/api/integrations/budgets/[id]` | Edit limitAmount, alertAt, isActive, rollover (needs `Idempotency-Key`) |
 | DELETE | `/api/integrations/budgets/[id]` | Soft delete a budget (needs `Idempotency-Key`) |
