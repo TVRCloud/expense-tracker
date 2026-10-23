@@ -2111,3 +2111,160 @@ describe("integration recurring series", () => {
     expect((await DELETE(req(`/${id}`, "DELETE", { authorization: "Bearer wrong" }), ctx(id))).status).toBe(401);
   });
 });
+
+// ── /api/integrations/stats and /api/integrations/notifications ────────────
+
+describe("integration stats and notifications", () => {
+  const KEY = "test-stats-notif-api-key";
+  let userId: string;
+  let otherUserId: string;
+  let accountId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { default: Account } = await import("@/models/Account");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "SN User", email: `sn${Date.now()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `sno${Date.now()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    const account = await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 0, currency: "INR" });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+    accountId = account._id.toString();
+  });
+
+  function req(path: string, method = "GET", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${KEY}`,
+        "content-type": "application/json",
+        ...(method === "GET" ? {} : { "idempotency-key": `sn-key-${n}` }),
+        ...headers,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+  const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+
+  async function addTxn(type: "income" | "expense", amount: number, category: string, date: Date, extra: Record<string, unknown> = {}) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    return Transaction.create({ user: userId, account: accountId, type, amount, currency: "INR", category, date, ...extra });
+  }
+  async function addNotification(user: string, over: Record<string, unknown> = {}) {
+    const { default: Notification } = await import("@/models/Notification");
+    return Notification.create({ user, type: "system", title: "Hi", body: "There", ...over });
+  }
+
+  it("GET stats returns the same numbers as getMonthlyStats, plus a daily series", async () => {
+    const { GET } = await import("@/app/api/integrations/stats/route");
+    const { getMonthlyStats } = await import("@/lib/stats-service");
+    await addTxn("income", 500000, "salary", new Date(2026, 9, 1, 12));
+    await addTxn("expense", 20000, "food", new Date(2026, 9, 3, 12));
+    await addTxn("expense", 30000, "food", new Date(2026, 9, 3, 18));
+    await addTxn("expense", 10000, "travel", new Date(2026, 9, 20, 12));
+    await addTxn("expense", 99999, "food", new Date(2026, 8, 30, 12)); // other month
+
+    const res = await GET(req("stats?month=10&year=2026"), undefined as never);
+    const json = await res.json();
+    const expected = await getMonthlyStats(userId, 2026, 10);
+    expect(res.status).toBe(200);
+    expect(json.data).toMatchObject({ month: 10, year: 2026, ...expected });
+    expect(json.data.income).toBe(500000);
+    expect(json.data.expense).toBe(60000);
+    expect(json.data.byCategory[0]).toEqual({ category: "food", total: 50000 });
+    expect(json.data.daily).toHaveLength(31);
+    expect(json.data.daily[2]).toEqual({ day: 3, income: 0, expense: 50000 });
+    expect(json.data.daily.reduce((s: number, d: { expense: number }) => s + d.expense, 0)).toBe(60000);
+    expect(json.data.history).toBeUndefined();
+  });
+
+  it("GET stats history matches the web range route and ignores other users and unpaid installments", async () => {
+    const { GET } = await import("@/app/api/integrations/stats/route");
+    const { GET: RANGE } = await import("@/app/api/transactions/stats/range/route");
+    const { default: Transaction } = await import("@/models/Transaction");
+    await addTxn("expense", 1000, "food", new Date(2026, 8, 5, 12));
+    await addTxn("expense", 2000, "food", new Date(2026, 9, 5, 12));
+    await Transaction.create({ user: otherUserId, account: accountId, type: "expense", amount: 777, currency: "INR", category: "food", date: new Date(2026, 9, 5, 12) });
+    await addTxn("expense", 5000, "rent", new Date(2026, 9, 6, 12), { recurringId: new mongoose.Types.ObjectId(), installmentStatus: "upcoming" });
+
+    const res = await GET(req("stats?month=10&year=2026&months=2026-9,2026-10"), undefined as never);
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json.data.history.map((h: { month: number }) => h.month)).toEqual([9, 10]);
+    expect(json.data.history[0].stats.expense).toBe(1000);
+    expect(json.data.history[1].stats.expense).toBe(2000);
+
+    sessionUser.current = { id: userId, name: "SN User", email: "x@x.com", role: "user" };
+    const web = await RANGE(new NextRequest("http://localhost/api/transactions/stats/range?months=2026-9,2026-10"));
+    expect((await web.json()).data).toEqual(json.data.history);
+    sessionUser.current = null;
+  });
+
+  it("GET stats rejects bad month, bad months and a bad key", async () => {
+    const { GET } = await import("@/app/api/integrations/stats/route");
+    expect((await GET(req("stats?month=13&year=2026"), undefined as never)).status).toBe(400);
+    expect((await GET(req("stats?month=1&year=2026&months=nope"), undefined as never)).status).toBe(400);
+    expect((await GET(req("stats", "GET", undefined, { authorization: "Bearer wrong" }), undefined as never)).status).toBe(401);
+  });
+
+  it("GET notifications lists newest first with unread count, filters unread and caps the limit", async () => {
+    const { GET } = await import("@/app/api/integrations/notifications/route");
+    await addNotification(userId, { title: "old", isRead: true, createdAt: new Date(Date.now() - 60_000) });
+    await addNotification(userId, { title: "new" });
+    await addNotification(otherUserId, { title: "not mine" });
+
+    const all = await (await GET(req("notifications"), undefined as never)).json();
+    expect(all.data.items.map((i: { title: string }) => i.title)).toEqual(["new", "old"]);
+    expect(all.data.total).toBe(2);
+    expect(all.data.unreadCount).toBe(1);
+
+    const unread = await (await GET(req("notifications?unread=true"), undefined as never)).json();
+    expect(unread.data.items.map((i: { title: string }) => i.title)).toEqual(["new"]);
+
+    const capped = await (await GET(req("notifications?limit=500"), undefined as never)).json();
+    expect(capped.data.limit).toBe(50);
+  });
+
+  it("PATCH notification marks read and unread, replays on the same key, and is 404 for another user's", async () => {
+    const { PATCH } = await import("@/app/api/integrations/notifications/[id]/route");
+    const mine = (await addNotification(userId))._id.toString();
+    const theirs = (await addNotification(otherUserId))._id.toString();
+
+    const read = await PATCH(req(`notifications/${mine}`, "PATCH", {}, { "idempotency-key": "same" }), ctx(mine));
+    expect(read.status).toBe(200);
+    expect((await read.json()).data.isRead).toBe(true);
+    const replay = await PATCH(req(`notifications/${mine}`, "PATCH", {}, { "idempotency-key": "same" }), ctx(mine));
+    expect(replay.status).toBe(200);
+
+    const unread = await PATCH(req(`notifications/${mine}`, "PATCH", { isRead: false }), ctx(mine));
+    expect((await unread.json()).data.isRead).toBe(false);
+
+    expect((await PATCH(req(`notifications/${theirs}`, "PATCH", {}), ctx(theirs))).status).toBe(404);
+    expect((await PATCH(req("notifications/nope", "PATCH", {}), ctx("nope"))).status).toBe(400);
+    expect((await PATCH(req(`notifications/${mine}`, "PATCH", { isRead: "yes" }), ctx(mine))).status).toBe(400);
+  });
+
+  it("POST read-all marks only this user's notifications read and needs an Idempotency-Key", async () => {
+    const { POST } = await import("@/app/api/integrations/notifications/read-all/route");
+    const { default: Notification } = await import("@/models/Notification");
+    await addNotification(userId);
+    await addNotification(userId);
+    await addNotification(otherUserId);
+
+    const noKey = new NextRequest("http://localhost/api/integrations/notifications/read-all", {
+      method: "POST",
+      headers: { authorization: `Bearer ${KEY}` },
+    });
+    expect((await POST(noKey, undefined as never)).status).toBe(400);
+
+    const res = await POST(req("notifications/read-all", "POST"), undefined as never);
+    expect(res.status).toBe(200);
+    expect(await Notification.countDocuments({ user: userId, isRead: false })).toBe(0);
+    expect(await Notification.countDocuments({ user: otherUserId, isRead: false })).toBe(1);
+  });
+});
