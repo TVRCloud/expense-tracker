@@ -4,6 +4,7 @@ import { withIntegrationRoute } from "@/lib/integrations/handler";
 import { integrationOk } from "@/lib/integrations/response";
 import { getMonthlyStats } from "@/lib/stats-service";
 import { listBudgetsWithSpend } from "@/lib/budget-service";
+import { getSpendLimitStatusIfConfigured } from "@/lib/spend-limit";
 
 // GET /api/integrations/summary — an automation-oriented snapshot combining
 // account balances, this month's income/expense (via the same cached
@@ -16,12 +17,13 @@ export const GET = withIntegrationRoute("summary", async ({ req, user, requestId
   const year = parseInt(searchParams.get("year") ?? String(now.getFullYear()), 10);
 
   await connectDB();
-  const [accounts, stats, budgets] = await Promise.all([
+  const [accounts, stats, budgets, spendLimit] = await Promise.all([
     Account.find({ user: user.id, isArchived: false })
       .select("_id name type balance currency")
       .lean(),
     getMonthlyStats(user.id, year, month),
     listBudgetsWithSpend(user.id, year, month),
+    getSpendLimitStatusIfConfigured(user.id),
   ]);
 
   return integrationOk(
@@ -32,6 +34,8 @@ export const GET = withIntegrationRoute("summary", async ({ req, user, requestId
       accounts,
       stats,
       budgets,
+      // Null until the user sets a daily or weekly limit.
+      spendLimit,
     },
     requestId
   );

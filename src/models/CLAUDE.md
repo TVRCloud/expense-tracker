@@ -4,7 +4,7 @@ Purpose: Mongoose schemas, one file per collection. Field tables: [docs/database
 ## Files
 - User, Session (collection `userSession`), ApiKey: identity and access.
 - Account, Transaction, TransactionCorrection, CreditStatement: money records and corrections.
-- Budget, Goal, Loan, Repayment, Notification, PushSubscription: feature data.
+- Budget, SpendLimit (one doc per user: daily and weekly limit), Goal, Loan, Repayment, Notification, PushSubscription: feature data.
 - CapturedMessage, IdempotencyRecord: bank message inbox; integration idempotency.
 - LedgerBlock, LedgerBackfill, LogSecurity, LogUnlockSession, SecurityRateLimit: ledger chain, logs unlock, rate limits.
 - Shared TypeScript shapes live in src/types/models.ts.

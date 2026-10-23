@@ -73,6 +73,13 @@ All monetary amounts are in **cents** (integers).
 }
 ```
 
+## Spend limit
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/spend-limit` | Daily and weekly limits, today and week progress, safe to spend |
+| PUT | `/api/spend-limit` | Change limits. Send only what changes; `null` clears a limit or resumes a pause |
+
 ## Budgets
 
 | Method | Path | Description |

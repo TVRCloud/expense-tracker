@@ -3,7 +3,7 @@ Purpose: the signed-in user's profile, password, preferences, export and API key
 
 ## Files
 - route.ts: get and patch profile; `DELETE` soft-deletes the account.
-- password/route.ts, preferences/route.ts, export/route.ts (JSON file download).
+- password/route.ts, preferences/route.ts (includes `timezone`, an IANA zone checked with `isValidTimeZone`), export/route.ts (JSON file download).
 - api-keys/route.ts: list and mint keys. api-keys/[id]/route.ts: revoke.
 
 ## Talks to

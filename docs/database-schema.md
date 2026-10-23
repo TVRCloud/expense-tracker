@@ -18,6 +18,7 @@ All monetary fields are stored as **integers (cents)** — divide by 100 for dis
 | `preferences.pushNotifications` | Boolean | |
 | `preferences.emailNotifications` | Boolean | |
 | `preferences.weekStartsOn` | Number | 0=Sun, 1=Mon |
+| `preferences.timezone` | String | IANA zone, default `Asia/Kolkata`; decides where a day starts for spend limits |
 | `preferences.currency` | String | ISO 4217 |
 | `passwordResetToken` | String | hashed, single-use |
 | `passwordResetExpires` | Date | 1hr window |
@@ -94,6 +95,20 @@ Indexes: `{user, isDeleted, date}` plus `{user, isDeleted, <account\|transferTo\
 | `isActive` | Boolean | |
 
 Unique index: `{user, category, year, month}`
+
+## spend_limits
+
+One document per user. Separate from `budgets` so the budgets list is unchanged for installed apps.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | unique |
+| `dailyAmount` | Number | cents, unset = no daily limit |
+| `weeklyAmount` | Number | cents, unset = no weekly limit |
+| `alertAt` | Number | percent, default 80 |
+| `excludeCategories` | String[] | never count against the limit |
+| `rollover` | Boolean | yesterday's unspent or overspend moves today's limit (one day back) |
+| `pausedUntil` | Date | limit suspended until then |
 
 ## loans
 

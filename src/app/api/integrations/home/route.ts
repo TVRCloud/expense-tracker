@@ -5,6 +5,7 @@ import { integrationOk } from "@/lib/integrations/response";
 import { getMonthlyStats } from "@/lib/stats-service";
 import { listTransactions } from "@/lib/transaction-query";
 import { getReviewCounts } from "@/lib/reconcile/inbox";
+import { getSpendLimitStatusIfConfigured } from "@/lib/spend-limit";
 
 // GET /api/integrations/home — everything a connected app's home screen
 // needs in one request: accounts, this month's stats, the latest few
@@ -20,11 +21,12 @@ export const GET = withIntegrationRoute("home", async ({ req, user, requestId })
   const year = now.getFullYear();
 
   await connectDB();
-  const [accounts, stats, latest, reviewCounts] = await Promise.all([
+  const [accounts, stats, latest, reviewCounts, spendLimit] = await Promise.all([
     Account.find({ user: user.id, isArchived: false }).select("_id name type balance currency").lean(),
     getMonthlyStats(user.id, year, month),
     listTransactions({ userId: user.id, skip: 0, limit: latestLimit, hideFuture: true, includeTotal: false }),
     getReviewCounts(user.id),
+    getSpendLimitStatusIfConfigured(user.id),
   ]);
 
   return integrationOk(
@@ -35,6 +37,8 @@ export const GET = withIntegrationRoute("home", async ({ req, user, requestId })
       stats,
       latest: latest.data,
       reviewCounts,
+      // Null until the user sets a daily or weekly limit.
+      spendLimit,
     },
     requestId
   );

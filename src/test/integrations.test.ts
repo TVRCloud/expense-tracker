@@ -2472,3 +2472,206 @@ describe("integration loans and repayments", () => {
     expect((await DELETE(req(`loans/${id}`, "DELETE"), ctx(id))).status).toBe(404);
   });
 });
+
+// ── daily and weekly spend limits ──────────────────────────────────────────
+
+describe("dayWindow", () => {
+  it("starts the day at the user's midnight, not UTC midnight", async () => {
+    const { dayWindow } = await import("@/lib/spend-limit-time");
+    // 01:30 on 24 Oct in Kolkata (UTC+5:30) is 20:00 on 23 Oct UTC.
+    const w = dayWindow(new Date("2026-10-23T20:00:00Z"), "Asia/Kolkata", 0);
+    expect(w.dayStart.toISOString()).toBe("2026-10-23T18:30:00.000Z");
+    expect(w.dayEnd.toISOString()).toBe("2026-10-24T18:30:00.000Z");
+    expect(w.yesterdayStart.toISOString()).toBe("2026-10-22T18:30:00.000Z");
+    // 24 Oct 2026 is a Saturday; the week starts on Sunday 18 Oct.
+    expect(w.weekStart.toISOString()).toBe("2026-10-17T18:30:00.000Z");
+    expect(w.daysLeftInMonth).toBe(8);
+  });
+
+  it("honours the week start preference and falls back on an unknown zone", async () => {
+    const { dayWindow } = await import("@/lib/spend-limit-time");
+    const monday = dayWindow(new Date("2026-10-23T10:00:00Z"), "Asia/Kolkata", 1);
+    expect(monday.weekStart.toISOString()).toBe("2026-10-18T18:30:00.000Z");
+    const fallback = dayWindow(new Date("2026-10-23T10:00:00Z"), "Not/AZone", 0);
+    expect(fallback.dayStart.toISOString()).toBe("2026-10-22T18:30:00.000Z");
+  });
+
+  it("handles a zone behind UTC", async () => {
+    const { dayWindow } = await import("@/lib/spend-limit-time");
+    const w = dayWindow(new Date("2026-10-23T03:00:00Z"), "America/New_York", 0);
+    // 23:00 on 22 Oct in New York (EDT, UTC-4).
+    expect(w.dayStart.toISOString()).toBe("2026-10-22T04:00:00.000Z");
+  });
+});
+
+describe("spend limits", () => {
+  const KEY = "test-spend-limit-api-key";
+  let userId: string;
+  let accountId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { default: Account } = await import("@/models/Account");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Limit User", email: `sl${Date.now()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    const account = await Account.create({ user: user._id, name: "Wallet", type: "cash", balance: 1000000, currency: "INR" });
+    userId = user._id.toString();
+    accountId = account._id.toString();
+  });
+
+  async function spend(amount: number, extra: Record<string, unknown> = {}, when = new Date()) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    return Transaction.create({
+      user: userId,
+      account: accountId,
+      type: "expense",
+      amount,
+      category: "food",
+      date: when,
+      ...extra,
+    });
+  }
+
+  function req(method: "GET" | "PUT", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest("http://localhost/api/integrations/spend-limit", {
+      method,
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json", "idempotency-key": `sl-key-${n}`, ...headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+
+  it("has no limit until one is set, then reports today and the week", async () => {
+    const { GET, PUT } = await import("@/app/api/integrations/spend-limit/route");
+    const empty = await (await GET(req("GET"), undefined as never)).json();
+    expect(empty.data.today).toEqual({ spent: 0, limit: null, left: null, percent: null });
+    expect(empty.data.settings.dailyAmount).toBeNull();
+
+    await spend(30000);
+    const set = await PUT(req("PUT", { dailyAmount: 100000, weeklyAmount: 500000 }), undefined as never);
+    expect(set.status).toBe(200);
+    const json = await set.json();
+    expect(json.data.today).toEqual({ spent: 30000, limit: 100000, left: 70000, percent: 30 });
+    expect(json.data.week.limit).toBe(500000);
+    expect(json.data.week.spent).toBeGreaterThanOrEqual(30000);
+  });
+
+  it("counts only expenses: not transfers, recurring bills, excluded categories or voided rows", async () => {
+    const { PUT } = await import("@/app/api/integrations/spend-limit/route");
+    const { default: Types } = await import("mongoose").then((m) => ({ default: m.Types }));
+    await spend(10000);
+    await spend(20000, { type: "transfer" });
+    await spend(30000, { recurringId: new Types.ObjectId(), installmentStatus: "paid" });
+    await spend(40000, { category: "rent" });
+    await spend(50000, { reviewStatus: "voided" });
+    await spend(60000, { isDeleted: true });
+    const res = await PUT(req("PUT", { dailyAmount: 100000, excludeCategories: ["rent"] }), undefined as never);
+    expect((await res.json()).data.today.spent).toBe(10000);
+  });
+
+  it("clears a limit with null, and a paused limit shows no limit", async () => {
+    const { PUT } = await import("@/app/api/integrations/spend-limit/route");
+    await PUT(req("PUT", { dailyAmount: 100000 }), undefined as never);
+    const paused = await (
+      await PUT(req("PUT", { pausedUntil: new Date(Date.now() + 86_400_000).toISOString() }), undefined as never)
+    ).json();
+    expect(paused.data.paused).toBe(true);
+    expect(paused.data.today.limit).toBeNull();
+    expect(paused.data.settings.dailyAmount).toBe(100000);
+
+    const resumed = await (await PUT(req("PUT", { pausedUntil: null }), undefined as never)).json();
+    expect(resumed.data.paused).toBe(false);
+    expect(resumed.data.today.limit).toBe(100000);
+    const cleared = await (await PUT(req("PUT", { dailyAmount: null }), undefined as never)).json();
+    expect(cleared.data.settings.dailyAmount).toBeNull();
+  });
+
+  it("rollover moves yesterday's unspent amount into today's limit", async () => {
+    const { PUT } = await import("@/app/api/integrations/spend-limit/route");
+    const { dayWindow } = await import("@/lib/spend-limit-time");
+    const win = dayWindow(new Date(), "Asia/Kolkata", 0);
+    await spend(25000, {}, new Date(win.yesterdayStart.getTime() + 3600_000));
+    const off = await (await PUT(req("PUT", { dailyAmount: 100000 }), undefined as never)).json();
+    expect(off.data.today.limit).toBe(100000);
+    const on = await (await PUT(req("PUT", { rollover: true }), undefined as never)).json();
+    expect(on.data.today.limit).toBe(175000);
+  });
+
+  it("computes safe to spend from budgets and upcoming bills, null without a budget", async () => {
+    const { PUT } = await import("@/app/api/integrations/spend-limit/route");
+    const { dayWindow } = await import("@/lib/spend-limit-time");
+    const { default: Budget } = await import("@/models/Budget");
+    const first = await (await PUT(req("PUT", { dailyAmount: 100000 }), undefined as never)).json();
+    expect(first.data.safeToSpend).toBeNull();
+
+    const win = dayWindow(new Date(), "Asia/Kolkata", 0);
+    await Budget.create({ user: userId, category: "food", month: win.month, year: win.year, limitAmount: win.daysLeftInMonth * 10000 });
+    const second = await (await PUT(req("PUT", { alertAt: 80 }), undefined as never)).json();
+    expect(second.data.safeToSpend).toBe(10000);
+  });
+
+  it("validates input and needs an Idempotency-Key", async () => {
+    const { PUT } = await import("@/app/api/integrations/spend-limit/route");
+    expect((await PUT(req("PUT", { dailyAmount: -5 }), undefined as never)).status).toBe(400);
+    expect((await PUT(req("PUT", { dailyAmount: 1.5 }), undefined as never)).status).toBe(400);
+    const noKey = new NextRequest("http://localhost/api/integrations/spend-limit", {
+      method: "PUT",
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
+      body: JSON.stringify({ dailyAmount: 100 }),
+    });
+    expect((await PUT(noKey, undefined as never)).status).toBe(400);
+    expect((await PUT(req("PUT", { dailyAmount: 100 }, { authorization: "Bearer wrong" }), undefined as never)).status).toBe(401);
+  });
+
+  it("adds spendLimit to home and summary only once a limit is set", async () => {
+    const { PUT } = await import("@/app/api/integrations/spend-limit/route");
+    const { GET: home } = await import("@/app/api/integrations/home/route");
+    const { GET: summary } = await import("@/app/api/integrations/summary/route");
+    const homeReq = () => new NextRequest("http://localhost/api/integrations/home", { headers: { authorization: `Bearer ${KEY}` } });
+    const summaryReq = () => new NextRequest("http://localhost/api/integrations/summary", { headers: { authorization: `Bearer ${KEY}` } });
+
+    expect((await (await home(homeReq(), undefined as never)).json()).data.spendLimit).toBeNull();
+    expect((await (await summary(summaryReq(), undefined as never)).json()).data.spendLimit).toBeNull();
+
+    await PUT(req("PUT", { dailyAmount: 100000 }), undefined as never);
+    expect((await (await home(homeReq(), undefined as never)).json()).data.spendLimit.today.limit).toBe(100000);
+    expect((await (await summary(summaryReq(), undefined as never)).json()).data.spendLimit.today.limit).toBe(100000);
+  });
+
+  it("alerts once at the alert percentage and once at 100%, not on every expense", async () => {
+    const { PUT } = await import("@/app/api/integrations/spend-limit/route");
+    const { checkSpendLimitAlert } = await import("@/lib/spend-limit");
+    const { default: Notification } = await import("@/models/Notification");
+    await PUT(req("PUT", { dailyAmount: 100000, alertAt: 80 }), undefined as never);
+
+    await spend(50000);
+    await checkSpendLimitAlert(userId);
+    expect(await Notification.countDocuments({ type: "budget_alert", "meta.kind": "spend_limit" })).toBe(0);
+
+    await spend(35000);
+    await checkSpendLimitAlert(userId);
+    await checkSpendLimitAlert(userId);
+    expect(await Notification.countDocuments({ type: "budget_alert", "meta.kind": "spend_limit", "meta.level": "near" })).toBe(1);
+
+    await spend(20000);
+    await checkSpendLimitAlert(userId);
+    expect(await Notification.countDocuments({ type: "budget_alert", "meta.kind": "spend_limit", "meta.level": "over" })).toBe(1);
+  });
+
+  it("stores a time zone preference and rejects an unknown one", async () => {
+    const { PATCH } = await import("@/app/api/me/preferences/route");
+    const { default: User } = await import("@/models/User");
+    sessionUser.current = { id: userId, name: "Limit User", email: "x@x.com", role: "user" };
+    const patch = (body: unknown) =>
+      PATCH(new NextRequest("http://localhost/api/me/preferences", { method: "PATCH", body: JSON.stringify(body) }));
+    expect((await patch({ timezone: "Nowhere/Land" })).status).toBe(400);
+    expect((await patch({ timezone: "America/New_York" })).status).toBe(200);
+    const user = await User.findById(userId).lean<{ preferences: { timezone: string } }>();
+    expect(user?.preferences.timezone).toBe("America/New_York");
+    sessionUser.current = null;
+  });
+});
