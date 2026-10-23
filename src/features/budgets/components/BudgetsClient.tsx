@@ -14,7 +14,8 @@ import { Input } from "@/components/_ui/Input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/_ui/Switch";
-import { budgetCreateSchema } from "@/features/budgets/schemas/budget.schema";
+import { BUDGET_CATEGORIES, budgetCreateSchema } from "@/features/budgets/schemas/budget.schema";
+import { SpendLimitCard } from "@/features/budgets/components/SpendLimitCard";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { toast } from "sonner";
@@ -33,10 +34,7 @@ interface BudgetWithSpent {
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-const CATEGORIES = [
-  "groceries","transport","rent","health","shopping","coffee","education",
-  "entertainment","gym","travel","subscription","other",
-];
+const CATEGORIES = BUDGET_CATEGORIES;
 
 function useBudgets(month: number, year: number) {
   return useQuery<BudgetWithSpent[]>({
@@ -172,6 +170,8 @@ export function BudgetsClient() {
           </>
         }
       />
+
+      <SpendLimitCard />
 
       {isLoading ? (
         <div className="grid-cards" style={{ "--card-min": "280px" } as React.CSSProperties}>
