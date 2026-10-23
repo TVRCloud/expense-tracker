@@ -2684,3 +2684,94 @@ describe("spend limits", () => {
     sessionUser.current = null;
   });
 });
+
+// ── end-of-day spend limit summary ─────────────────────────────────────────
+
+describe("spend limit end-of-day summary", () => {
+  let userId: string;
+  let accountId: string;
+  // 21:30 on 23 Oct in Kolkata, and 15:30 the same day.
+  const evening = new Date("2026-10-23T16:00:00Z");
+  const afternoon = new Date("2026-10-23T10:00:00Z");
+
+  beforeEach(async () => {
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const user = await User.create({ name: "Sum User", email: `sum${Date.now()}@x.com`, password: "hash", isActive: true });
+    const account = await Account.create({ user: user._id, name: "Wallet", type: "cash", balance: 1000000, currency: "INR" });
+    userId = user._id.toString();
+    accountId = account._id.toString();
+  });
+
+  async function setLimit(over: Record<string, unknown> = { dailyAmount: 100000 }) {
+    const { default: SpendLimit } = await import("@/models/SpendLimit");
+    await SpendLimit.create({ user: userId, ...over });
+  }
+  async function spend(amount: number, when = afternoon) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    await Transaction.create({ user: userId, account: accountId, type: "expense", amount, category: "food", date: when });
+  }
+  const notices = async () => {
+    const { default: Notification } = await import("@/models/Notification");
+    return Notification.find({ user: userId, "meta.kind": "spend_limit_summary" }).lean<Array<{ title: string; body: string }>>();
+  };
+
+  it("localHour reads the wall clock in the user's zone", async () => {
+    const { localHour } = await import("@/lib/spend-limit-time");
+    expect(localHour(evening, "Asia/Kolkata")).toBe(21);
+    expect(localHour(evening, "America/New_York")).toBe(12);
+  });
+
+  it("waits for the user's evening, then sends once", async () => {
+    const { sendSpendLimitSummary } = await import("@/lib/spend-limit");
+    await setLimit();
+    await spend(40000);
+    expect(await sendSpendLimitSummary(userId, afternoon)).toBe(false);
+    expect(await notices()).toHaveLength(0);
+
+    expect(await sendSpendLimitSummary(userId, evening)).toBe(true);
+    expect(await sendSpendLimitSummary(userId, new Date(evening.getTime() + 30 * 60_000))).toBe(false);
+    const sent = await notices();
+    expect(sent).toHaveLength(1);
+    expect(sent[0].title).toBe("Today: ₹400 of ₹1,000");
+    expect(sent[0].body).toContain("under your daily limit");
+  });
+
+  it("says so when the limit was passed or nothing was spent", async () => {
+    const { sendSpendLimitSummary } = await import("@/lib/spend-limit");
+    await setLimit();
+    await spend(130000);
+    await sendSpendLimitSummary(userId, evening);
+    expect((await notices())[0].body).toBe("You went over your daily limit by ₹300.");
+  });
+
+  it("sends a no-spend message on a quiet day", async () => {
+    const { sendSpendLimitSummary } = await import("@/lib/spend-limit");
+    await setLimit();
+    await sendSpendLimitSummary(userId, evening);
+    expect((await notices())[0].body).toContain("No spending today");
+  });
+
+  it("skips users with no daily limit or a paused limit", async () => {
+    const { sendSpendLimitSummaries } = await import("@/lib/spend-limit");
+    await setLimit({ weeklyAmount: 500000 });
+    expect(await sendSpendLimitSummaries(evening)).toEqual({ checked: 0, sent: 0 });
+
+    const { default: SpendLimit } = await import("@/models/SpendLimit");
+    await SpendLimit.updateOne({ user: userId }, { $set: { dailyAmount: 100000, pausedUntil: new Date(evening.getTime() + 86_400_000) } });
+    expect(await sendSpendLimitSummaries(evening)).toEqual({ checked: 1, sent: 0 });
+    expect(await notices()).toHaveLength(0);
+  });
+
+  it("the cron route needs the secret and reports what it did", async () => {
+    process.env.CRON_SECRET = "cron-secret-for-tests";
+    const { GET } = await import("@/app/api/cron/spend-limit-summary/route");
+    const call = (headers: Record<string, string> = {}) =>
+      GET(new NextRequest("http://localhost/api/cron/spend-limit-summary", { headers }));
+    expect((await call()).status).toBe(401);
+    expect((await call({ authorization: "Bearer wrong" })).status).toBe(401);
+    const ok = await call({ authorization: "Bearer cron-secret-for-tests" });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ ok: true, checked: 0, sent: 0 });
+  });
+});

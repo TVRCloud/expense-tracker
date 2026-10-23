@@ -8,7 +8,7 @@ import User from "@/models/User";
 import logger from "@/lib/logger";
 import { sendPushToUser } from "@/lib/push";
 import { listBudgetsWithSpend } from "@/lib/budget-service";
-import { dayWindow, DEFAULT_TIME_ZONE, isValidTimeZone } from "@/lib/spend-limit-time";
+import { dayWindow, DEFAULT_TIME_ZONE, isValidTimeZone, localHour } from "@/lib/spend-limit-time";
 
 // Daily and weekly spend limits. "Spend" is expenses only: transfers are a
 // different transaction type, recurring bills (EMI, rent, subscriptions) are
@@ -238,4 +238,56 @@ export async function checkSpendLimitAlert(userId: string) {
   } catch (err) {
     logger.error({ err }, "Spend limit alert check failed");
   }
+}
+
+// Local hour from which the end-of-day summary may go out. A run that is late
+// or skipped an hour still sends it, once, until the day ends.
+export const SUMMARY_FROM_HOUR = 21;
+
+// One "how did today go" notice per user per local day, only for users with a
+// daily limit that is not paused. Returns true when it sent one.
+export async function sendSpendLimitSummary(userId: string, now = new Date()) {
+  const clock = await getUserClock(userId);
+  if (localHour(now, clock.timeZone) < SUMMARY_FROM_HOUR) return false;
+
+  const status = await getSpendLimitStatus(userId, now);
+  const day = status.today;
+  if (status.paused || day.limit === null) return false;
+
+  const win = dayWindow(now, clock.timeZone, clock.weekStartsOn);
+  const dedupKey = `spend-summary-${win.dayStart.toISOString()}`;
+  if (await Notification.exists({ user: userId, type: "budget_alert", "meta.dedupKey": dedupKey })) return false;
+
+  const title = `Today: ${rupees(day.spent)} of ${rupees(day.limit)}`;
+  const body =
+    day.spent === 0
+      ? "No spending today. Your whole daily limit is untouched."
+      : (day.left ?? 0) >= 0
+        ? `You stayed under your daily limit with ${rupees(day.left ?? 0)} to spare.`
+        : `You went over your daily limit by ${rupees(-(day.left ?? 0))}.`;
+  await Notification.create({
+    user: userId,
+    type: "budget_alert",
+    title,
+    body,
+    meta: { kind: "spend_limit_summary", spent: day.spent, limit: day.limit, dedupKey },
+  });
+  void sendPushToUser(userId, { title, body, url: "/budgets" });
+  return true;
+}
+
+// For the scheduler: only users who set a daily limit are looked at, so it
+// costs one small query plus one status check per such user.
+export async function sendSpendLimitSummaries(now = new Date()) {
+  await connectDB();
+  const limits = await SpendLimit.find({ dailyAmount: { $exists: true } }).select("user").lean<Array<{ user: unknown }>>();
+  let sent = 0;
+  for (const l of limits) {
+    try {
+      if (await sendSpendLimitSummary(String(l.user), now)) sent += 1;
+    } catch (err) {
+      logger.error({ err, userId: String(l.user) }, "Spend limit summary failed");
+    }
+  }
+  return { checked: limits.length, sent };
 }
