@@ -50,6 +50,12 @@ export function localMidnight(timeZone: string, year: number, month: number, day
   return new Date(wall - offsetAt(first, timeZone));
 }
 
+/** The hour (0-23) on the user's wall clock. */
+export function localHour(now: Date, timeZone: string) {
+  const tz = isValidTimeZone(timeZone) ? timeZone : DEFAULT_TIME_ZONE;
+  return localParts(now, tz).hour;
+}
+
 export type DayWindow = {
   dayStart: Date;
   dayEnd: Date;
