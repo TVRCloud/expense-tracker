@@ -2268,3 +2268,207 @@ describe("integration stats and notifications", () => {
     expect(await Notification.countDocuments({ user: otherUserId, isRead: false })).toBe(1);
   });
 });
+
+// ── /api/integrations/loans ────────────────────────────────────────────────
+
+describe("integration loans and repayments", () => {
+  const KEY = "test-loans-api-key";
+  let userId: string;
+  let otherUserId: string;
+  let accountId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { default: Account } = await import("@/models/Account");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Loan User", email: `ln${Date.now()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `lno${Date.now()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    const account = await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 100000, currency: "INR" });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+    accountId = account._id.toString();
+  });
+
+  function req(path: string, method: "GET" | "POST" | "PATCH" | "DELETE", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${KEY}`,
+        "content-type": "application/json",
+        "idempotency-key": `loan-key-${n}`,
+        ...headers,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+  const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+  const loanBody = (over: Record<string, unknown> = {}) => ({
+    direction: "given",
+    counterparty: "Ravi",
+    principalAmount: 50000,
+    startDate: new Date().toISOString(),
+    ...over,
+  });
+
+  async function makeLoan(user: string = userId, over: Record<string, unknown> = {}) {
+    const { default: Loan } = await import("@/models/Loan");
+    return Loan.create({
+      user,
+      direction: "given",
+      counterparty: "Ravi",
+      principalAmount: 50000,
+      remainingAmount: 50000,
+      startDate: new Date(),
+      ...over,
+    });
+  }
+
+  it("POST creates a loan, with an account it books the principal, and replays on the same key", async () => {
+    const { POST } = await import("@/app/api/integrations/loans/route");
+    const { default: Loan } = await import("@/models/Loan");
+    const { default: Account } = await import("@/models/Account");
+    const { default: Transaction } = await import("@/models/Transaction");
+
+    const body = loanBody({ accountId });
+    const first = await POST(req("loans", "POST", body, { "idempotency-key": "same" }), {});
+    const firstJson = await first.json();
+    expect(first.status).toBe(201);
+    expect(firstJson.data.remainingAmount).toBe(50000);
+
+    const replay = await POST(req("loans", "POST", body, { "idempotency-key": "same" }), {});
+    expect((await replay.json()).data._id).toBe(firstJson.data._id);
+    expect(await Loan.countDocuments({})).toBe(1);
+    expect(await Transaction.countDocuments({ category: "loan" })).toBe(1);
+    const account = await Account.findById(accountId).lean<{ balance: number }>();
+    expect(account?.balance).toBe(50000);
+  });
+
+  it("POST rejects bad data, a missing key, an unknown account and a bad API key", async () => {
+    const { POST } = await import("@/app/api/integrations/loans/route");
+    expect((await POST(req("loans", "POST", { counterparty: "" }), {})).status).toBe(400);
+    const noKey = new NextRequest("http://localhost/api/integrations/loans", {
+      method: "POST",
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
+      body: JSON.stringify(loanBody()),
+    });
+    expect((await POST(noKey, {})).status).toBe(400);
+    expect((await POST(req("loans", "POST", loanBody({ accountId: "64f000000000000000000000" })), {})).status).toBe(404);
+    expect((await POST(req("loans", "POST", loanBody(), { authorization: "Bearer wrong" }), {})).status).toBe(401);
+  });
+
+  it("GET lists only the caller's loans and filters by direction and isSettled", async () => {
+    const { GET } = await import("@/app/api/integrations/loans/route");
+    await makeLoan();
+    await makeLoan(userId, { direction: "received", counterparty: "Bank", isSettled: true, remainingAmount: 0 });
+    await makeLoan(otherUserId);
+
+    const all = await (await GET(req("loans", "GET"), {})).json();
+    expect(all.data).toHaveLength(2);
+    const given = await (await GET(req("loans?direction=given", "GET"), {})).json();
+    expect(given.data.map((l: { counterparty: string }) => l.counterparty)).toEqual(["Ravi"]);
+    const settled = await (await GET(req("loans?isSettled=true", "GET"), {})).json();
+    expect(settled.data.map((l: { counterparty: string }) => l.counterparty)).toEqual(["Bank"]);
+  });
+
+  it("GET, PATCH and DELETE by id are 404 for someone else's loan and 400 for a bad id", async () => {
+    const { GET, PATCH, DELETE } = await import("@/app/api/integrations/loans/[id]/route");
+    const theirs = (await makeLoan(otherUserId))._id.toString();
+    expect((await GET(req(`loans/${theirs}`, "GET"), ctx(theirs))).status).toBe(404);
+    expect((await PATCH(req(`loans/${theirs}`, "PATCH", { counterparty: "x" }), ctx(theirs))).status).toBe(404);
+    expect((await DELETE(req(`loans/${theirs}`, "DELETE"), ctx(theirs))).status).toBe(404);
+    expect((await GET(req("loans/nope", "GET"), ctx("nope"))).status).toBe(400);
+  });
+
+  it("PATCH updates a loan and appends a ledger block", async () => {
+    const { PATCH } = await import("@/app/api/integrations/loans/[id]/route");
+    const { default: LedgerBlock } = await import("@/models/LedgerBlock");
+    const id = (await makeLoan())._id.toString();
+
+    const res = await PATCH(req(`loans/${id}`, "PATCH", { counterparty: "Ravi K", interestRate: 5 }), ctx(id));
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json.data.counterparty).toBe("Ravi K");
+    expect(json.data.interestRate).toBe(5);
+    expect(await LedgerBlock.countDocuments({ scope: "loan", action: "update" })).toBe(1);
+    expect((await PATCH(req(`loans/${id}`, "PATCH", { interestRate: 500 }), ctx(id))).status).toBe(400);
+  });
+
+  it("repayments reduce remainingAmount, settle the loan, and with an account move the balance", async () => {
+    const { POST, GET } = await import("@/app/api/integrations/loans/[id]/repayments/route");
+    const { default: Loan } = await import("@/models/Loan");
+    const { default: Account } = await import("@/models/Account");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const id = (await makeLoan())._id.toString();
+    const date = new Date().toISOString();
+
+    const first = await POST(req(`loans/${id}/repayments`, "POST", { amount: 20000, date, accountId }), ctx(id));
+    const firstJson = await first.json();
+    expect(first.status).toBe(201);
+    expect(firstJson.data.isSettled).toBe(false);
+    let loan = await Loan.findById(id).lean<{ remainingAmount: number; isSettled: boolean }>();
+    expect(loan?.remainingAmount).toBe(30000);
+    const account = await Account.findById(accountId).lean<{ balance: number }>();
+    expect(account?.balance).toBe(120000);
+    expect(await Transaction.countDocuments({ category: "loan_repayment" })).toBe(1);
+
+    const last = await POST(req(`loans/${id}/repayments`, "POST", { amount: 99999, date }), ctx(id));
+    expect((await last.json()).data.isSettled).toBe(true);
+    loan = await Loan.findById(id).lean<{ remainingAmount: number; isSettled: boolean }>();
+    expect(loan?.remainingAmount).toBe(0);
+    expect(loan?.isSettled).toBe(true);
+
+    const list = await (await GET(req(`loans/${id}/repayments`, "GET"), ctx(id))).json();
+    expect(list.data).toHaveLength(2);
+  });
+
+  it("repayment POST replays on the same key and rejects bad input", async () => {
+    const { POST } = await import("@/app/api/integrations/loans/[id]/repayments/route");
+    const { default: Repayment } = await import("@/models/Repayment");
+    const { default: Loan } = await import("@/models/Loan");
+    const id = (await makeLoan())._id.toString();
+    const body = { amount: 10000, date: new Date().toISOString() };
+
+    await POST(req(`loans/${id}/repayments`, "POST", body, { "idempotency-key": "rep" }), ctx(id));
+    const replay = await POST(req(`loans/${id}/repayments`, "POST", body, { "idempotency-key": "rep" }), ctx(id));
+    expect(replay.status).toBe(201);
+    expect(await Repayment.countDocuments({})).toBe(1);
+    const loan = await Loan.findById(id).lean<{ remainingAmount: number }>();
+    expect(loan?.remainingAmount).toBe(40000);
+
+    expect((await POST(req(`loans/${id}/repayments`, "POST", { amount: -5, date: body.date }), ctx(id))).status).toBe(400);
+    expect((await POST(req(`loans/${id}/repayments`, "POST", { amount: 5, date: "nope" }), ctx(id))).status).toBe(400);
+    const missing = "64f000000000000000000000";
+    expect((await POST(req(`loans/${missing}/repayments`, "POST", body), ctx(missing))).status).toBe(404);
+    expect((await POST(req(`loans/${id}/repayments`, "POST", { ...body, accountId: missing }), ctx(id))).status).toBe(404);
+  });
+
+  it("DELETE reverses the principal's balance effect and soft deletes loan, repayments and transactions", async () => {
+    const { POST: create } = await import("@/app/api/integrations/loans/route");
+    const { POST: repay } = await import("@/app/api/integrations/loans/[id]/repayments/route");
+    const { DELETE } = await import("@/app/api/integrations/loans/[id]/route");
+    const { default: Loan } = await import("@/models/Loan");
+    const { default: Account } = await import("@/models/Account");
+    const { default: Repayment } = await import("@/models/Repayment");
+    const { default: Transaction } = await import("@/models/Transaction");
+
+    const created = await (await create(req("loans", "POST", loanBody({ accountId })), {})).json();
+    const id = created.data._id as string;
+    await repay(req(`loans/${id}/repayments`, "POST", { amount: 10000, date: new Date().toISOString(), accountId }), ctx(id));
+
+    const res = await DELETE(req(`loans/${id}`, "DELETE"), ctx(id));
+    expect(res.status).toBe(200);
+    expect((await res.json()).data).toEqual({ id, deleted: true });
+    const stored = await Loan.findById(id).lean<{ isDeleted: boolean }>();
+    expect(stored?.isDeleted).toBe(true);
+    expect(await Repayment.countDocuments({ isDeleted: { $ne: true } })).toBe(0);
+    expect(await Transaction.countDocuments({ isDeleted: { $ne: true } })).toBe(0);
+    const account = await Account.findById(accountId).lean<{ balance: number }>();
+    expect(account?.balance).toBe(100000);
+    expect((await DELETE(req(`loans/${id}`, "DELETE"), ctx(id))).status).toBe(404);
+  });
+});
