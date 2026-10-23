@@ -1552,4 +1552,20 @@ describe("GET /api/integrations/changes", () => {
     const later = await (await GET(req(`?since=${Date.now() + 60_000}`), undefined as never)).json();
     expect(later.data.changed).toEqual([]);
   });
+
+  it("reports repayments and credit statements", async () => {
+    const { default: Repayment } = await import("@/models/Repayment");
+    const { default: CreditStatement } = await import("@/models/CreditStatement");
+    const { default: Account } = await import("@/models/Account");
+    const { default: Loan } = await import("@/models/Loan");
+    const since = Date.now() - 1000;
+    const account = await Account.create({ user: userId, name: "Card", type: "credit_card", balance: 0, currency: "INR" });
+    const loan = await Loan.create({ user: userId, counterparty: "Sam", direction: "given", principalAmount: 1000, remainingAmount: 1000, startDate: new Date() });
+    await Repayment.collection.insertOne({ user: new mongoose.Types.ObjectId(userId), loan: loan._id, amount: 100, date: new Date(), updatedAt: new Date() });
+    await CreditStatement.collection.insertOne({ user: new mongoose.Types.ObjectId(userId), account: account._id, updatedAt: new Date() });
+
+    const { GET } = await import("@/app/api/integrations/changes/route");
+    const json = await (await GET(req(`?since=${since}`), undefined as never)).json();
+    expect(json.data.changed).toEqual(expect.arrayContaining(["repayments", "statements"]));
+  });
 });
