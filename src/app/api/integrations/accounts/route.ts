@@ -9,12 +9,15 @@ const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_.:-]{1,200}$/;
 
 // GET /api/integrations/accounts — uncached, matching the existing (uncached)
 // GET /api/accounts. Returns the accounts n8n needs to pick a destination for
-// a new transaction.
-export const GET = withIntegrationRoute("accounts", async ({ user, requestId }) => {
+// a new transaction, and what an accounts screen needs to edit one: card
+// details (`creditMeta`), the SMS match digits and `isArchived`.
+// `?includeArchived=true` adds archived accounts after the active ones.
+export const GET = withIntegrationRoute("accounts", async ({ req, user, requestId }) => {
+  const includeArchived = new URL(req.url).searchParams.get("includeArchived") === "true";
   await connectDB();
-  const accounts = await Account.find({ user: user.id, isArchived: false })
-    .sort({ createdAt: -1 })
-    .select("_id name type balance currency color icon createdAt updatedAt")
+  const accounts = await Account.find(includeArchived ? { user: user.id } : { user: user.id, isArchived: false })
+    .sort({ isArchived: 1, createdAt: -1 })
+    .select("_id name type balance currency color icon isArchived creditMeta smsLastFour createdAt updatedAt")
     .lean();
 
   return integrationOk(accounts, requestId);
