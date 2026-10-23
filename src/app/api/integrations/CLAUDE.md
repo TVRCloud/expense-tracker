@@ -5,6 +5,7 @@ Purpose: API-key surface for n8n and the Android companion app. Contracts: [docs
 - accounts (+ POST, `[id]` PATCH, DELETE), summary, home, transactions (+ `[id]`, recurring list, series get and cancel, installment status), budgets and goals (+ `[id]` PATCH, DELETE): reads and writes over the shared services.
 - credit-cards/summary and credit-cards/[accountId]/statements: read-only card dues and statements.
 - captures, sms: bank message ingest (phone app, n8n). review/*: phone review inbox, confirm, correct, resolve, discard, history.
+- stats (month totals, daily, history) and notifications (list, `[id]` PATCH, read-all POST).
 - events (SSE), changes (`?since=` polling): realtime for the app.
 - app-update, app-update/download: newest Android release and a signed APK URL.
 

@@ -3,6 +3,7 @@ import connectDB from "@/lib/mongodb";
 import Notification from "@/models/Notification";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
+import { setNotificationRead } from "@/lib/notification-service";
 import { z } from "zod";
 
 const schema = z.object({ isRead: z.boolean().optional() });
@@ -21,12 +22,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
       return NextResponse.json({ error: "Validation failed", details: parsed.error.flatten() }, { status: 400 });
     }
 
-    await connectDB();
-    const notification = await Notification.findOneAndUpdate(
-      { _id: id, user: user.id },
-      { $set: { isRead: parsed.data.isRead ?? true } },
-      { new: true }
-    ).lean();
+    const notification = await setNotificationRead(user.id, id, parsed.data.isRead ?? true);
 
     if (!notification) return NextResponse.json({ error: "Not found" }, { status: 404 });
     return NextResponse.json({ data: notification });

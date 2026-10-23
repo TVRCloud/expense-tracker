@@ -78,6 +78,10 @@ Authorization: Bearer <YOUR_API_KEY>
 | DELETE | `/api/integrations/goals/[id]` | Soft delete a goal (needs `Idempotency-Key`) |
 | GET | `/api/integrations/credit-cards/summary` | Card dues, utilisation and totals for every card |
 | GET | `/api/integrations/credit-cards/[accountId]/statements` | Open cycle plus past statements for one card (`{statements, currentCycle}`) |
+| GET | `/api/integrations/stats` | Month totals, category breakdown, `daily` series; `months=2026-9,2026-10` adds `history` |
+| GET | `/api/integrations/notifications` | Inbox list (`unread`, `skip`, `limit` max 50) with `unreadCount` |
+| PATCH | `/api/integrations/notifications/[id]` | Mark read (default) or unread (needs `Idempotency-Key`) |
+| POST | `/api/integrations/notifications/read-all` | Mark all read (needs `Idempotency-Key`) |
 | GET | `/api/integrations/summary` | Snapshot: accounts, monthly stats, budgets |
 | POST | `/api/integrations/sms` | Parse a bank/NBFC SMS and create a transaction or loan repayment |
 
