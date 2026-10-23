@@ -23,6 +23,7 @@ The old socket.io setup (custom `server.ts`) is gone from the runtime path; Verc
 | `captures` | `captured_messages` | SMS/bank captures (reconcile inbox) |
 | `repayments` | `repayments` | Loan repayments |
 | `statements` | `credit_statements` | Credit card statements |
+| `spendLimits` | `spend_limits` | Daily and weekly spend limit settings |
 
 Adding a resource: add it to `RESOURCES` (`src/lib/realtime/changes.ts`), to `MODELS` (`changed-since.ts`) and to `INVALIDATION_MAP` (`invalidation.ts`); the model needs a required `user` ObjectId. Installed apps accept any resource name and ignore the ones they do not know (`RealtimeDispatcher` in the app repo), so a new name is safe to ship before the app learns it.
 
@@ -43,7 +44,7 @@ Requires a replica set / Atlas (change streams).
 Auth `Authorization: Bearer <key>`, same as other integration routes; 401 `UNAUTHORIZED` / 429 `RATE_LIMITED` use the integration error envelope. Same stream, contract is fixed:
 
 - `event: ready` `data: {"now":<epoch ms>}`
-- `event: data-changed` `data: {"resource":"transactions|accounts|budgets|goals|loans|notifications|captures|repayments|statements"}`
+- `event: data-changed` `data: {"resource":"transactions|accounts|budgets|goals|loans|notifications|captures|repayments|statements|spendLimits"}`
 - `event: ping` `data: {}` every 20s
 
 ### `GET /api/integrations/changes?since=<epoch ms>` (polling fallback)
@@ -58,7 +59,7 @@ Auth `Authorization: Bearer <key>`, same as other integration routes; 401 `UNAUT
 
 | Resource | Invalidated query keys |
 |----------|------------------------|
-| `transactions` | transactions, accounts, credit-summary, credit-statements, upcoming-installments, recurring-series, recurring-series-detail, budgets, analytics, reconcile, notifications |
+| `transactions` | transactions, accounts, credit-summary, credit-statements, upcoming-installments, recurring-series, recurring-series-detail, budgets, spend-limit, analytics, reconcile, notifications |
 | `accounts` | accounts, credit-summary, credit-statements |
 | `budgets` | budgets, notifications |
 | `goals` | goals, notifications |
@@ -67,6 +68,7 @@ Auth `Authorization: Bearer <key>`, same as other integration routes; 401 `UNAUT
 | `captures` | reconcile, notifications |
 | `repayments` | loans, accounts, notifications |
 | `statements` | credit-statements, credit-summary, notifications |
+| `spendLimits` | spend-limit, budgets |
 
 - Mutations call the same `invalidateForResource()` so the acting tab is correct before the event arrives.
 

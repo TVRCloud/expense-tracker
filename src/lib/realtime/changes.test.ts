@@ -18,10 +18,11 @@ describe("collectionToResource", () => {
   it("maps repayments and credit statements", () => {
     expect(collectionToResource("repayments")).toBe("repayments");
     expect(collectionToResource("credit_statements")).toBe("statements");
+    expect(collectionToResource("spend_limits")).toBe("spendLimits");
   });
   it("covers every resource", () => {
     expect([...RESOURCE_NAMES].sort()).toEqual(
-      ["accounts", "budgets", "captures", "goals", "loans", "notifications", "repayments", "statements", "transactions"]
+      ["accounts", "budgets", "captures", "goals", "loans", "notifications", "repayments", "spendLimits", "statements", "transactions"]
     );
   });
 });
