@@ -1721,3 +1721,121 @@ describe("integration budget and goal edit and delete", () => {
     expect(res.status).toBe(401);
   });
 });
+
+// ── GET /api/integrations/credit-cards/* ───────────────────────────────────
+
+describe("integration credit cards", () => {
+  const KEY = "test-credit-card-api-key";
+  let userId: string;
+  let otherUserId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "CC User", email: `cc${Date.now()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "CC Other", email: `cco${Date.now()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+  });
+
+  function req(path: string, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/${path}`, {
+      headers: { authorization: `Bearer ${KEY}`, "x-request-n": String(n), ...headers },
+    });
+  }
+  const ctx = (accountId: string) => ({ params: Promise.resolve({ accountId }) });
+
+  async function makeCard(user: string, creditMeta: Record<string, unknown> | undefined, name = "HDFC Card") {
+    const { default: Account } = await import("@/models/Account");
+    return Account.create({ user, name, type: "credit_card", balance: 0, currency: "INR", creditMeta });
+  }
+
+  it("summary is empty with no cards", async () => {
+    const { GET } = await import("@/app/api/integrations/credit-cards/summary/route");
+    const res = await GET(req("credit-cards/summary"), undefined as never);
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json.data.cards).toEqual([]);
+    expect(json.data.totalDebt).toBe(0);
+  });
+
+  it("summary lists configured and unconfigured cards with utilisation, and skips other users and other account types", async () => {
+    const { default: Account } = await import("@/models/Account");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const card = await makeCard(userId, { billingCycleDay: 1, paymentDueDay: 20, creditLimit: 1000000, minPaymentPct: 5, lastFourDigits: "1234" });
+    await makeCard(userId, undefined, "Bare Card");
+    await makeCard(otherUserId, { billingCycleDay: 1, paymentDueDay: 20, creditLimit: 500000 }, "Theirs");
+    await Account.create({ user: userId, name: "Wallet", type: "cash", balance: 0, currency: "INR" });
+    await Transaction.create({
+      user: userId,
+      account: card._id,
+      type: "expense",
+      amount: 250000,
+      currency: "INR",
+      category: "shopping",
+      description: "tv",
+      date: new Date(),
+    });
+
+    const { GET } = await import("@/app/api/integrations/credit-cards/summary/route");
+    const res = await GET(req("credit-cards/summary"), undefined as never);
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json.data.cards).toHaveLength(2);
+    const configured = json.data.cards.find((c: { name: string }) => c.name === "HDFC Card");
+    expect(configured.lastFourDigits).toBe("1234");
+    expect(configured.creditLimit).toBe(1000000);
+    expect(configured.balance).toBeGreaterThan(0);
+    expect(configured.utilization).toBeGreaterThan(0);
+    const bare = json.data.cards.find((c: { name: string }) => c.name === "Bare Card");
+    expect(bare.status).toBe("unconfigured");
+    expect(json.data.totalCreditExposure).toBe(configured.balance);
+  });
+
+  it("statements returns the open cycle for a configured card", async () => {
+    const card = await makeCard(userId, { billingCycleDay: 1, paymentDueDay: 20, creditLimit: 1000000, minPaymentPct: 5 });
+    const id = card._id.toString();
+    const { GET } = await import("@/app/api/integrations/credit-cards/[accountId]/statements/route");
+    const res = await GET(req(`credit-cards/${id}/statements`), ctx(id));
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(Array.isArray(json.data.statements)).toBe(true);
+    expect(json.data.currentCycle.label).toBeTruthy();
+    expect(typeof json.data.currentCycle.periodStart).toBe("string");
+  });
+
+  it("statements returns an empty list with a message when billing is not configured", async () => {
+    const id = (await makeCard(userId, undefined))._id.toString();
+    const { GET } = await import("@/app/api/integrations/credit-cards/[accountId]/statements/route");
+    const json = await (await GET(req(`credit-cards/${id}/statements`), ctx(id))).json();
+    expect(json.data.statements).toEqual([]);
+    expect(json.data.currentCycle).toBeNull();
+    expect(json.data.message).toBe("Billing cycle not configured");
+  });
+
+  it("statements rejects a bad id, an unknown or foreign card and a non-card account", async () => {
+    const { default: Account } = await import("@/models/Account");
+    const { GET } = await import("@/app/api/integrations/credit-cards/[accountId]/statements/route");
+    expect((await GET(req("credit-cards/nope/statements"), ctx("nope"))).status).toBe(400);
+
+    const missing = "64f000000000000000000000";
+    expect((await GET(req(`credit-cards/${missing}/statements`), ctx(missing))).status).toBe(404);
+
+    const theirs = (await makeCard(otherUserId, { billingCycleDay: 1, paymentDueDay: 20 }))._id.toString();
+    expect((await GET(req(`credit-cards/${theirs}/statements`), ctx(theirs))).status).toBe(404);
+
+    const cash = (await Account.create({ user: userId, name: "Wallet", type: "cash", balance: 0, currency: "INR" }))._id.toString();
+    expect((await GET(req(`credit-cards/${cash}/statements`), ctx(cash))).status).toBe(400);
+  });
+
+  it("rejects an invalid API key with 401", async () => {
+    const { GET } = await import("@/app/api/integrations/credit-cards/summary/route");
+    const res = await GET(req("credit-cards/summary", { authorization: "Bearer wrong" }), undefined as never);
+    expect(res.status).toBe(401);
+  });
+});

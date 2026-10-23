@@ -70,6 +70,8 @@ Authorization: Bearer <YOUR_API_KEY>
 | GET | `/api/integrations/goals` | List goals |
 | PATCH | `/api/integrations/goals/[id]` | Edit a goal; completing it fires `goal_reached` (needs `Idempotency-Key`) |
 | DELETE | `/api/integrations/goals/[id]` | Soft delete a goal (needs `Idempotency-Key`) |
+| GET | `/api/integrations/credit-cards/summary` | Card dues, utilisation and totals for every card |
+| GET | `/api/integrations/credit-cards/[accountId]/statements` | Open cycle plus past statements for one card (`{statements, currentCycle}`) |
 | GET | `/api/integrations/summary` | Snapshot: accounts, monthly stats, budgets |
 | POST | `/api/integrations/sms` | Parse a bank/NBFC SMS and create a transaction or loan repayment |
 
