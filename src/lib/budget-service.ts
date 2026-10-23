@@ -114,8 +114,8 @@ export async function listBudgetsWithSpend(userId: string, year: number, month: 
 export type CreateBudgetInput = z.infer<typeof budgetCreateSchema> & { userId: string; actor: AuthUser };
 
 export class BudgetServiceError extends Error {
-  code: "BUDGET_EXISTS";
-  constructor(code: "BUDGET_EXISTS", message: string) {
+  code: "BUDGET_EXISTS" | "BUDGET_NOT_FOUND";
+  constructor(code: "BUDGET_EXISTS" | "BUDGET_NOT_FOUND", message: string) {
     super(message);
     this.code = code;
     this.name = "BudgetServiceError";
@@ -163,4 +163,45 @@ export async function createBudget(input: CreateBudgetInput) {
     actor,
   });
   return budget;
+}
+
+export const budgetUpdateSchema = z.object({
+  limitAmount: z.number().int().positive().optional(),
+  alertAt: z.number().min(1).max(100).optional(),
+  isActive: z.boolean().optional(),
+  rollover: z.boolean().optional(),
+});
+
+export type UpdateBudgetInput = z.infer<typeof budgetUpdateSchema> & { userId: string; budgetId: string; actor: AuthUser };
+
+// Shared with PATCH /api/budgets/[id] (browser) and the integration route.
+export async function updateBudget(input: UpdateBudgetInput) {
+  const { userId, budgetId, actor, ...changes } = input;
+  await connectDB();
+
+  const filter = { _id: budgetId, user: userId, isDeleted: { $ne: true } };
+  const before = await Budget.findOne(filter).lean();
+  if (!before) throw new BudgetServiceError("BUDGET_NOT_FOUND", "Budget not found");
+  const budget = await Budget.findOneAndUpdate(filter, { $set: changes }, { new: true }).lean();
+  if (!budget) throw new BudgetServiceError("BUDGET_NOT_FOUND", "Budget not found");
+
+  await appendLedgerBlock({ userId, scope: "budget", entityId: budgetId, action: "update", before, after: budget, actor });
+  return budget;
+}
+
+// Soft delete, shared with DELETE /api/budgets/[id] and the integration route.
+export async function deleteBudget(userId: string, budgetId: string, actor: AuthUser) {
+  await connectDB();
+
+  const filter = { _id: budgetId, user: userId, isDeleted: { $ne: true } };
+  const before = await Budget.findOne(filter).lean();
+  if (!before) throw new BudgetServiceError("BUDGET_NOT_FOUND", "Budget not found");
+  const budget = await Budget.findOneAndUpdate(
+    filter,
+    { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: userId } },
+    { new: true }
+  ).lean();
+  if (!budget) throw new BudgetServiceError("BUDGET_NOT_FOUND", "Budget not found");
+
+  await appendLedgerBlock({ userId, scope: "budget", entityId: budgetId, action: "delete", before, after: budget, actor });
 }

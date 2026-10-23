@@ -108,3 +108,67 @@ export async function createGoal(input: CreateGoalInput) {
 
   return goal;
 }
+
+export class GoalServiceError extends Error {
+  code: "GOAL_NOT_FOUND";
+  constructor(code: "GOAL_NOT_FOUND", message: string) {
+    super(message);
+    this.code = code;
+    this.name = "GoalServiceError";
+  }
+}
+
+export const goalUpdateSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  targetAmount: z.number().int().positive().optional(),
+  savedAmount: z.number().int().min(0).optional(),
+  targetDate: z.string().optional(),
+  icon: z.string().optional(),
+  isCompleted: z.boolean().optional(),
+  roundUpEnabled: z.boolean().optional(),
+  roundUpTo: z.number().int().positive().optional(),
+});
+
+export type UpdateGoalInput = z.infer<typeof goalUpdateSchema> & { userId: string; goalId: string; actor: AuthUser };
+
+// Shared with PATCH /api/goals/[id] (browser) and the integration route.
+// Fires the goal_reached notification when the update completes the goal.
+export async function updateGoal(input: UpdateGoalInput) {
+  const { userId, goalId, actor, ...changes } = input;
+  const update: Record<string, unknown> = { ...changes };
+  if (changes.targetDate) update.targetDate = new Date(changes.targetDate);
+
+  await connectDB();
+  const filter = { _id: goalId, user: userId, isDeleted: { $ne: true } };
+  const before = await Goal.findOne(filter).lean();
+  if (!before) throw new GoalServiceError("GOAL_NOT_FOUND", "Goal not found");
+
+  // Only one goal can have round-up active at a time: enabling it here
+  // disables it everywhere else for this user first.
+  if (changes.roundUpEnabled === true) {
+    await Goal.updateMany({ user: userId, _id: { $ne: goalId } }, { $set: { roundUpEnabled: false } });
+  }
+
+  const goal = await Goal.findOneAndUpdate(filter, { $set: update }, { new: true }).lean<GoalCompletionCheck>();
+  if (!goal) throw new GoalServiceError("GOAL_NOT_FOUND", "Goal not found");
+
+  await appendLedgerBlock({ userId, scope: "goal", entityId: goalId, action: "update", before, after: goal, actor });
+  await checkGoalCompletion(userId, goal, actor);
+  return goal;
+}
+
+// Soft delete, shared with DELETE /api/goals/[id] and the integration route.
+export async function deleteGoal(userId: string, goalId: string, actor: AuthUser) {
+  await connectDB();
+  const filter = { _id: goalId, user: userId, isDeleted: { $ne: true } };
+  const before = await Goal.findOne(filter).lean();
+  if (!before) throw new GoalServiceError("GOAL_NOT_FOUND", "Goal not found");
+  const goal = await Goal.findOneAndUpdate(
+    filter,
+    { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: userId } },
+    { new: true }
+  ).lean();
+  if (!goal) throw new GoalServiceError("GOAL_NOT_FOUND", "Goal not found");
+
+  await appendLedgerBlock({ userId, scope: "goal", entityId: goalId, action: "delete", before, after: goal, actor });
+}

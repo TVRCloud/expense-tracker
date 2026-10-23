@@ -1553,3 +1553,155 @@ describe("GET /api/integrations/changes", () => {
     expect(later.data.changed).toEqual([]);
   });
 });
+
+// ── PATCH and DELETE /api/integrations/{budgets,goals}/[id] ────────────────
+
+describe("integration budget and goal edit and delete", () => {
+  const KEY = "test-budget-goal-api-key";
+  let userId: string;
+  let otherUserId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "BG User", email: `bg${Date.now()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `bgo${Date.now()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+  });
+
+  function req(path: string, method: "PATCH" | "DELETE", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${KEY}`,
+        "content-type": "application/json",
+        "idempotency-key": `bg-key-${n}`,
+        ...headers,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+  const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+
+  async function makeBudget(user: string = userId) {
+    const { default: Budget } = await import("@/models/Budget");
+    return Budget.create({ user, category: "food", month: 10, year: 2026, limitAmount: 500000 });
+  }
+  async function makeGoal(user: string = userId, over: Record<string, unknown> = {}) {
+    const { default: Goal } = await import("@/models/Goal");
+    return Goal.create({ user, name: "Trip", targetAmount: 100000, savedAmount: 0, ...over });
+  }
+
+  it("PATCH budget updates the limit, appends a ledger block and replays on the same key", async () => {
+    const { PATCH } = await import("@/app/api/integrations/budgets/[id]/route");
+    const { default: LedgerBlock } = await import("@/models/LedgerBlock");
+    const budget = await makeBudget();
+    const id = budget._id.toString();
+
+    const first = await PATCH(req(`budgets/${id}`, "PATCH", { limitAmount: 700000, alertAt: 90 }, { "idempotency-key": "same" }), ctx(id));
+    const firstJson = await first.json();
+    expect(first.status).toBe(200);
+    expect(firstJson.data.limitAmount).toBe(700000);
+    expect(firstJson.data.alertAt).toBe(90);
+    expect(await LedgerBlock.countDocuments({ scope: "budget", action: "update" })).toBe(1);
+
+    const replay = await PATCH(req(`budgets/${id}`, "PATCH", { limitAmount: 700000, alertAt: 90 }, { "idempotency-key": "same" }), ctx(id));
+    expect(replay.status).toBe(200);
+    expect(await LedgerBlock.countDocuments({ scope: "budget", action: "update" })).toBe(1);
+  });
+
+  it("PATCH budget rejects bad data, a missing key and a bad id", async () => {
+    const { PATCH } = await import("@/app/api/integrations/budgets/[id]/route");
+    const id = (await makeBudget())._id.toString();
+
+    const bad = await PATCH(req(`budgets/${id}`, "PATCH", { limitAmount: -1 }), ctx(id));
+    expect(bad.status).toBe(400);
+    const noKey = new NextRequest(`http://localhost/api/integrations/budgets/${id}`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
+      body: JSON.stringify({ limitAmount: 1000 }),
+    });
+    expect((await PATCH(noKey, ctx(id))).status).toBe(400);
+    expect((await PATCH(req("budgets/nope", "PATCH", { limitAmount: 1000 }), ctx("nope"))).status).toBe(400);
+  });
+
+  it("PATCH and DELETE budget return 404 for someone else's or a missing budget", async () => {
+    const { PATCH, DELETE } = await import("@/app/api/integrations/budgets/[id]/route");
+    const theirs = (await makeBudget(otherUserId))._id.toString();
+    const missing = "64f000000000000000000000";
+
+    expect((await PATCH(req(`budgets/${theirs}`, "PATCH", { limitAmount: 1000 }), ctx(theirs))).status).toBe(404);
+    expect((await DELETE(req(`budgets/${theirs}`, "DELETE"), ctx(theirs))).status).toBe(404);
+    expect((await DELETE(req(`budgets/${missing}`, "DELETE"), ctx(missing))).status).toBe(404);
+  });
+
+  it("DELETE budget soft deletes it and a second delete is 404", async () => {
+    const { DELETE } = await import("@/app/api/integrations/budgets/[id]/route");
+    const { default: Budget } = await import("@/models/Budget");
+    const id = (await makeBudget())._id.toString();
+
+    const res = await DELETE(req(`budgets/${id}`, "DELETE"), ctx(id));
+    expect(res.status).toBe(200);
+    expect((await res.json()).data).toEqual({ id, deleted: true });
+    const stored = await Budget.findById(id).lean<{ isDeleted: boolean }>();
+    expect(stored?.isDeleted).toBe(true);
+    expect((await DELETE(req(`budgets/${id}`, "DELETE"), ctx(id))).status).toBe(404);
+  });
+
+  it("PATCH goal updates it and fires goal_reached once when it completes", async () => {
+    const { PATCH } = await import("@/app/api/integrations/goals/[id]/route");
+    const { default: Notification } = await import("@/models/Notification");
+    const id = (await makeGoal())._id.toString();
+
+    const half = await PATCH(req(`goals/${id}`, "PATCH", { savedAmount: 50000, name: "Big trip" }), ctx(id));
+    const halfJson = await half.json();
+    expect(half.status).toBe(200);
+    expect(halfJson.data.name).toBe("Big trip");
+    expect(halfJson.data.isCompleted).toBe(false);
+    expect(await Notification.countDocuments({ type: "goal_reached" })).toBe(0);
+
+    const done = await PATCH(req(`goals/${id}`, "PATCH", { savedAmount: 100000 }), ctx(id));
+    expect(done.status).toBe(200);
+    expect(await Notification.countDocuments({ type: "goal_reached" })).toBe(1);
+  });
+
+  it("PATCH goal keeps only one round-up goal per user", async () => {
+    const { PATCH } = await import("@/app/api/integrations/goals/[id]/route");
+    const { default: Goal } = await import("@/models/Goal");
+    const first = await makeGoal(userId, { roundUpEnabled: true });
+    const second = (await makeGoal(userId, { name: "Other" }))._id.toString();
+
+    const res = await PATCH(req(`goals/${second}`, "PATCH", { roundUpEnabled: true }), ctx(second));
+    expect(res.status).toBe(200);
+    const reloaded = await Goal.findById(first._id).lean<{ roundUpEnabled: boolean }>();
+    expect(reloaded?.roundUpEnabled).toBe(false);
+  });
+
+  it("PATCH and DELETE goal return 404 for someone else's goal, DELETE soft deletes", async () => {
+    const { PATCH, DELETE } = await import("@/app/api/integrations/goals/[id]/route");
+    const { default: Goal } = await import("@/models/Goal");
+    const theirs = (await makeGoal(otherUserId))._id.toString();
+    expect((await PATCH(req(`goals/${theirs}`, "PATCH", { name: "x" }), ctx(theirs))).status).toBe(404);
+    expect((await DELETE(req(`goals/${theirs}`, "DELETE"), ctx(theirs))).status).toBe(404);
+
+    const mine = (await makeGoal())._id.toString();
+    const res = await DELETE(req(`goals/${mine}`, "DELETE"), ctx(mine));
+    expect(res.status).toBe(200);
+    const stored = await Goal.findById(mine).lean<{ isDeleted: boolean }>();
+    expect(stored?.isDeleted).toBe(true);
+    expect((await PATCH(req(`goals/${mine}`, "PATCH", { name: "again" }), ctx(mine))).status).toBe(404);
+  });
+
+  it("rejects an invalid API key with 401", async () => {
+    const { PATCH } = await import("@/app/api/integrations/budgets/[id]/route");
+    const id = (await makeBudget())._id.toString();
+    const res = await PATCH(req(`budgets/${id}`, "PATCH", { limitAmount: 1000 }, { authorization: "Bearer wrong" }), ctx(id));
+    expect(res.status).toBe(401);
+  });
+});
