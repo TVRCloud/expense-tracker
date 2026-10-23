@@ -2775,3 +2775,57 @@ describe("spend limit end-of-day summary", () => {
     expect(await ok.json()).toEqual({ ok: true, checked: 0, sent: 0 });
   });
 });
+
+// ── GET /api/integrations/accounts: fields and archived ────────────────────
+
+describe("GET /api/integrations/accounts details", () => {
+  const KEY = "test-account-read-api-key";
+  let userId: string;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { default: Account } = await import("@/models/Account");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Acc Read", email: `acr${Date.now()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    userId = user._id.toString();
+    await Account.create({
+      user: userId,
+      name: "Card",
+      type: "credit_card",
+      balance: 0,
+      creditMeta: { creditLimit: 5000000, billingCycleDay: 5, paymentDueDay: 25, network: "visa", lastFourDigits: "4242" },
+      smsLastFour: ["4242"],
+    });
+    await Account.create({ user: userId, name: "Old", type: "bank", balance: 100, isArchived: true });
+  });
+
+  const call = async (query = "") => {
+    const { GET } = await import("@/app/api/integrations/accounts/route");
+    return GET(
+      new NextRequest(`http://localhost/api/integrations/accounts${query}`, { headers: { authorization: `Bearer ${KEY}` } }),
+      {}
+    );
+  };
+
+  it("returns the card details, SMS digits and isArchived, active accounts only by default", async () => {
+    const json = await (await call()).json();
+    expect(json.data).toHaveLength(1);
+    expect(json.data[0]).toMatchObject({
+      name: "Card",
+      isArchived: false,
+      smsLastFour: ["4242"],
+      creditMeta: { creditLimit: 5000000, billingCycleDay: 5, paymentDueDay: 25, network: "visa", lastFourDigits: "4242" },
+    });
+  });
+
+  it("includeArchived=true adds archived accounts after the active ones", async () => {
+    const json = await (await call("?includeArchived=true")).json();
+    expect(json.data.map((a: { name: string; isArchived: boolean }) => [a.name, a.isArchived])).toEqual([
+      ["Card", false],
+      ["Old", true],
+    ]);
+  });
+});
