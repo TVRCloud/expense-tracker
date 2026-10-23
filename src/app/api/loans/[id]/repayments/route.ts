@@ -1,18 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import connectDB from "@/lib/mongodb";
-import Loan from "@/models/Loan";
-import Repayment from "@/models/Repayment";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
-import { z } from "zod";
-import { createRepayment, LoanServiceError } from "@/lib/loan-service";
-
-const createSchema = z.object({
-  amount: z.number().int().positive(),
-  date: z.string(),
-  note: z.string().optional(),
-  accountId: z.string().optional(),
-});
+import { createRepayment, listRepayments, LoanServiceError, repaymentCreateSchema } from "@/lib/loan-service";
 
 type Params = Promise<{ id: string }>;
 
@@ -22,16 +11,12 @@ export async function GET(_req: NextRequest, { params }: { params: Params }) {
     if (errorResponse) return errorResponse;
 
     const { id } = await params;
-    await connectDB();
-
-    const loan = await Loan.findOne({ _id: id, user: user.id, isDeleted: { $ne: true } }).lean();
-    if (!loan) return NextResponse.json({ error: "Not found" }, { status: 404 });
-
-    const repayments = await Repayment.find({ loan: id, user: user.id, isDeleted: { $ne: true } })
-      .sort({ date: -1 })
-      .lean();
+    const repayments = await listRepayments(user.id, id);
     return NextResponse.json({ data: repayments });
   } catch (err) {
+    if (err instanceof LoanServiceError && err.code === "NOT_FOUND") {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
     logger.error({ err }, "GET /api/loans/[id]/repayments failed");
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
@@ -44,7 +29,7 @@ export async function POST(req: NextRequest, { params }: { params: Params }) {
 
     const { id } = await params;
     const body = await req.json();
-    const parsed = createSchema.safeParse(body);
+    const parsed = repaymentCreateSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json({ error: "Validation failed", details: parsed.error.flatten() }, { status: 400 });
     }
@@ -62,7 +47,7 @@ export async function POST(req: NextRequest, { params }: { params: Params }) {
     return NextResponse.json({ data: repayment, isSettled }, { status: 201 });
   } catch (err) {
     if (err instanceof LoanServiceError) {
-      return NextResponse.json({ error: err.message }, { status: err.code === "NOT_FOUND" ? 404 : 404 });
+      return NextResponse.json({ error: err.message }, { status: 404 });
     }
     logger.error({ err }, "POST /api/loans/[id]/repayments failed");
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

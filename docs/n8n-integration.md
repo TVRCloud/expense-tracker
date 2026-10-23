@@ -82,6 +82,9 @@ Authorization: Bearer <YOUR_API_KEY>
 | GET | `/api/integrations/notifications` | Inbox list (`unread`, `skip`, `limit` max 50) with `unreadCount` |
 | PATCH | `/api/integrations/notifications/[id]` | Mark read (default) or unread (needs `Idempotency-Key`) |
 | POST | `/api/integrations/notifications/read-all` | Mark all read (needs `Idempotency-Key`) |
+| GET, POST | `/api/integrations/loans` | List loans (`direction`, `isSettled`), create one (needs `Idempotency-Key`) |
+| GET, PATCH, DELETE | `/api/integrations/loans/[id]` | Read, edit, soft delete a loan (writes need `Idempotency-Key`) |
+| GET, POST | `/api/integrations/loans/[id]/repayments` | List and record repayments (POST needs `Idempotency-Key`) |
 | GET | `/api/integrations/summary` | Snapshot: accounts, monthly stats, budgets |
 | POST | `/api/integrations/sms` | Parse a bank/NBFC SMS and create a transaction or loan repayment |
 
