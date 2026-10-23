@@ -13,7 +13,9 @@ export type RealtimeResource =
   | "goals"
   | "loans"
   | "notifications"
-  | "captures";
+  | "captures"
+  | "repayments"
+  | "statements";
 
 // Allow-list: MongoDB collection name -> resource name sent to clients. Every
 // model listed here has a required `user` ObjectId field, which is what the
@@ -27,6 +29,8 @@ export const RESOURCES: Readonly<Record<string, RealtimeResource>> = {
   loans: "loans",
   notifications: "notifications",
   captured_messages: "captures",
+  repayments: "repayments",
+  credit_statements: "statements",
 };
 
 export const RESOURCE_NAMES: readonly RealtimeResource[] = Object.values(RESOURCES);

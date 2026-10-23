@@ -23,6 +23,8 @@ export const INVALIDATION_MAP: Readonly<Record<RealtimeResource, readonly (reado
   loans: [["loans"], ["accounts"], ["notifications"]],
   notifications: [["notifications"]],
   captures: [["reconcile"], ["notifications"]],
+  repayments: [["loans"], ["accounts"], ["notifications"]],
+  statements: [["credit-statements"], ["credit-summary"], ["notifications"]],
 };
 
 export function isRealtimeResource(value: unknown): value is RealtimeResource {

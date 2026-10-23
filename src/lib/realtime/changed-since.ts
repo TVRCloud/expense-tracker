@@ -7,6 +7,8 @@ import Goal from "@/models/Goal";
 import Loan from "@/models/Loan";
 import Notification from "@/models/Notification";
 import CapturedMessage from "@/models/CapturedMessage";
+import Repayment from "@/models/Repayment";
+import CreditStatement from "@/models/CreditStatement";
 import { RESOURCE_NAMES, type RealtimeResource } from "@/lib/realtime/changes";
 
 const MODELS: Record<RealtimeResource, Model<any>> = { // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -17,6 +19,8 @@ const MODELS: Record<RealtimeResource, Model<any>> = { // eslint-disable-line @t
   loans: Loan,
   notifications: Notification,
   captures: CapturedMessage,
+  repayments: Repayment,
+  statements: CreditStatement,
 };
 
 /** Parses `?since=` (epoch ms). Anything missing/non-numeric/<=0 is null. */

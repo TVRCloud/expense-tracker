@@ -11,6 +11,10 @@ describe("INVALIDATION_MAP", () => {
     const keys = INVALIDATION_MAP.transactions.map((k) => k[0]);
     expect(keys).toEqual(expect.arrayContaining(["accounts", "budgets", "analytics", "reconcile", "notifications", "upcoming-installments"]));
   });
+  it("repayments and statements refresh loans and cards", () => {
+    expect(INVALIDATION_MAP.repayments.map((k) => k[0])).toEqual(expect.arrayContaining(["loans", "accounts"]));
+    expect(INVALIDATION_MAP.statements.map((k) => k[0])).toEqual(expect.arrayContaining(["credit-statements", "credit-summary"]));
+  });
   it("captures touch reconcile and notifications", () => {
     expect(INVALIDATION_MAP.captures).toEqual([["reconcile"], ["notifications"]]);
   });
