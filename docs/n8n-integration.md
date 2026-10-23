@@ -62,6 +62,9 @@ Authorization: Bearer <YOUR_API_KEY>
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/integrations/accounts` | List accounts |
+| POST | `/api/integrations/accounts` | Create an account; `balance` is the opening balance in cents (needs `Idempotency-Key`) |
+| PATCH | `/api/integrations/accounts/[id]` | Edit name, color, icon, creditMeta, smsLastFour, isArchived. No balance field (needs `Idempotency-Key`) |
+| DELETE | `/api/integrations/accounts/[id]` | Archive an account, returns `{id, archived: true}` (needs `Idempotency-Key`) |
 | GET | `/api/integrations/transactions` | List transactions (filters + pagination) |
 | POST | `/api/integrations/transactions` | Create a transaction |
 | GET | `/api/integrations/budgets` | List budgets with spend |

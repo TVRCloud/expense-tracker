@@ -1839,3 +1839,140 @@ describe("integration credit cards", () => {
     expect(res.status).toBe(401);
   });
 });
+
+// ── POST /api/integrations/accounts and PATCH, DELETE .../accounts/[id] ────
+
+describe("integration account create, edit and archive", () => {
+  const KEY = "test-account-write-api-key";
+  let userId: string;
+  let otherUserId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Acc User", email: `acw${Date.now()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `acwo${Date.now()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+  });
+
+  function req(path: string, method: "POST" | "PATCH" | "DELETE", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${KEY}`,
+        "content-type": "application/json",
+        "idempotency-key": `acw-key-${n}`,
+        ...headers,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+  const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+
+  async function makeAccount(user: string = userId, over: Record<string, unknown> = {}) {
+    const { default: Account } = await import("@/models/Account");
+    return Account.create({ user, name: "Wallet", type: "cash", balance: 5000, currency: "INR", ...over });
+  }
+
+  it("POST creates an account with its opening balance, a ledger block, and replays on the same key", async () => {
+    const { POST } = await import("@/app/api/integrations/accounts/route");
+    const { default: Account } = await import("@/models/Account");
+    const { default: LedgerBlock } = await import("@/models/LedgerBlock");
+    const body = { name: "HDFC", type: "bank", balance: 250000, smsLastFour: ["1234"] };
+
+    const first = await POST(req("accounts", "POST", body, { "idempotency-key": "same" }), {});
+    const json = await first.json();
+    expect(first.status).toBe(201);
+    expect(json.data.name).toBe("HDFC");
+    expect(json.data.balance).toBe(250000);
+    expect(json.data.smsLastFour).toEqual(["1234"]);
+    expect(await LedgerBlock.countDocuments({ scope: "account", action: "create" })).toBe(1);
+
+    const replay = await POST(req("accounts", "POST", body, { "idempotency-key": "same" }), {});
+    expect((await replay.json()).data._id).toBe(json.data._id);
+    expect(await Account.countDocuments({ user: userId })).toBe(1);
+  });
+
+  it("POST creates a credit card with card details", async () => {
+    const { POST } = await import("@/app/api/integrations/accounts/route");
+    const res = await POST(
+      req("accounts", "POST", {
+        name: "Visa",
+        type: "credit_card",
+        creditMeta: { creditLimit: 10000000, billingCycleDay: 5, paymentDueDay: 25, network: "visa", lastFourDigits: "4242" },
+      }),
+      {}
+    );
+    const json = await res.json();
+    expect(res.status).toBe(201);
+    expect(json.data.creditMeta.network).toBe("visa");
+    expect(json.data.creditMeta.billingCycleDay).toBe(5);
+  });
+
+  it("POST rejects bad data, a missing key and a bad API key", async () => {
+    const { POST } = await import("@/app/api/integrations/accounts/route");
+    expect((await POST(req("accounts", "POST", { name: "", type: "nope" }), {})).status).toBe(400);
+    const noKey = new NextRequest("http://localhost/api/integrations/accounts", {
+      method: "POST",
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
+      body: JSON.stringify({ name: "A", type: "cash" }),
+    });
+    expect((await POST(noKey, {})).status).toBe(400);
+    expect((await POST(req("accounts", "POST", { name: "A", type: "cash" }, { authorization: "Bearer wrong" }), {})).status).toBe(401);
+  });
+
+  it("PATCH renames, sets card details and ignores a balance field", async () => {
+    const { PATCH } = await import("@/app/api/integrations/accounts/[id]/route");
+    const { default: Account } = await import("@/models/Account");
+    const { default: LedgerBlock } = await import("@/models/LedgerBlock");
+    const id = (await makeAccount())._id.toString();
+
+    const res = await PATCH(req(`accounts/${id}`, "PATCH", { name: "Pocket", color: "#112233", balance: 99999999 }), ctx(id));
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json.data.name).toBe("Pocket");
+    expect(json.data.balance).toBe(5000);
+    const stored = await Account.findById(id).lean<{ balance: number }>();
+    expect(stored?.balance).toBe(5000);
+    expect(await LedgerBlock.countDocuments({ scope: "account", action: "update" })).toBe(1);
+  });
+
+  it("PATCH rejects bad data and a bad id, and is 404 for another user's account", async () => {
+    const { PATCH } = await import("@/app/api/integrations/accounts/[id]/route");
+    const id = (await makeAccount())._id.toString();
+    const theirs = (await makeAccount(otherUserId))._id.toString();
+
+    expect((await PATCH(req(`accounts/${id}`, "PATCH", { smsLastFour: ["12"] }), ctx(id))).status).toBe(400);
+    expect((await PATCH(req("accounts/nope", "PATCH", { name: "x" }), ctx("nope"))).status).toBe(400);
+    expect((await PATCH(req(`accounts/${theirs}`, "PATCH", { name: "x" }), ctx(theirs))).status).toBe(404);
+  });
+
+  it("DELETE archives the account and a second delete is 404", async () => {
+    const { DELETE } = await import("@/app/api/integrations/accounts/[id]/route");
+    const { GET } = await import("@/app/api/integrations/accounts/route");
+    const { default: Account } = await import("@/models/Account");
+    const id = (await makeAccount())._id.toString();
+
+    const res = await DELETE(req(`accounts/${id}`, "DELETE"), ctx(id));
+    expect(res.status).toBe(200);
+    expect((await res.json()).data).toEqual({ id, archived: true });
+    const stored = await Account.findById(id).lean<{ isArchived: boolean }>();
+    expect(stored?.isArchived).toBe(true);
+    expect((await DELETE(req(`accounts/${id}`, "DELETE"), ctx(id))).status).toBe(404);
+
+    const list = await (await GET(new NextRequest("http://localhost/api/integrations/accounts", { headers: { authorization: `Bearer ${KEY}` } }), {})).json();
+    expect(list.data).toHaveLength(0);
+  });
+
+  it("DELETE is 404 for another user's account", async () => {
+    const { DELETE } = await import("@/app/api/integrations/accounts/[id]/route");
+    const theirs = (await makeAccount(otherUserId))._id.toString();
+    expect((await DELETE(req(`accounts/${theirs}`, "DELETE"), ctx(theirs))).status).toBe(404);
+  });
+});

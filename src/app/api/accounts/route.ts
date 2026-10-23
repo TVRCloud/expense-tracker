@@ -3,8 +3,7 @@ import connectDB from "@/lib/mongodb";
 import Account from "@/models/Account";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
-import { appendLedgerBlock } from "@/lib/ledger";
-import { accountCreateSchema as createSchema } from "@/features/accounts/schemas/account.schema";
+import { accountCreateSchema as createSchema, createAccount } from "@/lib/account-service";
 
 export async function GET() {
   try {
@@ -34,16 +33,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Validation failed", details: parsed.error.flatten() }, { status: 400 });
     }
 
-    await connectDB();
-    const account = await Account.create({ ...parsed.data, user: user.id });
-    await appendLedgerBlock({
-      userId: user.id,
-      scope: "account",
-      entityId: account._id.toString(),
-      action: "create",
-      after: account,
-      actor: user,
-    });
+    const account = await createAccount({ ...parsed.data, userId: user.id, actor: user });
 
     logger.info({ userId: user.id, accountId: account._id.toString() }, "Account created");
     return NextResponse.json({ data: account }, { status: 201 });
