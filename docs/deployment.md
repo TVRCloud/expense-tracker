@@ -16,6 +16,7 @@ Critical variables:
 - `CAPTURE_ENCRYPTION_KEY` — 32+ characters; encrypts captured messages and receipt photos. Changing it makes both unreadable
 - `NEXTAUTH_SECRET` — must be 32+ random characters
 - `NEXTAUTH_URL` — public URL of your deployment
+- `CAPTURE_ENCRYPTION_KEY` — 32+ random characters. Encrypts captured message text and receipts at rest and seeds the ids backup restore derives. Capture and receipt endpoints fail without it, and changing it makes stored captures and receipts unreadable and a re-run of an old restore add copies, so keep it the same across deploys and server moves
 
 ## Build
 

@@ -410,14 +410,11 @@ describe("encrypted backup and restore", () => {
 
       const badAmount = await craft({ accounts: [acct(id)], transactions: [tx({ amount: 1e20 })] });
       expect((await restore({ passphrase: PASS, backup: badAmount })).status).toBe(400);
-      const badUrl = await craft({ accounts: [acct(id)], transactions: [tx({ attachments: ["javascript:alert(1)"] })] });
-      expect((await restore({ passphrase: PASS, backup: badUrl })).status).toBe(400);
-
       expect(await Account.countDocuments({})).toBe(0);
     });
 
     it("refuses a newer payload version and a different app", async () => {
-      const newer = await craft({}, { version: 2 });
+      const newer = await craft({}, { version: 3 });
       const r = await restore({ passphrase: PASS, backup: newer });
       expect(r.status).toBe(400);
       expect((await r.json()).error.message).toContain("newer version");
@@ -1038,6 +1035,201 @@ describe("encrypted backup and restore", () => {
     expect((await exportBackup()).status).toBe(200);
     expect(seal).toHaveBeenCalledTimes(1);
     seal.mockRestore();
+  });
+
+  describe("receipts, foreign amounts, tax and the base currency", () => {
+    const oidHex = () => new mongoose.Types.ObjectId().toHexString();
+    async function craftFile(over: Record<string, unknown>, data: Record<string, unknown>) {
+      const { encryptBackup } = await import("@/lib/backup-crypto");
+      return encryptBackup({ app: "expense-tracker", version: 2, createdAt: new Date().toISOString(), data, ...over }, PASS);
+    }
+    async function newUser(key: string, currency?: string) {
+      const { default: User } = await import("@/models/User");
+      const { default: ApiKey } = await import("@/models/ApiKey");
+      const { hashKey } = await import("@/lib/integrations/auth");
+      const u = await User.create({
+        name: "X", email: `x${Date.now()}${Math.random()}@x.com`, password: "h", isActive: true,
+        ...(currency ? { currency, preferences: { currency } } : {}),
+      });
+      await ApiKey.create({ user: u._id, label: "phone", keyHash: hashKey(key), lastFour: key.slice(-4) });
+      return u._id.toString();
+    }
+
+    it("a transaction with a receipt is exported (not dropped), without the receipt, and says so", async () => {
+      const ids = await seed(a);
+      const { default: Transaction } = await import("@/models/Transaction");
+      const { default: Account } = await import("@/models/Account");
+      await Transaction.create({
+        user: a, account: ids.bank, type: "expense", amount: 4200, category: "Dining", date: new Date("2026-03-09T10:00:00Z"),
+        attachments: [oidHex(), oidHex()],
+      });
+      const { data } = await (await exportBackup()).json();
+      expect(data.counts.transactions).toBe(6);
+      expect(data.omitted).toEqual({});
+      expect(data.warnings.join(" ")).toContain("2 receipts are not included");
+      await wipe(a);
+      expect((await restore({ passphrase: PASS, backup: data.backup })).status).toBe(200);
+      const row = (await Transaction.findOne({ user: a, category: "Dining" }).lean())!;
+      expect(row.amount).toBe(4200);
+      expect(row.attachments ?? []).toEqual([]);
+      expect(await Account.countDocuments({ user: a })).toBe(3);
+    });
+
+    it("keeps foreign-currency originals and the tax flag, and the deductible categories", async () => {
+      const ids = await seed(a);
+      const { default: Transaction } = await import("@/models/Transaction");
+      const { default: User } = await import("@/models/User");
+      const when = new Date("2026-03-10T00:00:00Z");
+      await Transaction.create({
+        user: a, account: ids.bank, type: "expense", amount: 83500, category: "Travel", date: new Date("2026-03-10T10:00:00Z"),
+        originalAmount: 1000, originalCurrency: "USD", originalExponent: 2, rate: 83.5, rateDate: when, rateSource: "provider", deductible: true,
+      });
+      await Transaction.create({ user: a, account: ids.bank, type: "expense", amount: 100, category: "Health", date: new Date(), deductible: false });
+      await User.updateOne({ _id: a }, { $set: { "preferences.tax.deductibleCategories": ["health", "travel"] } });
+
+      const { data } = await (await exportBackup()).json();
+      await wipe(a);
+      await User.updateOne({ _id: a }, { $unset: { "preferences.tax": "" } });
+      const res = await restore({ passphrase: PASS, backup: data.backup });
+      expect(res.status).toBe(200);
+      expect((await res.json()).data.warnings.join(" ")).toContain("deductible tax categories were restored");
+
+      const travel = (await Transaction.findOne({ user: a, category: "Travel" }).lean())!;
+      expect(travel).toMatchObject({ originalAmount: 1000, originalCurrency: "USD", originalExponent: 2, rate: 83.5, rateSource: "provider", deductible: true });
+      expect(travel.rateDate!.toISOString()).toBe(when.toISOString());
+      expect((await Transaction.findOne({ user: a, category: "Health" }).lean())!.deductible).toBe(false);
+      expect((await User.findById(a).lean<{ preferences?: { tax?: { deductibleCategories?: string[] } } }>())!.preferences?.tax?.deductibleCategories).toEqual(["health", "travel"]);
+
+      // a person who already has categories keeps them, and is told
+      await User.updateOne({ _id: b }, { $set: { "preferences.tax.deductibleCategories": ["rent"] } });
+      const other = await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B });
+      expect((await other.json()).data.warnings.join(" ")).toContain("not changed");
+      expect((await User.findById(b).lean<{ preferences?: { tax?: { deductibleCategories?: string[] } } }>())!.preferences?.tax?.deductibleCategories).toEqual(["rent"]);
+    });
+
+    it("drops the server's own link tags on restore and keeps the person's tags", async () => {
+      const ids = await seed(a);
+      const { default: Transaction } = await import("@/models/Transaction");
+      await Transaction.create({
+        user: a, account: ids.bank, type: "expense", amount: 1, category: "Tagged", date: new Date(),
+        tags: ["dinner", "loan:abc", "repayment:def", "credit_statement:ghi", "loan_principal"],
+      });
+      const { data } = await (await exportBackup()).json();
+      await wipe(a);
+      await restore({ passphrase: PASS, backup: data.backup });
+      expect((await Transaction.findOne({ user: a, category: "Tagged" }).lean())!.tags).toEqual(["dinner"]);
+    });
+
+    it("exports the base currency and refuses a file in another currency once money data exists", async () => {
+      const usd = await newUser("usd-key-for-backup-test-1", "USD");
+      const { default: Account } = await import("@/models/Account");
+      const { default: User } = await import("@/models/User");
+      await Account.create({ user: usd, name: "US bank", type: "bank", balance: 5000 });
+      const { data } = await (await exportBackup(PASS, "usd-key-for-backup-test-1")).json();
+      const { decryptBackup } = await import("@/lib/backup-crypto");
+      expect(((await decryptBackup(data.backup, PASS)) as { baseCurrency: string }).baseCurrency).toBe("USD");
+
+      // user B has INR amounts: refused, dry run included, nothing written
+      await Account.create({ user: b, name: "INR bank", type: "bank", balance: 100 });
+      for (const dryRun of [true, false]) {
+        const res = await restore({ passphrase: PASS, backup: data.backup, dryRun }, { key: KEY_B, idem: dryRun ? null : "base-1" });
+        expect(res.status).toBe(400);
+        expect((await res.json()).error).toMatchObject({ code: "BASE_CURRENCY_MISMATCH" });
+      }
+      expect(await Account.countDocuments({ user: b })).toBe(1);
+      expect((await User.findById(b).lean<{ preferences?: { currency?: string } }>())!.preferences?.currency).toBe("INR");
+
+      // a locked base with no rows is refused too
+      const locked = await newUser("locked-key-for-backup-test-2");
+      await User.updateOne({ _id: locked }, { $set: { baseLocked: true } });
+      expect((await restore({ passphrase: PASS, backup: data.backup }, { key: "locked-key-for-backup-test-2" })).status).toBe(400);
+    });
+
+    it("sets the base from the file when there is no money data yet, and locks it", async () => {
+      const usd = await newUser("usd-key-for-backup-test-3", "USD");
+      const { default: Account } = await import("@/models/Account");
+      const { default: User } = await import("@/models/User");
+      await Account.create({ user: usd, name: "US bank", type: "bank", balance: 5000 });
+      const { data } = await (await exportBackup(PASS, "usd-key-for-backup-test-3")).json();
+
+      const fresh = await newUser("fresh-key-for-backup-test-4");
+      const dry = await restore({ passphrase: PASS, backup: data.backup, dryRun: true }, { key: "fresh-key-for-backup-test-4", idem: null });
+      const dryBody = (await dry.json()).data;
+      expect(dryBody.baseCurrency).toEqual({ inBackup: "USD", current: "INR", willSet: true });
+      expect(dryBody.warnings.join(" ")).toContain("will be set to USD");
+      expect((await User.findById(fresh).lean<{ preferences?: { currency?: string } }>())!.preferences?.currency).toBe("INR");
+
+      const res = await restore({ passphrase: PASS, backup: data.backup }, { key: "fresh-key-for-backup-test-4" });
+      expect(res.status).toBe(200);
+      const user = (await User.findById(fresh).lean<{ preferences?: { currency?: string }; baseLocked?: boolean }>())!;
+      expect(user.preferences?.currency).toBe("USD");
+      expect(user.baseLocked).toBe(true);
+      expect(await Account.countDocuments({ user: fresh })).toBe(1);
+    });
+
+    it("a file with no base currency (older files) is INR", async () => {
+      const usd = await newUser("usd-key-for-backup-test-5", "USD");
+      const { default: Account } = await import("@/models/Account");
+      await Account.create({ user: usd, name: "US bank", type: "bank", balance: 5000 });
+      const old = await craftFile({ version: 1 }, { accounts: [{ id: oidHex(), name: "Old", type: "bank", balance: 5 }] });
+      const res = await restore({ passphrase: PASS, backup: old }, { key: "usd-key-for-backup-test-5" });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.code).toBe("BASE_CURRENCY_MISMATCH");
+      expect((await restore({ passphrase: PASS, backup: old })).status).toBe(200); // INR user
+    });
+
+    it("an older file with link-style attachments still restores, without them", async () => {
+      const acct = oidHex();
+      const file = await craftFile(
+        { version: 1 },
+        {
+          accounts: [{ id: acct, name: "A", type: "bank", balance: 0 }],
+          transactions: [{ id: oidHex(), account: acct, type: "expense", amount: 1, category: "x", date: new Date().toISOString(), attachments: ["javascript:alert(1)"] }],
+        }
+      );
+      expect((await restore({ passphrase: PASS, backup: file })).status).toBe(200);
+      const { default: Transaction } = await import("@/models/Transaction");
+      expect((await Transaction.findOne({ user: a }).lean())!.attachments ?? []).toEqual([]);
+    });
+
+    it("budgets, rules and subscription choices are not copied by a re-run or a racing run", async () => {
+      await seed(a);
+      const { data } = await (await exportBackup()).json();
+      const { default: Budget } = await import("@/models/Budget");
+      const { default: Rule } = await import("@/models/Rule");
+      const { default: SubscriptionDecision } = await import("@/models/SubscriptionDecision");
+      const { default: Account } = await import("@/models/Account");
+      const counts = async () => [
+        await Budget.countDocuments({ user: b }),
+        await Rule.countDocuments({ user: b }),
+        await SubscriptionDecision.countDocuments({ user: b }),
+        await Account.countDocuments({ user: b }),
+      ];
+      // two runs at the same time under different keys: either may fail, none may duplicate
+      await Promise.all([
+        restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B, idem: "race-1" }),
+        restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B, idem: "race-2" }),
+      ]);
+      const [bud, rul, dec, acc] = await counts();
+      expect(bud).toBeLessThanOrEqual(1);
+      expect(rul).toBeLessThanOrEqual(1);
+      expect(dec).toBeLessThanOrEqual(1);
+      expect(acc).toBeLessThanOrEqual(3);
+
+      // then a clean run finishes the job and a further run adds nothing
+      expect((await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B, idem: "race-3" })).status).toBe(200);
+      expect(await counts()).toEqual([1, 1, 1, 3]);
+      const again = (await (await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B, idem: "race-4" })).json()).data;
+      for (const k of ["budgets", "rules", "subscriptionDecisions"]) expect(again.counts[k].toCreate).toBe(0);
+      expect(await counts()).toEqual([1, 1, 1, 3]);
+    });
+
+    it("the restore route has a duration limit above the gate's job limit", async () => {
+      const route = await import("@/app/api/integrations/backup/restore/route");
+      const { GATE_LIMITS } = await import("@/lib/backup-crypto");
+      expect(route.maxDuration).toBe(60);
+      expect(GATE_LIMITS.jobMs / 1000).toBeLessThan(route.maxDuration);
+    });
   });
 
   it("a dry run does not use up the real restore quota", async () => {

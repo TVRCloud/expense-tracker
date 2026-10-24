@@ -53,7 +53,7 @@ export const POST = withIntegrationRoute("backup", async ({ req, user, requestId
     // comes back first; once work has started nothing is given back.
     return await withKeyGate(async () => {
       started = true;
-      const { payload, counts, omitted } = await buildBackup(user.id);
+      const { payload, counts, omitted, warnings } = await buildBackup(user.id);
       const packed = await packBackup(payload);
       // Refuse before the (slow, memory hungry) encryption if the answer could not be sent.
       if (estimatedResponseBytes(packed.length) > MAX_RESPONSE_BYTES) {
@@ -63,7 +63,7 @@ export const POST = withIntegrationRoute("backup", async ({ req, user, requestId
         );
       }
       const backup = await sealPacked(packed, parsed.data.passphrase, { createdAt: payload.createdAt });
-      return integrationOk({ backup, createdAt: payload.createdAt, counts, omitted }, requestId);
+      return integrationOk({ backup, createdAt: payload.createdAt, counts, omitted, warnings }, requestId);
     });
   } catch (err) {
     if (!started && err instanceof BackupError && err.reason === "busy") await refundBackupBuckets(user.id, counted);
