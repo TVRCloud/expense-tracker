@@ -144,15 +144,22 @@ describe("subscriptionOccurrences", () => {
   });
 
   it("catches a long-overdue weekly charge up to today instead of emitting past-dated ones", () => {
-    // About ten years behind: more than the old shared 200-step guard allowed.
+    // Ten years behind (3650 mod 7 = 3): the overdue charge counts once today, then the cadence resumes on 28 Oct.
     const dates = subscriptionOccurrences(at(-3650), "weekly", now, 30, KOLKATA);
-    expect(localDateKey(dates[0], KOLKATA)).toBe("2026-10-24"); // the overdue charge counts once, today
-    for (let i = 1; i < dates.length; i++) {
-      const gapDays = (dates[i].getTime() - dates[i - 1].getTime()) / 86_400_000;
-      if (i > 1) expect(gapDays).toBe(7);
-      expect(localDateKey(dates[i], KOLKATA) > "2026-10-24").toBe(true);
-    }
-    expect(dates.length).toBeLessThanOrEqual(6);
+    expect(dates.map((d) => localDateKey(d, KOLKATA))).toEqual(["2026-10-24", "2026-10-28", "2026-11-04", "2026-11-11", "2026-11-18"]);
+  });
+
+  it("counts a charge dated today once, and respects the window edges", () => {
+    expect(subscriptionOccurrences(at(0), "monthly", now, 30, KOLKATA).map((d) => localDateKey(d, KOLKATA))).toEqual(["2026-10-24"]);
+    expect(subscriptionOccurrences(at(29), "monthly", now, 30, KOLKATA)).toHaveLength(1); // last day inside the window
+    expect(subscriptionOccurrences(at(30), "monthly", now, 30, KOLKATA)).toHaveLength(0); // first day outside it
+    expect(subscriptionOccurrences(at(0), "monthly", now, 1, KOLKATA)).toHaveLength(1);
+    expect(subscriptionOccurrences(at(1), "monthly", now, 1, KOLKATA)).toHaveLength(0);
+  });
+
+  it("treats an unknown cadence as monthly", () => {
+    const dates = subscriptionOccurrences(at(2), "fortnightly", now, 40, KOLKATA);
+    expect(dates.map((d) => localDateKey(d, KOLKATA))).toEqual(["2026-10-26", "2026-11-26"]);
   });
 
   it("counts a charge exactly one cadence step overdue once today, not twice", () => {
