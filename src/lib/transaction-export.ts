@@ -8,8 +8,9 @@ import { DEFAULT_TIME_ZONE, isValidTimeZone, localDateKey, localMidnight } from 
 
 // CSV of a person's transactions for the integrations export. Amounts are in
 // major units ("1250.50") so the file reads in a spreadsheet and imports back
-// through src/lib/transaction-import.ts. Voided and deleted rows, and planned
-// instalments that have not happened, are left out.
+// through src/lib/transaction-import.ts. Voided and deleted rows, transfers, and
+// planned instalments that have not happened (upcoming, skipped, overdue) are
+// left out.
 
 export const EXPORT_MAX_ROWS = 20_000;
 export const EXPORT_COLUMNS = [
@@ -21,7 +22,6 @@ export const EXPORT_COLUMNS = [
   "subcategory",
   "description",
   "account",
-  "transferTo",
   "note",
   "tags",
   "source",
@@ -61,11 +61,13 @@ export async function exportTransactionsCsv(params: ExportParams) {
     user: params.userId,
     isDeleted: { $ne: true },
     reviewStatus: { $ne: "voided" },
-    $nor: [{ isRecurring: true, installmentStatus: { $in: ["upcoming", "skipped"] } }],
+    // Income and spending only: import has no transfers to take back.
+    type: { $in: ["income", "expense"] },
+    $nor: [{ isRecurring: true, installmentStatus: { $in: ["upcoming", "skipped", "overdue"] } }],
   };
   if (params.accountId) {
     if (!Types.ObjectId.isValid(params.accountId)) throw new TransactionExportError("Invalid account");
-    filter.$or = [{ account: params.accountId }, { transferTo: params.accountId }];
+    filter.account = params.accountId;
   }
   const range: Record<string, Date> = {};
   if (params.dateFrom) {
@@ -85,7 +87,7 @@ export async function exportTransactionsCsv(params: ExportParams) {
     Transaction.find(filter)
       .sort({ date: 1, _id: 1 })
       .limit(EXPORT_MAX_ROWS + 1)
-      .select("date type amount currency category subcategory description account transferTo note tags source")
+      .select("date type amount currency category subcategory description account note tags source")
       .lean<
         {
           date: Date;
@@ -96,7 +98,6 @@ export async function exportTransactionsCsv(params: ExportParams) {
           subcategory?: string;
           description?: string;
           account: Types.ObjectId;
-          transferTo?: Types.ObjectId;
           note?: string;
           tags?: string[];
           source?: string;
@@ -115,7 +116,6 @@ export async function exportTransactionsCsv(params: ExportParams) {
     subcategory: t.subcategory ?? "",
     description: t.description ?? "",
     account: names.get(t.account.toString()) ?? "",
-    transferTo: t.transferTo ? (names.get(t.transferTo.toString()) ?? "") : "",
     note: t.note ?? "",
     tags: (t.tags ?? []).join(";"),
     source: t.source ?? "manual",

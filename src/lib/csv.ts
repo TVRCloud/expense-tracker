@@ -14,7 +14,7 @@ function escapeCsvCell(value: unknown): string {
   // quote forces it to be read as text instead.
   if (/^[=+\-@\t\r]/.test(str)) str = `'${str}`;
 
-  if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
+  if (/[",\r\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
   return str;
 }
 

@@ -208,9 +208,10 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
 
   // Categorise rules (src/lib/rule-service.ts) fill in what the person left
   // at the default: category still "other", a merchant name that came from a
-  // bank message. Plain transactions only; splits, series and transfers are
+  // bank message. Plain transactions only, and never an import (the preview
+  // shows the file's own category and description, so they are written as shown); splits, series and transfers are
   // always exactly what was asked for.
-  if (!rest.splits && !rest.isRecurring && rest.type !== "transfer") {
+  if (!rest.splits && !rest.isRecurring && rest.type !== "transfer" && !quiet) {
     const overrides = await ruleOverridesForTransaction(userId, {
       category: rest.category,
       description: rest.description,

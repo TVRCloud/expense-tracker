@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { localMidnight } from "@/lib/spend-limit-time";
 
 // Pure CSV import helpers: parse the text, suggest a column mapping, and turn
 // each row into a transaction candidate or an error. No database access here;
@@ -6,7 +7,7 @@ import { z } from "zod";
 // Every loop below is bounded by IMPORT_MAX_BYTES / IMPORT_MAX_ROWS.
 
 export const IMPORT_MAX_BYTES = 1_000_000;
-export const IMPORT_MAX_ROWS = 1000;
+export const IMPORT_MAX_ROWS = 500;
 export const IMPORT_MAX_COLUMNS = 50;
 const MAX_AMOUNT_PAISE = 1e12;
 
@@ -176,32 +177,55 @@ export function parseDateCell(raw: string, order: DateOrder): { y: number; m: nu
   return null;
 }
 
+// A comma is only ever thousands grouping: 1,234.50 or Indian 1,23,456.78. A
+// lone "12,50" could be a decimal comma, so it is refused, not guessed.
+const GROUPED = /^(\d{1,3}(,\d{3})+|\d{1,2}(,\d{2})+,\d{3})(\.\d{1,2})?$/;
+
 /** "1,234.50", "₹ 1234", "(500.00)", "250 Dr" to integer paise (negative when written so), or null. */
 export function parseAmountCell(raw: string): number | null {
+  if (raw.length > 64) return null;
   let s = raw.trim();
   if (!s) return null;
   let negative = false;
-  if (/^\(.*\)$/.test(s)) {
+  if (s.startsWith("(") && s.endsWith(")")) {
     negative = true;
     s = s.slice(1, -1);
   }
-  const suffix = /\s*(dr|cr)\.?$/i.exec(s);
+  const suffix = /(dr|cr)\.?$/i.exec(s);
   if (suffix) {
     if (suffix[1].toLowerCase() === "dr") negative = !negative;
-    s = s.slice(0, suffix.index);
+    s = s.slice(0, suffix.index).trimEnd();
   }
-  s = s.replace(/^(rs\.?|inr|₹)\s*/i, "").replace(/[\s,₹]/g, "");
+  s = s.replace(/^(rs\.?|inr|₹)\s*/i, "").replace(/[\s₹]/g, "");
   if (s.startsWith("-")) {
     negative = !negative;
     s = s.slice(1);
   } else if (s.startsWith("+")) {
     s = s.slice(1);
   }
+  if (s.includes(",")) {
+    if (!GROUPED.test(s)) return null;
+    s = s.replace(/,/g, "");
+  }
   const m = /^(\d{1,15})(?:\.(\d{1,2}))?$/.exec(s);
   if (!m) return null;
   const paise = Number(m[1]) * 100 + Number((m[2] ?? "").padEnd(2, "0") || 0);
   if (!Number.isSafeInteger(paise) || paise > MAX_AMOUNT_PAISE) return null;
   return negative ? -paise : paise;
+}
+
+/** A numeric date whose day and month could swap: 03/04/2026 reads two ways. */
+export function dateIsAmbiguous(raw: string): boolean {
+  const m = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2}|\d{4})(?:[T\s,].*)?$/.exec(raw.trim());
+  if (!m) return false;
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  return a <= 12 && b <= 12 && a !== b;
+}
+
+// A cell the export defanged (leading ') comes back as it was written.
+function unquoteCell(s: string): string {
+  return s.length > 1 && s[0] === "'" && /^[=+\-@\t\r]/.test(s[1]) ? s.slice(1) : s;
 }
 
 const EXPENSE_WORDS = /^(expense|debit|dr|withdrawal|withdraw|spent|paid|payment|out|d)$/i;
@@ -212,11 +236,12 @@ export type ImportOptions = {
   dateOrder: DateOrder;
   amountSign: AmountSign;
   now: Date;
+  timeZone: string; // the user's zone: a row lands on its own calendar day there
 };
 
 export type ImportCandidate = {
   row: number; // 1-based data row, as a person counts them below the header
-  date: Date; // noon UTC on the statement's calendar date
+  date: Date; // the start of that calendar day in the user's time zone
   dateKey: string; // YYYY-MM-DD as written in the file
   type: "income" | "expense";
   amount: number; // integer paise, positive
@@ -250,6 +275,7 @@ export function rowToCandidate(
   opts: ImportOptions
 ): { ok: true; candidate: ImportCandidate } | { ok: false; error: ImportRowError } {
   const cell = (f: ImportField) => (columns[f] === undefined ? "" : (cells[columns[f] as number] ?? "").trim());
+  const text = (f: ImportField) => unquoteCell(cell(f));
   const fail = (field: string, message: string) => ({ ok: false as const, error: { row, field, message } });
 
   const dateCell = cell("date");
@@ -290,20 +316,20 @@ export function rowToCandidate(
     signed = Math.abs(signed);
   }
 
-  const tagsCell = cell("tags");
+  const tagsCell = text("tags");
   const tags = tagsCell
     ? [...new Set(tagsCell.split(/[;,|]/).map((t) => t.trim().slice(0, 40)).filter(Boolean))].slice(0, 10)
     : [];
-  const description = cell("description").slice(0, 200);
-  const category = cell("category").slice(0, 50) || "other";
-  const note = cell("note").slice(0, 500);
+  const description = text("description").slice(0, 200);
+  const category = text("category").slice(0, 50) || "other";
+  const note = text("note").slice(0, 500);
 
   const dateKey = `${String(parsedDate.y).padStart(4, "0")}-${String(parsedDate.m).padStart(2, "0")}-${String(parsedDate.d).padStart(2, "0")}`;
   return {
     ok: true,
     candidate: {
       row,
-      date: new Date(Date.UTC(parsedDate.y, parsedDate.m - 1, parsedDate.d, 12)),
+      date: localMidnight(opts.timeZone, parsedDate.y, parsedDate.m, parsedDate.d),
       dateKey,
       type,
       amount: signed,

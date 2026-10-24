@@ -5,12 +5,14 @@ import connectDB from "@/lib/mongodb";
 import Account from "@/models/Account";
 import Transaction from "@/models/Transaction";
 import User from "@/models/User";
+import ImportLock from "@/models/ImportLock";
 import type { AuthUser } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { createTransaction } from "@/lib/transaction-service";
 import { DEFAULT_TIME_ZONE, isValidTimeZone, localDateKey } from "@/lib/spend-limit-time";
 import {
   CsvImportError,
+  dateIsAmbiguous,
   IMPORT_MAX_BYTES,
   importMappingSchema,
   parseCsv,
@@ -34,7 +36,9 @@ export const importRequestSchema = z
     accountId: z.string().refine((v) => Types.ObjectId.isValid(v), "Invalid account"),
     csv: z.string().min(1).max(IMPORT_MAX_BYTES),
     mapping: importMappingSchema.optional(),
-    dateOrder: z.enum(["dmy", "mdy", "ymd"]).default("dmy"),
+    // No default: a file with 03/04/2026 reads two ways, so the commit asks for
+    // the order when the file is ambiguous (preview warns and reads day first).
+    dateOrder: z.enum(["dmy", "mdy", "ymd"]).optional(),
     amountSign: z.enum(["signed", "expense", "income"]).default("signed"),
   })
   .strict();
@@ -50,7 +54,7 @@ export type ImportRequest = z.infer<typeof importRequestSchema>;
 export type ImportCommitRequest = z.infer<typeof importCommitSchema>;
 
 export class TransactionImportError extends Error {
-  code: "ACCOUNT_NOT_FOUND" | "NEEDS_MAPPING" | "INVALID_CSV";
+  code: "ACCOUNT_NOT_FOUND" | "NEEDS_MAPPING" | "INVALID_CSV" | "TOO_MANY_EXISTING" | "NEEDS_DATE_ORDER" | "IMPORT_IN_PROGRESS";
   details?: Record<string, unknown>;
   constructor(code: TransactionImportError["code"], message: string, details?: Record<string, unknown>) {
     super(message);
@@ -62,7 +66,8 @@ export class TransactionImportError extends Error {
 
 const ERROR_LIMIT = 50;
 const SAMPLE_LIMIT = 20;
-const EXISTING_LIMIT = 20_000;
+export const EXISTING_LIMIT = 20_000;
+const LOCK_SECONDS = 120;
 const DAY_MS = 86_400_000;
 
 export function rowHash(dateKey: string, type: string, amount: number) {
@@ -77,7 +82,15 @@ type Analysis = {
   totalRows: number;
   candidates: (ImportCandidate & { duplicate: boolean })[];
   errors: ImportRowError[];
+  ambiguousDates: boolean;
+  dateOrder: "dmy" | "mdy" | "ymd";
 };
+
+async function userTimeZone(userId: string) {
+  const user = await User.findById(userId).select("preferences.timezone").lean<{ preferences?: { timezone?: string } }>();
+  const tzPref = user?.preferences?.timezone;
+  return tzPref && isValidTimeZone(tzPref) ? tzPref : DEFAULT_TIME_ZONE;
+}
 
 async function analyze(userId: string, input: ImportRequest): Promise<Analysis> {
   await connectDB();
@@ -108,15 +121,18 @@ async function analyze(userId: string, input: ImportRequest): Promise<Analysis> 
   }
 
   const now = new Date();
+  const timeZone = await userTimeZone(userId);
+  const dateOrder = input.dateOrder ?? "dmy";
+  const ambiguousDates = table.rows.some((cells) => dateIsAmbiguous(cells[columns.date as number] ?? ""));
   const candidates: ImportCandidate[] = [];
   const errors: ImportRowError[] = [];
   table.rows.forEach((cells, i) => {
-    const out = rowToCandidate(cells, i + 1, columns, { mapping, dateOrder: input.dateOrder, amountSign: input.amountSign, now });
+    const out = rowToCandidate(cells, i + 1, columns, { mapping, dateOrder, amountSign: input.amountSign, now, timeZone });
     if (out.ok) candidates.push(out.candidate);
     else errors.push(out.error);
   });
 
-  const duplicates = await markDuplicates(userId, input.accountId, candidates);
+  const duplicates = await markDuplicates(userId, input.accountId, candidates, timeZone);
   return {
     account: { id: input.accountId, name: account.name, currency: account.currency ?? "INR" },
     delimiter: table.delimiter,
@@ -125,14 +141,18 @@ async function analyze(userId: string, input: ImportRequest): Promise<Analysis> 
     totalRows: table.rows.length,
     candidates: candidates.map((c, i) => ({ ...c, duplicate: duplicates[i] })),
     errors,
+    ambiguousDates,
+    dateOrder,
   };
 }
 
-async function markDuplicates(userId: string, accountId: string, candidates: ImportCandidate[]): Promise<boolean[]> {
+async function markDuplicates(
+  userId: string,
+  accountId: string,
+  candidates: ImportCandidate[],
+  timeZone: string
+): Promise<boolean[]> {
   if (candidates.length === 0) return [];
-  const user = await User.findById(userId).select("preferences.timezone").lean<{ preferences?: { timezone?: string } }>();
-  const tzPref = user?.preferences?.timezone;
-  const timeZone = tzPref && isValidTimeZone(tzPref) ? tzPref : DEFAULT_TIME_ZONE;
 
   let min = Infinity;
   let max = -Infinity;
@@ -149,11 +169,20 @@ async function markDuplicates(userId: string, accountId: string, candidates: Imp
     type: { $in: ["income", "expense"] },
     date: { $gte: new Date(min - 2 * DAY_MS), $lte: new Date(max + 2 * DAY_MS) },
     // Planned instalments that have not happened are not history.
-    $nor: [{ isRecurring: true, installmentStatus: { $in: ["upcoming", "skipped"] } }],
+    $nor: [{ isRecurring: true, installmentStatus: { $in: ["upcoming", "skipped", "overdue"] } }],
   })
     .select("type amount date")
-    .limit(EXISTING_LIMIT)
+    .sort({ date: 1, _id: 1 })
+    .limit(EXISTING_LIMIT + 1)
     .lean<{ type: string; amount: number; date: Date }[]>();
+  // Cutting the list short would hide duplicates, so refuse instead.
+  if (existing.length > EXISTING_LIMIT) {
+    throw new TransactionImportError(
+      "TOO_MANY_EXISTING",
+      "The account has too many transactions in this file's date range to check for duplicates; import a shorter date span",
+      { limit: EXISTING_LIMIT }
+    );
+  }
 
   const counts = new Map<string, number>();
   for (const t of existing) {
@@ -171,7 +200,17 @@ async function markDuplicates(userId: string, accountId: string, candidates: Imp
   });
 }
 
-function summary(a: Analysis) {
+function warningsOf(a: Analysis, explicit = false) {
+  const warnings: string[] = [];
+  if (a.ambiguousDates && !explicit) {
+    warnings.push(
+      "Some dates, like 03/04/2026, can be day first or month first. They were read day first; send dateOrder to confirm. Commit needs it."
+    );
+  }
+  return warnings;
+}
+
+function summary(a: Analysis, explicit: boolean) {
   const fresh = a.candidates.filter((c) => !c.duplicate);
   const sum = (type: string) => fresh.filter((c) => c.type === type).reduce((n, c) => n + c.amount, 0);
   return {
@@ -187,6 +226,8 @@ function summary(a: Analysis) {
     incomeTotal: sum("income"),
     expenseTotal: sum("expense"),
     errors: a.errors.slice(0, ERROR_LIMIT),
+    ambiguousDates: a.ambiguousDates,
+    warnings: warningsOf(a, explicit),
     sample: a.candidates.slice(0, SAMPLE_LIMIT).map((c) => ({
       row: c.row,
       date: c.dateKey,
@@ -202,45 +243,70 @@ function summary(a: Analysis) {
 
 /** Dry run: reads the file and the account's rows, writes nothing. */
 export async function previewImport(userId: string, input: ImportRequest) {
-  return summary(await analyze(userId, input));
+  return summary(await analyze(userId, input), input.dateOrder !== undefined);
+}
+
+async function takeLock(userId: string, accountId: string) {
+  await ImportLock.init();
+  try {
+    await ImportLock.create({ user: userId, account: accountId, expiresAt: new Date(Date.now() + LOCK_SECONDS * 1000) });
+  } catch (err) {
+    if ((err as { code?: number }).code === 11000) {
+      throw new TransactionImportError("IMPORT_IN_PROGRESS", "Another import into this account is still running; try again shortly");
+    }
+    throw err;
+  }
 }
 
 export async function commitImport(userId: string, actor: AuthUser, input: ImportCommitRequest) {
-  const a = await analyze(userId, input);
-  const todo = a.candidates.filter((c) => input.includeDuplicates || !c.duplicate);
-  let imported = 0;
-  let failed = 0;
-  for (const c of todo) {
-    try {
-      await createTransaction({
-        userId,
-        actor,
-        accountId: input.accountId,
-        type: c.type,
-        amount: c.amount,
-        currency: a.account.currency,
-        category: c.category,
-        description: c.description || undefined,
-        note: c.note,
-        date: c.date.toISOString(),
-        tags: c.tags,
-        isRecurring: false,
-        provenance: { source: "import" },
-        skipBalance: !input.adjustBalance,
-      });
-      imported += 1;
-    } catch (err) {
-      failed += 1;
-      logger.error({ err, userId, row: c.row }, "import row failed");
+  await connectDB();
+  // One import per account at a time, so the duplicate check below sees every
+  // row an earlier import wrote and a retry under a new key cannot double up.
+  await takeLock(userId, input.accountId);
+  try {
+    const a = await analyze(userId, input);
+    if (a.ambiguousDates && input.dateOrder === undefined) {
+      throw new TransactionImportError("NEEDS_DATE_ORDER", "The file has dates that read two ways; send dateOrder (dmy, mdy or ymd)");
     }
+    const todo = a.candidates.filter((c) => input.includeDuplicates || !c.duplicate);
+    let imported = 0;
+    let failed = 0;
+    for (const c of todo) {
+      try {
+        await createTransaction({
+          userId,
+          actor,
+          accountId: input.accountId,
+          type: c.type,
+          amount: c.amount,
+          currency: a.account.currency,
+          category: c.category,
+          description: c.description || undefined,
+          note: c.note,
+          date: c.date.toISOString(),
+          tags: c.tags,
+          isRecurring: false,
+          provenance: { source: "import" },
+          skipBalance: !input.adjustBalance,
+        });
+        imported += 1;
+      } catch (err) {
+        failed += 1;
+        logger.error({ err, userId, row: c.row }, "import row failed");
+      }
+    }
+    return {
+      account: a.account,
+      totalRows: a.totalRows,
+      imported,
+      skippedDuplicates: input.includeDuplicates ? 0 : a.candidates.length - todo.length,
+      invalidCount: a.errors.length,
+      failed,
+      errors: a.errors.slice(0, ERROR_LIMIT),
+    };
+  } finally {
+    await ImportLock.deleteOne({ user: userId, account: input.accountId }).catch((err) =>
+      logger.error({ err, userId }, "could not release the import lock")
+    );
   }
-  return {
-    account: a.account,
-    totalRows: a.totalRows,
-    imported,
-    skippedDuplicates: input.includeDuplicates ? 0 : a.candidates.length - todo.length,
-    invalidCount: a.errors.length,
-    failed,
-    errors: a.errors.slice(0, ERROR_LIMIT),
-  };
 }
