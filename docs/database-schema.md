@@ -78,7 +78,7 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `isRecurring` | Boolean | |
 | `recurringId`, `recurrence*`, `installmentIndex`, `installmentStatus`, `paidAt` | | recurring series fields |
 | `splitGroupId` | ObjectId | shared by split-purchase siblings |
-| `source` | String | `manual\|sms\|notification\|n8n\|recurring\|import`, default `manual` |
+| `source` | String | `manual\|sms\|notification\|n8n\|recurring\|import`, default `manual`. `import` rows come from the CSV import (`/api/integrations/import/commit`) |
 | `sourceCapture` | ObjectId | ref: CapturedMessage, the message whose values are in use |
 | `captures` | [ObjectId] | every captured message for this payment |
 | `reviewStatus` | String | `unreviewed\|confirmed\|corrected\|voided`, null for manual rows |
@@ -362,7 +362,16 @@ Index: `{user, revoked}`
 | `fingerprint` | String | sha256 of the request body |
 | `status` | String | `pending\|completed` |
 | `responseStatus` / `responseBody` | | replayed on retry |
-| `expiresAt` | Date | TTL, `N8N_IDEMPOTENCY_TTL_SECONDS` |
+| `expiresAt` | Date | TTL, `N8N_IDEMPOTENCY_TTL_SECONDS`; a pending record of a long write (CSV import) expires after 2 minutes until it completes |
+
+## import_locks
+
+One live CSV import per user and account.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` / `account` | String | unique together: the lock |
+| `expiresAt` | Date | TTL, 2 minutes, frees a lock if the run was killed |
 
 ## credit_statements
 
