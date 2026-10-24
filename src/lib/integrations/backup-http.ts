@@ -17,19 +17,20 @@ const notJson = (requestId: string) => integrationError("VALIDATION_ERROR", "Req
 
 // Reads the stream with a running byte count and cancels it past the cap, so a
 // missing or false Content-Length cannot make the server hold a huge body.
-export type BodyRead = { ok: true; body: unknown } | { ok: false; res: Response; busy?: true };
+// `refund`: the refusal is the server's or a slow link's doing, so the request slot is given back.
+export type BodyRead = { ok: true; body: unknown } | { ok: false; res: Response; busy?: true; refund?: true };
 
 // Body reads are bounded three ways: at most four at once per process, one at a
 // time per person (so one person cannot hold every slot), and a deadline (a total
 // time, and a longest wait for the next chunk). A read that runs out is
 // cancelled and its slot freed.
 const MAX_BODY_READS = 4;
-export const BODY_LIMITS = { totalMs: 30_000, idleMs: 10_000 };
+export const BODY_LIMITS = { totalMs: 90_000, idleMs: 15_000 };
 let bodyReads = 0;
 const readersNow = new Set<string>();
 
 export async function readBackupBody(req: NextRequest, requestId: string, userId: string): Promise<BodyRead> {
-  if (bodyReads >= MAX_BODY_READS || readersNow.has(userId)) return { ok: false, res: busyResponse(requestId), busy: true };
+  if (bodyReads >= MAX_BODY_READS || readersNow.has(userId)) return { ok: false, res: busyResponse(requestId), busy: true, refund: true };
   bodyReads += 1;
   readersNow.add(userId);
   try {
@@ -50,30 +51,37 @@ async function readCounted(req: NextRequest, requestId: string): Promise<BodyRea
   const chunks: Uint8Array[] = [];
   let size = 0;
   const deadline = Date.now() + BODY_LIMITS.totalMs;
-  const giveUp = async (): Promise<BodyRead> => {
-    await reader.cancel().catch(() => undefined);
+  // Never wait for a cancel to finish: a stream that will not cancel must not hold a slot.
+  const dropReader = () => void reader.cancel().catch(() => undefined);
+  const giveUp = (): BodyRead => {
+    dropReader();
     return {
       ok: false,
       res: integrationError("VALIDATION_ERROR", "The upload took too long", requestId, { reason: "timeout" }),
+      refund: true,
     };
   };
   try {
     for (;;) {
       const wait = Math.min(BODY_LIMITS.idleMs, deadline - Date.now());
-      if (wait <= 0) return await giveUp();
+      if (wait <= 0) return giveUp();
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const next = await Promise.race([
-        reader.read(),
-        new Promise<"timeout">((resolve) => {
-          timer = setTimeout(() => resolve("timeout"), wait);
-        }),
-      ]);
-      clearTimeout(timer);
-      if (next === "timeout") return await giveUp();
+      let next: ReadableStreamReadResult<Uint8Array> | "timeout";
+      try {
+        next = await Promise.race([
+          reader.read(),
+          new Promise<"timeout">((resolve) => {
+            timer = setTimeout(() => resolve("timeout"), wait);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+      if (next === "timeout") return giveUp();
       if (next.done) break;
       size += next.value.byteLength;
       if (size > MAX_BODY_BYTES) {
-        await reader.cancel().catch(() => undefined);
+        dropReader();
         return { ok: false, res: tooLarge(requestId) };
       }
       chunks.push(next.value);
@@ -132,6 +140,7 @@ export function backupFailure(err: unknown, requestId: string, route: string): R
     if (err.reason === "too_large_for_response") {
       return integrationError("TOO_LARGE_FOR_RESPONSE", err.message, requestId, { reason: "too_large_for_response" });
     }
+    if (err.reason === "timeout") return integrationError("INTERNAL_ERROR", err.message, requestId, { reason: "timeout" });
     if (err.reason === "busy") return integrationError("RATE_LIMITED", err.message, requestId, { retryAfterSeconds: 5, reason: "busy" });
     return integrationError("VALIDATION_ERROR", err.message, requestId, { reason: err.reason });
   }

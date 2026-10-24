@@ -32,7 +32,7 @@ export const POST = withIntegrationRoute("backup-restore", async ({ req, user, r
     counted.push("request");
     const read = await readBackupBody(req, requestId, user.id);
     if (!read.ok) {
-      if (read.busy) await refundBackupBuckets(user.id, counted);
+      if (read.refund) await refundBackupBuckets(user.id, counted);
       return read.res;
     }
     const parsed = bodySchema.safeParse(read.body);

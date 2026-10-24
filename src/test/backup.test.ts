@@ -877,8 +877,8 @@ describe("encrypted backup and restore", () => {
   describe("body read deadlines", () => {
     afterEach(async () => {
       const { BODY_LIMITS } = await import("@/lib/integrations/backup-http");
-      BODY_LIMITS.totalMs = 30_000;
-      BODY_LIMITS.idleMs = 10_000;
+      BODY_LIMITS.totalMs = 90_000;
+      BODY_LIMITS.idleMs = 15_000;
     });
 
     it("gives up on a stream that stops sending, cancels it and frees the slot", async () => {
@@ -898,6 +898,23 @@ describe("encrypted backup and restore", () => {
       expect(((await (out as { res: Response }).res.json()) as { error: { reason: string } }).error.reason).toBe("timeout");
       expect(cancelled).toBe(true);
       const again = await readBackupBody({ headers: new Headers(), body: new Blob(["{}"]).stream() } as unknown as NextRequest, "rid", "slow-user");
+      expect(again.ok).toBe(true);
+    });
+
+    it("does not wait for a cancel that never finishes", async () => {
+      const { readBackupBody, BODY_LIMITS } = await import("@/lib/integrations/backup-http");
+      BODY_LIMITS.idleMs = 50;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("{"));
+        },
+        cancel: () => new Promise<void>(() => undefined), // hangs for good
+      });
+      const began = Date.now();
+      const out = await readBackupBody({ headers: new Headers(), body: stream } as unknown as NextRequest, "rid", "hung-user");
+      expect(out.ok).toBe(false);
+      expect(Date.now() - began).toBeLessThan(2000);
+      const again = await readBackupBody({ headers: new Headers(), body: new Blob(["{}"]).stream() } as unknown as NextRequest, "rid", "hung-user");
       expect(again.ok).toBe(true);
     });
 
@@ -926,6 +943,91 @@ describe("encrypted backup and restore", () => {
       expect(out.ok).toBe(false);
       expect(((await (out as { res: Response }).res.json()) as { error: { reason: string } }).error.reason).toBe("timeout");
       expect(cancelled).toBe(true);
+    });
+  });
+
+  describe("what a refused request costs", () => {
+    afterEach(async () => {
+      const { BODY_LIMITS } = await import("@/lib/integrations/backup-http");
+      BODY_LIMITS.totalMs = 90_000;
+      BODY_LIMITS.idleMs = 15_000;
+    });
+
+    it("a client's own mistake (too large, a bad passphrase or file) keeps the request count", async () => {
+      const { POST } = await import("@/app/api/integrations/backup/restore/route");
+      const huge = new NextRequest("http://localhost/api/integrations/backup/restore", {
+        method: "POST",
+        headers: { authorization: `Bearer ${KEY_A}`, "content-type": "application/json", "content-length": String(200 * 1024 * 1024) },
+        body: "{}",
+      });
+      expect((await POST(huge, {})).status).toBe(400);
+      expect(await countOf("request", a)).toBe(1);
+      expect((await restore({ passphrase: "short", backup: {} })).status).toBe(400);
+      expect(await countOf("request", a)).toBe(2);
+      expect((await restore({ passphrase: PASS, backup: { hello: "world" } })).status).toBe(400);
+      expect(await countOf("request", a)).toBe(3);
+    });
+
+    it("a timed out upload (a slow link) gets the request count back", async () => {
+      const { BODY_LIMITS } = await import("@/lib/integrations/backup-http");
+      BODY_LIMITS.idleMs = 60;
+      const { POST } = await import("@/app/api/integrations/backup/restore/route");
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("{"));
+        },
+      });
+      const slow = new NextRequest("http://localhost/api/integrations/backup/restore", {
+        method: "POST",
+        headers: { authorization: `Bearer ${KEY_A}`, "content-type": "application/json" },
+        body: stream,
+        duplex: "half",
+      } as ConstructorParameters<typeof NextRequest>[1]);
+      const res = await POST(slow, {});
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.reason).toBe("timeout");
+      expect(await countOf("request", a)).toBe(0);
+    });
+  });
+
+  describe("the key gate's time limits", () => {
+    afterEach(async () => {
+      const { GATE_LIMITS } = await import("@/lib/backup-crypto");
+      GATE_LIMITS.waitMs = 10_000;
+      GATE_LIMITS.jobMs = 50_000;
+    });
+    const hold = () => {
+      let release!: () => void;
+      const done = new Promise<void>((resolve) => (release = resolve));
+      return { release, job: () => done };
+    };
+
+    it("a waiter gives up with busy after the wait limit and leaves the queue", async () => {
+      const { withKeyGate, keyGateOpen, GATE_LIMITS } = await import("@/lib/backup-crypto");
+      GATE_LIMITS.waitMs = 80;
+      const one = hold();
+      const two = hold();
+      const running = [withKeyGate(one.job), withKeyGate(two.job)];
+      const waiters = Array.from({ length: 4 }, () => withKeyGate(async () => "ran").then(() => "ran", (e) => (e as { reason: string }).reason));
+      expect(keyGateOpen()).toBe(false);
+      expect(await Promise.all(waiters)).toEqual(["busy", "busy", "busy", "busy"]);
+      expect(keyGateOpen()).toBe(true); // they left the queue
+      one.release();
+      two.release();
+      await Promise.all(running);
+      // a job started after all that runs at once
+      expect(await withKeyGate(async () => "ok")).toBe("ok");
+    });
+
+    it("a job that overruns is cut loose with timeout and its slot is freed", async () => {
+      const { withKeyGate, GATE_LIMITS } = await import("@/lib/backup-crypto");
+      GATE_LIMITS.jobMs = 80;
+      const stuck = () => withKeyGate(() => new Promise<never>(() => undefined)).catch((e) => (e as { reason: string }).reason);
+      expect(await Promise.all([stuck(), stuck()])).toEqual(["timeout", "timeout"]);
+      GATE_LIMITS.jobMs = 50_000;
+      const began = Date.now();
+      expect(await Promise.all([withKeyGate(async () => 1), withKeyGate(async () => 2)])).toEqual([1, 2]);
+      expect(Date.now() - began).toBeLessThan(1000);
     });
   });
 
