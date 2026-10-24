@@ -16,6 +16,7 @@ Purpose: API-key surface for n8n and the Android companion app. Contracts: [docs
 - net-worth (GET report with trend, `assets` GET POST, `assets/[id]` PATCH DELETE): net worth and manual assets over net-worth.ts.
 - refunds (GET suggestions, `[id]/confirm` and `[id]/reject` POST): refund and reversal matching over refund-service.
 - sinking-funds (GET, POST, `[id]` GET PATCH DELETE, `[id]/contribute` POST) and savings-rate (GET): money set aside for a cost on a due date, and the share of income saved, over sinking-fund-service and savings-rate.
+- transactions/tags (GET), transactions/[id]/splits (GET, PUT), transactions/[id]/receipts (GET list, POST raw image), receipts/[id] (GET image, DELETE): tags, split edits and receipt photos over tags.ts, split-service and receipt-service. Receipt image bytes use plain headers, not the JSON envelope.
 - tax (GET financial-year summary, `export` GET csv, `settings` GET PUT, `transactions/[id]` PATCH deductible flag) over tax-service.
 - backup (POST: passphrase-encrypted file of the caller's data) and backup/restore (POST: dry run or merge-only restore, `Idempotency-Key` unless dry run); passphrase in the body, never logged. See [docs/backup.md](../../../../docs/backup.md).
 - export/transactions (GET a CSV file) and import/preview, import/commit (POST a CSV, dry run then write, commit needs `Idempotency-Key`): over transaction-export.ts and transaction-import.ts.

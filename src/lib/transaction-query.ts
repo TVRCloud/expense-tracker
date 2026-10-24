@@ -1,6 +1,7 @@
 import { type PipelineStage, Types } from "mongoose";
 import connectDB from "@/lib/mongodb";
 import Transaction from "@/models/Transaction";
+import { normaliseTag } from "@/lib/tags";
 import { activityDateAddFields } from "@/lib/transaction-activity";
 
 // Shared transaction-listing query logic, used by both GET /api/transactions
@@ -14,6 +15,8 @@ export type ListTransactionsParams = {
   limit: number;
   type?: string | null;
   category?: string | null;
+  /** Only rows carrying this tag (compared lower-cased). */
+  tag?: string | null;
   accountId?: string | null;
   search?: string | null;
   dateFrom?: string | null;
@@ -38,6 +41,7 @@ export async function listTransactions(params: ListTransactionsParams) {
     limit,
     type,
     category,
+    tag,
     accountId,
     search,
     dateFrom,
@@ -51,6 +55,7 @@ export async function listTransactions(params: ListTransactionsParams) {
   const query: Record<string, unknown> = { user: userId, isDeleted: { $ne: true } };
   if (type) query.type = type;
   if (category) query.category = category;
+  if (tag) query.tags = normaliseTag(tag);
   const incoming = Boolean(accountId && includeIncomingTransfers);
   if (accountId && !incoming) query.account = accountId;
   if (accountId && incoming) {
@@ -180,6 +185,27 @@ export async function listTransactions(params: ListTransactionsParams) {
   ]);
 
   return { data: transactions, total, skip, limit };
+}
+
+/** The user's own tags with how many live rows carry each, most used first. Link tags the server writes (with a colon) are left out. */
+export async function listTags(userId: string, limit = 200): Promise<{ tag: string; count: number }[]> {
+  await connectDB();
+  const rows = await Transaction.aggregate<{ _id: string; count: number }>([
+    {
+      $match: {
+        user: new Types.ObjectId(userId),
+        isDeleted: { $ne: true },
+        reviewStatus: { $ne: "voided" },
+        "tags.0": { $exists: true },
+      },
+    },
+    { $unwind: "$tags" },
+    { $match: { tags: { $not: /:/ }, $expr: { $ne: ["$tags", "loan_principal"] } } },
+    { $group: { _id: "$tags", count: { $sum: 1 } } },
+    { $sort: { count: -1, _id: 1 } },
+    { $limit: limit },
+  ]);
+  return rows.map((r) => ({ tag: r._id, count: r.count }));
 }
 
 type ActivityRow = { _id: unknown; date: Date; paidAt?: Date | null; installmentStatus?: string };

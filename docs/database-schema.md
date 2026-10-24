@@ -80,11 +80,12 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `description` | String | full-text indexed |
 | `note` | String | full-text indexed |
 | `date` | Date | |
-| `tags` | [String] | |
+| `tags` | [String] | lower-case, at most 10 of 40 characters; tags with a colon are server link tags (`loan:`, `repayment:`, `credit_statement:`) |
 | `transferTo` | ObjectId | ref: Account, only for transfers |
 | `isRecurring` | Boolean | |
 | `recurringId`, `recurrence*`, `installmentIndex`, `installmentStatus`, `paidAt` | | recurring series fields |
-| `splitGroupId` | ObjectId | shared by split-purchase siblings |
+| `splitGroupId` | ObjectId | shared by split-purchase siblings (2 to 20 lines, amounts add up to the purchase) |
+| `attachments` | [String] | ids of the `receipts` on this row, at most 5 |
 | `source` | String | `manual\|sms\|notification\|n8n\|recurring\|import`, default `manual`. `import` rows come from the CSV import (`/api/integrations/import/commit`) |
 | `sourceCapture` | ObjectId | ref: CapturedMessage, the message whose values are in use |
 | `captures` | [ObjectId] | every captured message for this payment |
@@ -216,6 +217,20 @@ Sparse index: `{user, externalLoanId}`
 | `date` | Date | |
 | `note` | String | |
 | `account` | ObjectId | ref: Account |
+
+## receipts
+
+A receipt photo on a transaction. The image is encrypted at rest and only leaves through an authenticated route that checks the owner; hard-deleted with its transaction.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | ref: User |
+| `transaction` | ObjectId | ref: Transaction |
+| `contentType` | String | `image/jpeg\|image/png\|image/webp\|image/heic`, from the file's bytes |
+| `size` | Number | bytes of the original image, at most 3 MB |
+| `iv`, `tag`, `data` | Buffer | AES-256-GCM. Key derived from `CAPTURE_ENCRYPTION_KEY` with a receipt label; `<user>:<receipt id>` is bound in as additional data, so a copied blob does not decrypt |
+
+Index: `{user, transaction}`. Limits per user: 200 files, 150 MB. No new environment variable.
 
 ## goals
 

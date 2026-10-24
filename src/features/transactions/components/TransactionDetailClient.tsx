@@ -18,6 +18,7 @@ import { Input } from "@/components/_ui/Input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { DatePickerField } from "@/components/shared/DatePickerField";
+import { ReceiptsSection } from "./ReceiptsSection";
 import { ProvenanceCard } from "@/features/reconcile/components/ProvenanceCard";
 import { invalidateForResource } from "@/lib/realtime/invalidation";
 
@@ -70,7 +71,7 @@ export function TransactionDetailClient({ id }: Props) {
       category: transaction.category ?? "",
       subcategory: transaction.subcategory ?? "",
       note: transaction.note ?? "",
-      tags: (transaction.tags ?? []).join(", "),
+      tags: (transaction.tags ?? []).filter((t) => !t.includes(":") && t !== "loan_principal").join(", "),
       date: parseInputDate(transaction.date),
     });
   }, [transaction]);
@@ -152,6 +153,8 @@ export function TransactionDetailClient({ id }: Props) {
     );
   }
 
+  // Tags with a colon are links the server keeps to loans and statements.
+  const visibleTags = (transaction.tags ?? []).filter((t) => !t.includes(":") && t !== "loan_principal");
   const isSplit = Boolean(splitGroupId && splitSiblings && splitSiblings.length > 1);
   const sign = transaction.type === "income" ? "+" : transaction.type === "transfer" ? "" : "-";
   const details: [string, string][] = [
@@ -160,7 +163,7 @@ export function TransactionDetailClient({ id }: Props) {
     ["Account", typeof transaction.account === "string" ? transaction.account : transaction.account.name],
     ["Recurring", transaction.isRecurring ? `${transaction.recurrenceLabel ? `${transaction.recurrenceLabel} · ` : ""}Every ${transaction.recurrenceInterval ?? 1} ${transaction.recurrenceFrequency ?? "period"}${transaction.recurrenceCount ? ` · ${transaction.recurrenceCount} installments` : ""}` : "No"],
     ["Note", transaction.note ?? "Not set"],
-    ["Tags", transaction.tags?.length ? transaction.tags.join(", ") : "None"],
+    ["Tags", visibleTags.length ? visibleTags.join(", ") : "None"],
   ];
 
   return (
@@ -268,7 +271,7 @@ export function TransactionDetailClient({ id }: Props) {
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="transaction-detail-client-tags-4" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Tags</Label>
-                <Input id="transaction-detail-client-tags-4" value={form.tags} onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))} placeholder="comma separated" />
+                <Input id="transaction-detail-client-tags-4" value={form.tags} onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))} placeholder="trip, work, gift (up to 10)" />
               </div>
               <div className="flex flex-col gap-1.5 md:col-span-2">
                 <Label htmlFor="transaction-detail-client-note-5" className="text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>Note</Label>
@@ -327,6 +330,7 @@ export function TransactionDetailClient({ id }: Props) {
           </div>
         </section>
       )}
+      <ReceiptsSection transactionId={id} />
       <ProvenanceCard transactionId={id} />
       </aside>
       </div>
