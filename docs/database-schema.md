@@ -51,6 +51,7 @@ All monetary fields are stored as **integers (cents)** — divide by 100 for dis
 | `lowBalanceAt` | Number | cents; cash accounts only: at or under this the app shows low cash (unset = Rs 500 default) |
 | `deletedAt` / `deletedBy` | Date / ObjectId | set with `isArchived` |
 | `creditMeta` | Object | credit cards only: `creditLimit`, `billingCycleDay`, `paymentDueDay`, `apr`, `network`, `lastFourDigits`, `cardholderName`, `minPaymentPct` |
+| `rewardRule` | Object | credit cards only: `kind` (`cashback` or `points`), `baseRate`, `categoryRates` `[{category, rate}]`, `cap`, `pointValue`. Cashback: rate is a percent, cap is cents; points: rate is points per 100 rupees, cap is points, `pointValue` is cents per point. Absent when the card has no rule |
 | `smsLastFour` | [String] | 4-digit strings as shown in bank SMS (`A/c XX1234`), for matching captured messages |
 
 Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`, `{user, creditMeta.lastFourDigits}`

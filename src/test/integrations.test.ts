@@ -5437,3 +5437,244 @@ describe("integration savings rate", () => {
     expect((await GET(new NextRequest("http://localhost/api/savings-rate"))).status).toBe(401);
   });
 });
+
+describe("integration card rewards", () => {
+  const KEY = "test-card-rewards-api-key";
+  let userId: string;
+  let cardId: string;
+  let n = 0;
+
+  async function makeCard(user: string, over: Record<string, unknown> = {}) {
+    const { default: Account } = await import("@/models/Account");
+    const card = await Account.create({
+      user,
+      name: "Axis Magnus",
+      type: "credit_card",
+      balance: 0,
+      currency: "INR",
+      creditMeta: { billingCycleDay: 5, paymentDueDay: 25, creditLimit: 1_000_000, lastFourDigits: "4242" },
+      ...over,
+    });
+    return card._id.toString();
+  }
+
+  async function spendOn(account: string, amount: number, category: string, extra: Record<string, unknown> = {}) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    await Transaction.create({ user: userId, account, type: "expense", amount, category, date: new Date(), ...extra });
+  }
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Rewards", email: `rw${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    userId = user._id.toString();
+    cardId = await makeCard(userId);
+  });
+
+  function req(path: string, method = "GET", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/credit-cards${path}`, {
+      method,
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json", "idempotency-key": `rw-key-${n}`, ...headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+  const ctx = (id: string) => ({ params: Promise.resolve({ accountId: id }) });
+  const card = async () => await import("@/app/api/integrations/credit-cards/[accountId]/rewards/route");
+  const getCard = async (id = cardId, query = "") => (await card()).GET(req(`/${id}/rewards${query}`), ctx(id));
+  const putRule = async (body: unknown, id = cardId, headers: Record<string, string> = {}) =>
+    (await card()).PUT(req(`/${id}/rewards`, "PUT", body, headers), ctx(id));
+
+  it("a card with no rule says so, and an overview lists it", async () => {
+    const res = await getCard();
+    expect(res.status).toBe(200);
+    expect((await res.json()).data).toMatchObject({ accountId: cardId, name: "Axis Magnus", lastFourDigits: "4242", rule: null, reason: "no_rule", cycles: [], total: null });
+
+    const { GET } = await import("@/app/api/integrations/credit-cards/rewards/route");
+    const overview = (await (await GET(req("/rewards"), {})).json()).data;
+    expect(overview.currentValue).toBe(0);
+    expect(overview.cards).toHaveLength(1);
+    expect(overview.cards[0]).toMatchObject({ accountId: cardId, reason: "no_rule" });
+  });
+
+  it("PUT validates the rule and the key", async () => {
+    for (const bad of [
+      {},
+      { kind: "cashback", baseRate: 150 },
+      { kind: "cashback", baseRate: 1, pointValue: 25 },
+      { kind: "points", baseRate: 1, categoryRates: [{ category: "a", rate: 1 }, { category: "A", rate: 2 }] },
+      { kind: "cashback", baseRate: 1, other: true },
+    ]) {
+      expect((await putRule(bad)).status).toBe(400);
+    }
+    const { PUT } = await card();
+    const noKey = await PUT(
+      new NextRequest("http://localhost/x", {
+        method: "PUT",
+        headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ kind: "cashback", baseRate: 1 }),
+      }),
+      ctx(cardId)
+    );
+    expect(noKey.status).toBe(400);
+  });
+
+  it("PUT stores the rule, replays on the same key, refuses the same key with another body", async () => {
+    const rule = { kind: "cashback", baseRate: 1.5, categoryRates: [{ category: "Fuel", rate: 5 }], cap: 100000 };
+    const first = await putRule(rule, cardId, { "idempotency-key": "set-rule" });
+    expect(first.status).toBe(200);
+    expect((await first.json()).data.rule).toEqual({ kind: "cashback", baseRate: 1.5, categoryRates: [{ category: "fuel", rate: 5 }], cap: 100000, pointValue: null });
+
+    const replay = await putRule(rule, cardId, { "idempotency-key": "set-rule" });
+    expect(replay.status).toBe(200);
+    const other = await putRule({ ...rule, baseRate: 2 }, cardId, { "idempotency-key": "set-rule" });
+    expect(other.status).toBe(409);
+
+    const got = (await (await getCard()).json()).data;
+    expect(got.rule.baseRate).toBe(1.5);
+    expect(got.reason).toBeNull();
+  });
+
+  it("estimates the current cycle: category rates, a cap and a confirmed refund", async () => {
+    await putRule({ kind: "cashback", baseRate: 1, categoryRates: [{ category: "fuel", rate: 5 }], cap: 5_500 });
+    await spendOn(cardId, 100_000, "Fuel"); // 5,000
+    await spendOn(cardId, 100_000, "food"); // 1,000
+    await spendOn(cardId, 50_000, "food"); // 500
+    const { default: Transaction } = await import("@/models/Transaction");
+    await Transaction.create({ user: userId, account: cardId, type: "income", amount: 50_000, category: "food", date: new Date(), refundStatus: "confirmed" }); // -500
+    await Transaction.create({ user: userId, account: cardId, type: "income", amount: 90_000, category: "payment", date: new Date() }); // a card payment: ignored
+
+    const data = (await (await getCard(cardId, "?cycles=2")).json()).data;
+    expect(data.cycles).toHaveLength(2);
+    const current = data.cycles[0];
+    expect(current).toMatchObject({ isCurrent: true, unit: "paise", spend: 250_000, refunded: 50_000, uncapped: 6_000, earned: 5_500, capReached: true, value: 5_500 });
+    expect(current.byCategory.map((c: { category: string; earned: number }) => [c.category, c.earned])).toEqual([["fuel", 5_000], ["food", 1_000]]);
+    expect(data.cycles[1]).toMatchObject({ isCurrent: false, earned: 0 });
+    expect(data.total).toEqual({ earned: 5_500, value: 5_500 });
+  });
+
+  it("points rules count points and value them", async () => {
+    await putRule({ kind: "points", baseRate: 4, pointValue: 50 });
+    await spendOn(cardId, 250_000, "travel");
+    const cycle = (await (await getCard(cardId, "?cycles=1")).json()).data.cycles[0];
+    expect(cycle).toMatchObject({ unit: "points", earned: 100, value: 5_000 });
+  });
+
+  it("only this card's own spending counts", async () => {
+    const { default: Account } = await import("@/models/Account");
+    const other = await makeCard(userId, { name: "Other card" });
+    await putRule({ kind: "cashback", baseRate: 10 });
+    await spendOn(other, 100_000, "food");
+    await spendOn(cardId, 20_000, "food");
+    void Account;
+    const cycle = (await (await getCard(cardId, "?cycles=1")).json()).data.cycles[0];
+    expect(cycle).toMatchObject({ spend: 20_000, earned: 2_000 });
+  });
+
+  it("a card without a billing cycle says why there is no estimate", async () => {
+    const bare = await makeCard(userId, { name: "Bare", creditMeta: { creditLimit: 100_000 } });
+    expect((await putRule({ kind: "cashback", baseRate: 1 }, bare)).status).toBe(200);
+    expect((await (await getCard(bare)).json()).data).toMatchObject({ reason: "billing_cycle_not_set", cycles: [], total: null });
+  });
+
+  it("DELETE removes the rule", async () => {
+    await putRule({ kind: "cashback", baseRate: 1 });
+    const { DELETE } = await card();
+    const res = await DELETE(req(`/${cardId}/rewards`, "DELETE"), ctx(cardId));
+    expect(res.status).toBe(200);
+    expect((await res.json()).data).toEqual({ id: cardId, deleted: true });
+    expect((await (await getCard()).json()).data.rule).toBeNull();
+  });
+
+  it("overview adds up what the current cycles are worth", async () => {
+    const second = await makeCard(userId, { name: "Second" });
+    await putRule({ kind: "cashback", baseRate: 1 });
+    await putRule({ kind: "cashback", baseRate: 2 }, second);
+    await spendOn(cardId, 100_000, "food"); // 1,000
+    await spendOn(second, 100_000, "food"); // 2,000
+    const { GET } = await import("@/app/api/integrations/credit-cards/rewards/route");
+    const data = (await (await GET(req("/rewards"), {})).json()).data;
+    expect(data.currentValue).toBe(3_000);
+    expect(data.cards).toHaveLength(2);
+  });
+
+  it("rejects other people's cards, non-cards, archived cards and bad ids", async () => {
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const stranger = await User.create({ name: "S", email: `s${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    const theirs = await makeCard(stranger._id.toString());
+    expect((await getCard(theirs)).status).toBe(404);
+    expect((await putRule({ kind: "cashback", baseRate: 1 }, theirs)).status).toBe(404);
+    const { DELETE } = await card();
+    expect((await DELETE(req(`/${theirs}/rewards`, "DELETE"), ctx(theirs))).status).toBe(404);
+
+    const bank = await Account.create({ user: userId, name: "Bank", type: "bank", balance: 0, currency: "INR" });
+    expect((await getCard(bank._id.toString())).status).toBe(400);
+
+    await Account.updateOne({ _id: cardId }, { isArchived: true });
+    expect((await getCard()).status).toBe(404);
+
+    expect((await getCard("not-an-id")).status).toBe(400);
+    expect((await getCard(cardId, "?cycles=0")).status).toBe(400);
+    expect((await getCard(cardId, "?cycles=13")).status).toBe(400);
+  });
+
+  it("answers 401 without an API key", async () => {
+    const { GET } = await card();
+    const res = await GET(new NextRequest("http://localhost/x"), ctx(cardId));
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("browser card rewards routes", () => {
+  let userId: string;
+  let cardId: string;
+
+  beforeEach(async () => {
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const user = await User.create({ name: "Browser", email: `br${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    userId = user._id.toString();
+    sessionUser.current = { id: userId, name: "Browser", email: user.email, role: "user" };
+    const card = await Account.create({
+      user: user._id,
+      name: "Card",
+      type: "credit_card",
+      balance: 0,
+      currency: "INR",
+      creditMeta: { billingCycleDay: 5, paymentDueDay: 25, creditLimit: 100_000 },
+    });
+    cardId = card._id.toString();
+  });
+  afterEach(() => {
+    sessionUser.current = null;
+  });
+
+  const ctx = () => ({ params: Promise.resolve({ accountId: cardId }) });
+  const json = (method: string, body?: unknown) =>
+    new NextRequest("http://localhost/api/credit-cards/x/rewards", {
+      method,
+      headers: { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
+  it("sets, reads and clears a rule for the signed-in user", async () => {
+    const { GET, PUT, DELETE } = await import("@/app/api/credit-cards/[accountId]/rewards/route");
+    expect((await PUT(json("PUT", { kind: "cashback", baseRate: 2 }), ctx())).status).toBe(200);
+    expect((await (await GET(json("GET"), ctx())).json()).rule).toMatchObject({ kind: "cashback", baseRate: 2 });
+    expect((await PUT(json("PUT", { kind: "cashback", baseRate: 500 }), ctx())).status).toBe(400);
+    expect((await DELETE(json("DELETE"), ctx())).status).toBe(200);
+    expect((await (await GET(json("GET"), ctx())).json()).rule).toBeNull();
+  });
+
+  it("lists every card in the overview, and signed-out gets 401", async () => {
+    const { GET } = await import("@/app/api/credit-cards/rewards/route");
+    const data = await (await GET()).json();
+    expect(data.cards).toHaveLength(1);
+    sessionUser.current = null;
+    expect((await GET()).status).toBe(401);
+  });
+});
