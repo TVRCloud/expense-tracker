@@ -6,10 +6,11 @@ import Notification from "@/models/Notification";
 import Transaction from "@/models/Transaction";
 import User from "@/models/User";
 import type { AuthUser } from "@/lib/auth-guard";
-import { encryptField } from "@/lib/crypto";
+import { decryptField, encryptField } from "@/lib/crypto";
 import { createTransaction, TransactionServiceError } from "@/lib/transaction-service";
 import { suggestRefundSafely } from "@/lib/refund-service";
 import { createRepayment, LoanServiceError } from "@/lib/loan-service";
+import { findMatchingRule } from "@/lib/rule-service";
 import { correctTransaction, ReconcileError } from "@/lib/reconcile/correct";
 import { sendPushToUser } from "@/lib/push";
 import logger from "@/lib/logger";
@@ -89,6 +90,7 @@ type CaptureDoc = {
   role: string;
   status: string;
   transaction?: Types.ObjectId;
+  rawText?: Parameters<typeof decryptField>[0];
   parse?: { kind?: string; confidence?: number; fields?: Record<string, unknown> };
   eventKey?: {
     account?: Types.ObjectId | null;
@@ -201,6 +203,11 @@ async function findCrossChannelMatch(capture: CaptureDoc): Promise<Match | null>
   return best ? { capture: best.capture, certain: best.certain } : null;
 }
 
+// The message text behind a parse, so a "text contains" categorise rule can
+// match it. Kept beside the parse (not on it) so stored parse fields stay as
+// they were.
+const textOfParse = new WeakMap<MoneyParse, string>();
+
 function descriptionOf(parse: MoneyParse) {
   return parse.merchant ?? parse.bankName ?? "Captured payment";
 }
@@ -212,6 +219,11 @@ async function createFromCapture(
   accountId: string | null,
   supporting: string[] = []
 ): Promise<IngestResult> {
+  // A message that matched no account can still be placed by a rule that names one.
+  if (!accountId) {
+    const hit = await findMatchingRule(user.id, { merchant: parse.merchant, text: textOfParse.get(parse) }).catch(() => null);
+    if (hit?.accountId) accountId = hit.accountId;
+  }
   if (!accountId) return queue(capture, parse.last4 ? "no_matching_account" : "low_confidence");
   if (parse.confidence < CONFIDENCE_AUTO_CREATE) return queue(capture, "low_confidence");
 
@@ -230,6 +242,7 @@ async function createFromCapture(
       date: (parse.date ?? capture.receivedAt).toISOString(),
       tags: [],
       isRecurring: false,
+      ruleText: textOfParse.get(parse),
       provenance: {
         source: capture.channel,
         sourceCapture: captureId,
@@ -482,6 +495,7 @@ export async function ingestCapture(input: IngestInput): Promise<IngestResult> {
 
   const parse = parseCapture(input.text, input.receivedAt);
   const money = parse.kind === "money" ? parse : null;
+  if (money) textOfParse.set(money, input.text);
   const match = money
     ? await matchAccountForMessage(input.user.id, {
         last4: money.last4,
@@ -599,6 +613,11 @@ export async function promoteStalePendingSms({ userId, now = new Date() }: { use
       continue;
     }
     const parse: MoneyParse = { ...fields, date: fields.date ? new Date(fields.date) : undefined };
+    try {
+      if (claimed.rawText) textOfParse.set(parse, decryptField(claimed.rawText, CAPTURE_KEY_ENV));
+    } catch (err) {
+      logger.warn({ err, captureId: claimed._id.toString() }, "could not read the captured text for categorise rules");
+    }
     await decideMoney(actor, claimed, parse, id(claimed.eventKey?.account) ?? null, { promoting: true });
     promoted += 1;
   }

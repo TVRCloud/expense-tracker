@@ -128,6 +128,26 @@ What the user chose about a detected subscription. Detections are never stored; 
 
 Unique index: `{user, key}`
 
+## rules
+
+Categorise rules ([src/lib/rule-service.ts](../src/lib/rule-service.ts)). Hard-deleted, no ledger block (configuration, not money). Not watched by realtime.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | |
+| `field` | String | `merchant\|upi\|text`: what the rule looks at |
+| `op` | String | `contains\|equals`, default `contains` |
+| `value` | String | as typed, 2 to 120 chars |
+| `valueKey` | String | lower-cased and trimmed `value`; what matching uses |
+| `category` | String | set on the transaction (optional) |
+| `merchantName` | String | clean name, set as the description (optional) |
+| `account` | ObjectId | ref: Account; used only for a capture that matched no account (optional) |
+| `tags` | String[] | added to the transaction's tags |
+| `priority` | Number | default 100; lower runs first, then oldest |
+| `isActive` | Boolean | default true |
+
+A rule sets at least one of `category`, `merchantName`, `account`, `tags`. Unique index: `{user, field, op, valueKey}`. Index: `{user, priority, createdAt}`. At most 200 per user.
+
 ## loans
 
 | Field | Type | Notes |

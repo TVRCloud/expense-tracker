@@ -82,6 +82,9 @@ Authorization: Bearer <YOUR_API_KEY>
 | GET | `/api/integrations/notifications` | Inbox list (`unread`, `skip`, `limit` max 50) with `unreadCount` |
 | PATCH | `/api/integrations/notifications/[id]` | Mark read (default) or unread (needs `Idempotency-Key`) |
 | POST | `/api/integrations/notifications/read-all` | Mark all read (needs `Idempotency-Key`) |
+| GET, POST | `/api/integrations/rules` | List categorise rules in run order; create one (needs `Idempotency-Key`) |
+| PATCH, DELETE | `/api/integrations/rules/[id]` | Edit (`null` clears category, merchantName, accountId) or delete a rule (need `Idempotency-Key`) |
+| POST | `/api/integrations/rules/test` | `{merchant?, text?, upi?}` gives `{matched, rule?}` for the first matching active rule; read-only, no key needed |
 | GET, POST | `/api/integrations/loans` | List loans (`direction`, `isSettled`), create one (needs `Idempotency-Key`) |
 | GET, PATCH, DELETE | `/api/integrations/loans/[id]` | Read, edit, soft delete a loan (writes need `Idempotency-Key`) |
 | GET, POST | `/api/integrations/loans/[id]/repayments` | List and record repayments (POST needs `Idempotency-Key`) |
@@ -121,6 +124,21 @@ Repeating charges found in the user's expense history. Query: `status` (`detecte
 Amounts are cents. `cadence` is `weekly`, `monthly`, `quarterly` or `yearly`. `active` is false once the next charge is more than a quarter of a cycle overdue (hidden unless `includeLapsed=true`). `totals` count active, non-dismissed ones. A charge needs 4 repeats weekly, 3 monthly or quarterly, 2 yearly, with at least 75% of gaps and amounts fitting.
 
 `PATCH /api/integrations/subscriptions/{id}` with `{"status":"confirmed"|"dismissed"|"detected"}` and an `Idempotency-Key` returns the updated item. `400 VALIDATION_ERROR` for a bad id, status or missing key, `404 NOT_FOUND` if the id is not a current detection of this user. Realtime resource: `subscriptions`.
+
+### Categorise rules
+
+`POST /api/integrations/rules` body (needs `Idempotency-Key`):
+
+```json
+{ "field": "upi", "op": "contains", "value": "swiggy@icici", "category": "food", "merchantName": "Swiggy", "tags": ["delivery"], "priority": 100 }
+```
+
+- `field`: `merchant` (a bank message's merchant, or a manual add's description), `upi` (a UPI id found in the merchant or the text) or `text` (the whole message, or description plus note). `op`: `contains` (default) or `equals`, case-insensitive.
+- Give at least one of `category`, `merchantName`, `accountId`, `tags`. `accountId` is used only for a capture that matched none of your accounts.
+- Response `201` `data`: `{id, field, op, value, category, merchantName, accountId, tags, priority, isActive, createdAt, updatedAt}`. `GET` returns an array of these in run order.
+- Rules run in `priority` order (lower first, then oldest); the first match wins. They apply when a bank message becomes a transaction and when a plain transaction is added by hand (`POST /api/integrations/transactions` and the browser route). They fill a category still set to `other` and a merchant name that came from a bank message, and add tags. A category or description you set is never changed. Transfers, splits and recurring series are never touched.
+- Errors: `VALIDATION_ERROR` (nothing to set, bad value), `NOT_FOUND` (rule, or an account that is not yours), `CONFLICT` (a rule with the same field, op and value exists, or 200 rules reached).
+- `POST /api/integrations/rules/test` with `{ "merchant": "SWIGGY INSTAMART" }` returns `{ "matched": true, "rule": { "ruleId", "category", "merchantName", "accountId", "tags" } }` or `{ "matched": false }`; nothing is written.
 
 ### GET /api/integrations/transactions
 
