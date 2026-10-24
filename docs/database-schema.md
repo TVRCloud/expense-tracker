@@ -78,7 +78,7 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `isRecurring` | Boolean | |
 | `recurringId`, `recurrence*`, `installmentIndex`, `installmentStatus`, `paidAt` | | recurring series fields |
 | `splitGroupId` | ObjectId | shared by split-purchase siblings |
-| `source` | String | `manual\|sms\|notification\|n8n\|recurring\|import`, default `manual` |
+| `source` | String | `manual\|sms\|notification\|n8n\|recurring\|import`, default `manual`. `import` rows come from the CSV import (`/api/integrations/import/commit`) |
 | `sourceCapture` | ObjectId | ref: CapturedMessage, the message whose values are in use |
 | `captures` | [ObjectId] | every captured message for this payment |
 | `reviewStatus` | String | `unreviewed\|confirmed\|corrected\|voided`, null for manual rows |

@@ -93,7 +93,7 @@ export const transactionCreateSchema = z
 // transactionCreateSchema, so browser and integration callers can't set it
 // from a request body; only server code (src/lib/capture/*) passes it.
 export type TransactionProvenance = {
-  source: "sms" | "notification" | "n8n" | "manual";
+  source: "sms" | "notification" | "n8n" | "manual" | "import";
   sourceCapture?: string;
   captures?: string[];
   reviewStatus?: "unreviewed" | "confirmed" | null;
@@ -106,6 +106,11 @@ export type CreateTransactionInput = z.infer<typeof transactionCreateSchema> & {
   // The bank message text, so a "text contains" categorise rule can match a
   // capture. Server code only (like provenance); never read from a request body.
   ruleText?: string;
+  // Server code only. A statement import records history the account balance
+  // already reflects, so it can leave the balance alone. Plain income and
+  // expense rows only; a "import" source also skips budget and spend limit
+  // alerts and the round-up, which are about spending now, not old rows.
+  skipBalance?: boolean;
 };
 
 export type CreateTransactionResult =
@@ -184,7 +189,8 @@ export async function invalidateStatsCacheMany(userId: string, dates: Date[]) {
 }
 
 export async function createTransaction(input: CreateTransactionInput): Promise<CreateTransactionResult> {
-  const { userId, actor, accountId, transferToId, provenance, ruleText, ...rest } = input;
+  const { userId, actor, accountId, transferToId, provenance, ruleText, skipBalance, ...rest } = input;
+  const quiet = provenance?.source === "import";
   await connectDB();
 
   const account = await Account.findOne({ _id: accountId, user: userId, isArchived: { $ne: true } });
@@ -331,22 +337,24 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   }
 
   // ── Single transaction (non-recurring or recurring count = 1) ───────────
-  const accountBefore = account.toObject();
-  const balanceDelta = rest.type === "income" ? rest.amount : -rest.amount;
-  const accountAfter = await Account.findOneAndUpdate(
-    { _id: account._id, user: userId },
-    { $inc: { balance: balanceDelta } },
-    { new: true }
-  );
-  await appendLedgerBlock({
-    userId,
-    scope: "account",
-    entityId: account._id.toString(),
-    action: "update",
-    before: accountBefore,
-    after: accountAfter,
-    actor,
-  });
+  if (!skipBalance) {
+    const accountBefore = account.toObject();
+    const balanceDelta = rest.type === "income" ? rest.amount : -rest.amount;
+    const accountAfter = await Account.findOneAndUpdate(
+      { _id: account._id, user: userId },
+      { $inc: { balance: balanceDelta } },
+      { new: true }
+    );
+    await appendLedgerBlock({
+      userId,
+      scope: "account",
+      entityId: account._id.toString(),
+      action: "update",
+      before: accountBefore,
+      after: accountAfter,
+      actor,
+    });
+  }
 
   if (rest.type === "transfer" && transferToId) {
     const transferAccountBefore = await Account.findOne({ _id: transferToId, user: userId });
@@ -388,7 +396,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   });
   await invalidateStatsCache(userId, startDate);
 
-  if (rest.type === "expense") {
+  if (rest.type === "expense" && !quiet) {
     // schema refine guarantees category is set for any non-split expense
     void checkBudgetAlert(userId, rest.category as string, rest.amount, startDate);
     void checkSpendLimitAlert(userId);

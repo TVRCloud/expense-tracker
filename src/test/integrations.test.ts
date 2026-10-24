@@ -7049,3 +7049,352 @@ describe("budgets csv", () => {
     sessionUser.current = null;
   });
 });
+
+// ── export and import ──────────────────────────────────────────────────────
+
+describe("csv import helpers", () => {
+  it("parses quotes, doubled quotes, CRLF, a BOM and other delimiters", async () => {
+    const { parseCsv } = await import("@/lib/csv-import");
+    const t = parseCsv('﻿Date;Narration;Amount\r\n01/02/2026;"Tea, ""big"" cup";-12.50\r\n\r\n02/02/2026;Rent;5000\r\n');
+    expect(t.delimiter).toBe(";");
+    expect(t.headers).toEqual(["Date", "Narration", "Amount"]);
+    expect(t.rows).toEqual([
+      ["01/02/2026", 'Tea, "big" cup', "-12.50"],
+      ["02/02/2026", "Rent", "5000"],
+    ]);
+  });
+
+  it("refuses an empty file, too many rows and too much text", async () => {
+    const { parseCsv, IMPORT_MAX_ROWS, IMPORT_MAX_BYTES } = await import("@/lib/csv-import");
+    expect(() => parseCsv("")).toThrow();
+    const many = ["a,b", ...Array.from({ length: IMPORT_MAX_ROWS + 1 }, () => "1,2")].join("\n");
+    expect(() => parseCsv(many)).toThrow(/rows/);
+    expect(() => parseCsv("x".repeat(IMPORT_MAX_BYTES + 1))).toThrow(/large/);
+    const exactly = ["a,b", ...Array.from({ length: IMPORT_MAX_ROWS }, () => "1,2")].join("\n");
+    expect(parseCsv(exactly).rows).toHaveLength(IMPORT_MAX_ROWS);
+  });
+
+  it("reads amounts to integer paise and refuses what it cannot read", async () => {
+    const { parseAmountCell } = await import("@/lib/csv-import");
+    expect(parseAmountCell("1,234.50")).toBe(123450);
+    expect(parseAmountCell("₹ 99")).toBe(9900);
+    expect(parseAmountCell("-12.5")).toBe(-1250);
+    expect(parseAmountCell("(500.00)")).toBe(-50000);
+    expect(parseAmountCell("250 Dr")).toBe(-25000);
+    expect(parseAmountCell("250 Cr")).toBe(25000);
+    expect(parseAmountCell("0.10")).toBe(10);
+    expect(parseAmountCell("1.234")).toBeNull();
+    expect(parseAmountCell("abc")).toBeNull();
+    expect(parseAmountCell("")).toBeNull();
+    expect(parseAmountCell("9".repeat(20))).toBeNull();
+  });
+
+  it("reads dates in the chosen order and refuses impossible ones", async () => {
+    const { parseDateCell } = await import("@/lib/csv-import");
+    expect(parseDateCell("03/04/2026", "dmy")).toEqual({ y: 2026, m: 4, d: 3 });
+    expect(parseDateCell("03/04/2026", "mdy")).toEqual({ y: 2026, m: 3, d: 4 });
+    expect(parseDateCell("2026-04-03T10:00:00Z", "dmy")).toEqual({ y: 2026, m: 4, d: 3 });
+    expect(parseDateCell("3 Apr 2026", "dmy")).toEqual({ y: 2026, m: 4, d: 3 });
+    expect(parseDateCell("03-Apr-26", "dmy")).toEqual({ y: 2026, m: 4, d: 3 });
+    expect(parseDateCell("31/02/2026", "dmy")).toBeNull();
+    expect(parseDateCell("hello", "dmy")).toBeNull();
+  });
+
+  it("guesses a mapping from common bank headers", async () => {
+    const { suggestMapping } = await import("@/lib/csv-import");
+    expect(suggestMapping(["Txn Date", "Narration", "Withdrawal Amt", "Deposit Amt", "Balance"])).toEqual({
+      date: "Txn Date",
+      description: "Narration",
+      debit: "Withdrawal Amt",
+      credit: "Deposit Amt",
+    });
+    expect(suggestMapping(["Date", "Description", "Amount"])).toMatchObject({ date: "Date", amount: "Amount", description: "Description" });
+  });
+});
+
+describe("integration export and import", () => {
+  const KEY = "test-export-import-api-key";
+  let userId: string;
+  let otherUserId: string;
+  let accountId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { default: Account } = await import("@/models/Account");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "EI", email: `ei${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `eio${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+    accountId = (await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 100000, currency: "INR" }))._id.toString();
+  });
+
+  function req(path: string, method: "GET" | "POST", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/${path}`, {
+      method,
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json", "idempotency-key": `ei-key-${n}`, ...headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+  async function preview(body: Record<string, unknown>) {
+    const { POST } = await import("@/app/api/integrations/import/preview/route");
+    return POST(req("import/preview", "POST", { accountId, ...body }), {});
+  }
+  async function commit(body: Record<string, unknown>, headers: Record<string, string> = {}) {
+    const { POST } = await import("@/app/api/integrations/import/commit/route");
+    return POST(req("import/commit", "POST", { accountId, ...body }, headers), {});
+  }
+  async function exportCsv(query = "") {
+    const { GET } = await import("@/app/api/integrations/export/transactions/route");
+    return GET(req(`export/transactions${query}`, "GET"), {});
+  }
+  const statement = [
+    "Date,Narration,Amount",
+    "01/10/2026,Coffee,-120.00",
+    "01/10/2026,Coffee,-120.00",
+    "02/10/2026,Salary,50000",
+    "bad,Oops,10",
+    "03/10/2026,Zero,0",
+  ].join("\n");
+
+  it("preview reads the file, guesses columns and writes nothing", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const res = await preview({ csv: statement });
+    expect(res.status).toBe(200);
+    const { data } = await res.json();
+    expect(data).toMatchObject({
+      mapping: { date: "Date", amount: "Amount", description: "Narration" },
+      totalRows: 5,
+      validCount: 3,
+      invalidCount: 2,
+      duplicateCount: 0,
+      importCount: 3,
+      incomeTotal: 5000000,
+      expenseTotal: 24000,
+    });
+    expect(data.errors.map((e: { row: number }) => e.row)).toEqual([4, 5]);
+    expect(data.sample[0]).toMatchObject({ row: 1, date: "2026-10-01", type: "expense", amount: 12000, description: "Coffee", category: "other" });
+    expect(await Transaction.countDocuments({ user: userId })).toBe(0);
+  });
+
+  it("commit writes rows as source import, leaves the balance alone, and replays on the same key", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { default: Account } = await import("@/models/Account");
+    const first = await commit({ csv: statement }, { "idempotency-key": "ik" });
+    expect(first.status).toBe(201);
+    const { data } = await first.json();
+    expect(data).toMatchObject({ imported: 3, skippedDuplicates: 0, invalidCount: 2, failed: 0 });
+    const rows = await Transaction.find({ user: userId }).sort({ date: 1 }).lean();
+    expect(rows).toHaveLength(3);
+    expect(rows.every((r) => r.source === "import" && r.reviewStatus == null)).toBe(true);
+    expect(rows[0]).toMatchObject({ type: "expense", amount: 12000, description: "Coffee", currency: "INR" });
+    expect((await Account.findById(accountId))!.balance).toBe(100000);
+
+    const replay = await commit({ csv: statement }, { "idempotency-key": "ik" });
+    expect((await replay.json()).data.imported).toBe(3);
+    expect(await Transaction.countDocuments({ user: userId })).toBe(3);
+
+    const clash = await commit({ csv: statement, dateOrder: "mdy" }, { "idempotency-key": "ik" });
+    expect(clash.status).toBe(409);
+  });
+
+  it("a different mapping under one key is a conflict, not a replay", async () => {
+    await commit({ csv: statement, mapping: { date: "Date", amount: "Amount" } }, { "idempotency-key": "mk" });
+    const other = await commit({ csv: statement, mapping: { date: "Date", amount: "Amount", description: "Narration" } }, { "idempotency-key": "mk" });
+    expect(other.status).toBe(409);
+  });
+
+  it("adjustBalance moves the balance by the imported rows", async () => {
+    const { default: Account } = await import("@/models/Account");
+    await commit({ csv: statement, adjustBalance: true });
+    // +50000.00 - 2 x 120.00
+    expect((await Account.findById(accountId))!.balance).toBe(100000 + 5000000 - 24000);
+  });
+
+  it("a second import of the same file adds nothing; two equal rows on a day match two existing", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    await commit({ csv: statement });
+    const again = await preview({ csv: statement });
+    expect((await again.json()).data).toMatchObject({ validCount: 3, duplicateCount: 3, importCount: 0 });
+    const done = await commit({ csv: statement });
+    expect((await done.json()).data).toMatchObject({ imported: 0, skippedDuplicates: 3 });
+    expect(await Transaction.countDocuments({ user: userId })).toBe(3);
+
+    // A third coffee that day is new: only two exist already.
+    const more = await preview({ csv: ["Date,Narration,Amount", "01/10/2026,Coffee,-120.00", "01/10/2026,Coffee,-120.00", "01/10/2026,Coffee,-120.00"].join("\n") });
+    expect((await more.json()).data).toMatchObject({ duplicateCount: 2, importCount: 1 });
+  });
+
+  it("matches a row entered by hand, but not a deleted, voided or other account's row", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { default: Account } = await import("@/models/Account");
+    const sibling = await Account.create({ user: userId, name: "Wallet", type: "cash", balance: 0, currency: "INR" });
+    const day = new Date(Date.UTC(2026, 9, 5, 9, 0, 0));
+    const base = { user: userId, account: accountId, type: "expense", amount: 4500, category: "food", date: day };
+    await Transaction.create({ ...base, source: "sms", reviewStatus: "confirmed" });
+    await Transaction.create({ ...base, isDeleted: true });
+    await Transaction.create({ ...base, reviewStatus: "voided" });
+    await Transaction.create({ ...base, account: sibling._id });
+    const csv = "Date,Amount\n2026-10-05,-45.00\n2026-10-05,-45.00\n";
+    const data = (await (await preview({ csv })).json()).data;
+    expect(data).toMatchObject({ duplicateCount: 1, importCount: 1 });
+    const all = await commit({ csv, includeDuplicates: true });
+    expect((await all.json()).data).toMatchObject({ imported: 2, skippedDuplicates: 0 });
+  });
+
+  it("reads separate debit and credit columns and a type column", async () => {
+    const dc = await preview({ csv: "Date,Particulars,Debit,Credit\n01/10/2026,Rent,15000,\n02/10/2026,Refund,,300.50\n03/10/2026,Both,1,1" });
+    const d = (await dc.json()).data;
+    expect(d.mapping).toMatchObject({ debit: "Debit", credit: "Credit" });
+    expect(d.sample.map((s: { type: string; amount: number }) => [s.type, s.amount])).toEqual([["expense", 1500000], ["income", 30050]]);
+    expect(d.invalidCount).toBe(1);
+
+    const typed = await preview({ csv: "Date,Amount,Type,Category,Tags\n01/10/2026,100,Debit,Food,a;b\n02/10/2026,200,Credit,Salary," });
+    const t = (await typed.json()).data;
+    expect(t.sample.map((s: { type: string; category: string; tags: string[] }) => [s.type, s.category, s.tags])).toEqual([
+      ["expense", "Food", ["a", "b"]],
+      ["income", "Salary", []],
+    ]);
+
+    const forced = await preview({ csv: "Date,Amount\n01/10/2026,100", amountSign: "expense" });
+    expect((await forced.json()).data.sample[0].type).toBe("expense");
+  });
+
+  it("asks for a mapping when the date or amount column is unknown, and rejects a bad one", async () => {
+    const none = await preview({ csv: "Foo,Bar\n1,2" });
+    expect(none.status).toBe(400);
+    expect((await none.json()).error.details.code).toBe("NEEDS_MAPPING");
+    const wrong = await preview({ csv: statement, mapping: { date: "Nope", amount: "Amount" } });
+    expect(wrong.status).toBe(400);
+    expect((await wrong.json()).error.details.missingColumns).toEqual(["Nope"]);
+    const ok = await preview({ csv: "When,How much\n01/10/2026,5", mapping: { date: "When", amount: "How much" } });
+    expect(ok.status).toBe(200);
+  });
+
+  it("validates the body, the account and the key", async () => {
+    expect((await preview({ csv: "" })).status).toBe(400);
+    expect((await preview({ csv: statement, accountId: "nope" })).status).toBe(400);
+    expect((await preview({ csv: statement, surprise: 1 })).status).toBe(400);
+    expect((await preview({ csv: statement, dateOrder: "xyz" })).status).toBe(400);
+    expect((await preview({ csv: "x".repeat(1_000_001) })).status).toBe(400);
+    const { POST } = await import("@/app/api/integrations/import/commit/route");
+    const noKey = new NextRequest("http://localhost/api/integrations/import/commit", {
+      method: "POST",
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
+      body: JSON.stringify({ accountId, csv: statement }),
+    });
+    expect((await POST(noKey, {})).status).toBe(400);
+  });
+
+  it("never touches another user's account or archived accounts", async () => {
+    const { default: Account } = await import("@/models/Account");
+    const theirs = await Account.create({ user: otherUserId, name: "Theirs", type: "bank", balance: 0, currency: "INR" });
+    expect((await preview({ csv: statement, accountId: theirs._id.toString() })).status).toBe(404);
+    expect((await commit({ csv: statement, accountId: theirs._id.toString() })).status).toBe(404);
+    const archived = await Account.create({ user: userId, name: "Old", type: "bank", balance: 0, currency: "INR", isArchived: true });
+    expect((await commit({ csv: statement, accountId: archived._id.toString() })).status).toBe(404);
+  });
+
+  it("a duplicate in another user's account is not a duplicate for this user", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { default: Account } = await import("@/models/Account");
+    const theirs = await Account.create({ user: otherUserId, name: "Theirs", type: "bank", balance: 0, currency: "INR" });
+    await Transaction.create({ user: otherUserId, account: theirs._id, type: "expense", amount: 12000, category: "food", date: new Date(Date.UTC(2026, 9, 1, 12)) });
+    expect((await (await preview({ csv: statement })).json()).data.duplicateCount).toBe(0);
+  });
+
+  it("export lists real rows only, as major units, with formula cells defanged", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { default: Account } = await import("@/models/Account");
+    const theirs = await Account.create({ user: otherUserId, name: "Theirs", type: "bank", balance: 0, currency: "INR" });
+    const at = (d: number) => new Date(Date.UTC(2026, 9, d, 6, 0, 0));
+    const base = { user: userId, account: accountId, category: "food" };
+    await Transaction.create({ ...base, type: "expense", amount: 125050, description: "=HYPERLINK(\"x\")", note: 'said "hi", ok', tags: ["a", "b"], date: at(2) });
+    await Transaction.create({ ...base, type: "income", amount: 5, date: at(1) });
+    await Transaction.create({ ...base, type: "expense", amount: 700, isDeleted: true, date: at(3) });
+    await Transaction.create({ ...base, type: "expense", amount: 800, reviewStatus: "voided", date: at(3) });
+    await Transaction.create({ ...base, type: "expense", amount: 900, isRecurring: true, installmentStatus: "upcoming", date: at(4) });
+    await Transaction.create({ user: otherUserId, account: theirs._id, type: "expense", amount: 111, category: "x", date: at(2) });
+
+    const res = await exportCsv();
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/csv");
+    expect(res.headers.get("content-disposition")).toContain("attachment");
+    expect(res.headers.get("x-export-rows")).toBe("2");
+    expect(res.headers.get("x-export-truncated")).toBe("false");
+    const lines = (await res.text()).split("\n");
+    expect(lines[0]).toBe("date,type,amount,currency,category,subcategory,description,account,transferTo,note,tags,source");
+    expect(lines).toHaveLength(3);
+    expect(lines[1]).toBe("2026-10-01,income,0.05,INR,food,,,Bank,,,,manual");
+    expect(lines[2]).toBe('2026-10-02,expense,1250.50,INR,food,,\'=HYPERLINK("x"),Bank,,"said ""hi"", ok",a;b,manual'.replace('\'=HYPERLINK("x")', '"\'=HYPERLINK(""x"")"'));
+    expect(lines.join("\n")).not.toContain("111");
+  });
+
+  it("export filters by account and dates, and refuses bad ones", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { default: Account } = await import("@/models/Account");
+    const other = await Account.create({ user: userId, name: "Wallet", type: "cash", balance: 0, currency: "INR" });
+    const at = (d: number) => new Date(Date.UTC(2026, 9, d, 6, 0, 0));
+    await Transaction.create({ user: userId, account: accountId, type: "expense", amount: 100, category: "a", date: at(1) });
+    await Transaction.create({ user: userId, account: accountId, type: "expense", amount: 200, category: "a", date: at(10) });
+    await Transaction.create({ user: userId, account: other._id, type: "expense", amount: 300, category: "a", date: at(10) });
+    const ranged = await exportCsv(`?accountId=${accountId}&dateFrom=2026-10-05&dateTo=2026-10-10`);
+    expect(ranged.headers.get("x-export-rows")).toBe("1");
+    expect(await ranged.text()).toContain("2.00");
+    const bounds = await exportCsv("?dateFrom=2026-10-01&dateTo=2026-10-01");
+    expect(bounds.headers.get("x-export-rows")).toBe("1");
+    expect((await exportCsv("?dateFrom=yesterday")).status).toBe(400);
+    expect((await exportCsv("?dateTo=2026-02-31")).status).toBe(400);
+    expect((await exportCsv("?accountId=nope")).status).toBe(400);
+  });
+
+  it("an export imports back into another account", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { default: Account } = await import("@/models/Account");
+    const at = (d: number) => new Date(Date.UTC(2026, 9, d, 6, 0, 0));
+    await Transaction.create({ user: userId, account: accountId, type: "expense", amount: 125050, category: "food", description: "Dinner, with friends", tags: ["x", "y"], date: at(2) });
+    await Transaction.create({ user: userId, account: accountId, type: "income", amount: 99900, category: "salary", date: at(3) });
+    const csv = await (await exportCsv()).text();
+    const fresh = await Account.create({ user: userId, name: "Fresh", type: "bank", balance: 0, currency: "INR" });
+    const res = await commit({ csv, accountId: fresh._id.toString() });
+    expect((await res.json()).data).toMatchObject({ imported: 2, invalidCount: 0 });
+    const rows = await Transaction.find({ account: fresh._id }).sort({ date: 1 }).lean();
+    expect(rows.map((r) => [r.type, r.amount, r.category, r.description ?? "", r.tags])).toEqual([
+      ["expense", 125050, "food", "Dinner, with friends", ["x", "y"]],
+      ["income", 99900, "salary", "", []],
+    ]);
+  });
+
+  it("an import does not raise budget, spend limit or round-up side effects", async () => {
+    const { default: Notification } = await import("@/models/Notification");
+    await commit({ csv: "Date,Amount,Category\n01/10/2026,-999999,food" });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(await Notification.countDocuments({ user: userId })).toBe(0);
+  });
+});
+
+describe("import body size", () => {
+  it("refuses a declared body over the cap before reading it", async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Big", email: `big${Date.now()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "p", keyHash: hashKey("big-key"), lastFour: "-key" });
+    const { POST } = await import("@/app/api/integrations/import/preview/route");
+    const res = await POST(
+      new NextRequest("http://localhost/api/integrations/import/preview", {
+        method: "POST",
+        headers: { authorization: "Bearer big-key", "content-type": "application/json", "content-length": "2000000" },
+        body: "{}",
+      }),
+      {}
+    );
+    expect(res.status).toBe(400);
+  });
+});

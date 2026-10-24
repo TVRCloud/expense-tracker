@@ -86,6 +86,16 @@ A transfer is one `type: "transfer"` row (`account` is the source, `transferTo` 
 
 `POST /api/integrations/transactions` answers with `transferToId` (null unless the row is a transfer).
 
+## Export and import (integrations only)
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/api/integrations/export/transactions?accountId&dateFrom&dateTo` | A CSV file (`text/csv`, not the JSON envelope). Columns `date,type,amount,currency,category,subcategory,description,account,transferTo,note,tags,source`; `amount` in major units (`1250.50`), `tags` joined by `;`, `date` is `YYYY-MM-DD` on the user's clock. Voided, deleted and not-yet-happened planned instalments are left out. At most 20,000 rows: `X-Export-Truncated: true` says there are more (ask again with a narrower range); `X-Export-Rows` is the count. Cells starting `= + - @` get a leading `'`. 400 for a bad date or account |
+| POST | `/api/integrations/import/preview` | Dry run, nothing written. Body `{accountId, csv, mapping?, dateOrder?, amountSign?}`. `mapping` names columns by header text: `{date, amount \| debit+credit, type?, description?, category?, note?, tags?}`; without it the header is guessed (the guess is in the answer). `dateOrder` `dmy` (default), `mdy`, `ymd` for numeric dates; `amountSign` `signed` (default: negative is an expense), `expense`, `income` for files with unsigned amounts. 200 `{account, delimiter, headers, mapping, totalRows, validCount, duplicateCount, invalidCount, importCount, incomeTotal, expenseTotal, errors[{row,field,message}] (first 50), sample[{row,date,type,amount,description,category,tags,duplicate}] (first 20)}`. 400 `VALIDATION_ERROR` with `details.code` `NEEDS_MAPPING` (a mapped column is not in the file, or no date or amount column; `missingColumns` or `headers` say which) or `INVALID_CSV` (empty, over 1,000 rows, over 50 columns, over 1 MB); 404 account not yours or archived |
+| POST | `/api/integrations/import/commit` | Same body plus `includeDuplicates` (default false) and `adjustBalance` (default false: the rows are history the balance already shows). Needs `Idempotency-Key`. 201 `{account, totalRows, imported, skippedDuplicates, invalidCount, failed, errors}`. Rows get `source: import`, no review inbox entry, no budget or spend limit alert, no round-up; categorise rules still apply. Invalid rows are skipped and reported |
+
+A row is a duplicate when the account already has a live row on the same calendar day (user's clock) with the same type and amount; equal rows inside one file only match as many as already exist, so re-importing a file adds nothing. Income and expense only: transfers are not imported.
+
 ## Cash
 
 | Method | Path | Description |
