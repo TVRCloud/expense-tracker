@@ -22,6 +22,8 @@ All monetary fields are stored as **integers (cents)** — divide by 100 for dis
 | `preferences.currency` | String | ISO 4217 |
 | `preferences.billReminders.enabled` | Boolean | default false; turns on bill due reminders |
 | `preferences.billReminders.leadDays` | Number | 1 to 14, default 3; how many days ahead to remind |
+| `preferences.weeklyReview.enabled` | Boolean | default false; turns on the weekly review notification |
+| `preferences.weeklyReview.day` | Number | 0 (Sunday) to 6, default 1 (Monday); the weekday it arrives, from 09:00 on the user's clock |
 | `passwordResetToken` | String | hashed, single-use |
 | `passwordResetExpires` | Date | 1hr window |
 

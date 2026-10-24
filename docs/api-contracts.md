@@ -158,6 +158,14 @@ What the user owns minus what they owe. Owned: positive account balances, a card
 | GET, POST | `/api/net-worth/assets` | List and add manual assets: `{name (1 to 60), kind?: property\|vehicle\|gold\|investment\|other, value (cents, int, 0 or more), note? (200)}` |
 | PATCH, DELETE | `/api/net-worth/assets/:id` | Edit any of name, kind, value, note (`null` clears it); DELETE archives the asset. 404 for an unknown or other user's id |
 
+## Weekly review
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/api/weekly-review?week=YYYY-MM-DD` | Look back at one week, Monday to Sunday in the user's time zone; default the last completed week. Same body as `/api/integrations/weekly-review` (see [n8n-integration.md](n8n-integration.md#weekly-review)), wrapped as `{data}`. 400 for a bad date or a week that has not started |
+
+Integration only: `GET` and `PATCH /api/integrations/weekly-review/settings` (`{enabled, day}`, notification off by default), and the cron hook `GET /api/cron/weekly-review`.
+
 ## Budgets
 
 | Method | Path | Description |
