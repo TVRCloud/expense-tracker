@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isSupportedCurrency } from "@/lib/currency";
 
 // Single source of truth for account-create validation — imported by both
 // the client form (AccountsClient.tsx, via react-hook-form) and the server
@@ -19,7 +20,7 @@ export const accountCreateSchema = z.object({
   name: z.string().min(1, "Name your account").max(100),
   type: z.enum(["cash", "bank", "credit_card", "savings", "investment", "wallet"]),
   balance: z.number().int().default(0),
-  currency: z.string().default("INR"),
+  currency: z.string().refine(isSupportedCurrency, "Unsupported currency").default("INR"),
   color: z.string().optional(),
   icon: z.string().optional(),
   creditMeta: creditMetaSchema.optional(),

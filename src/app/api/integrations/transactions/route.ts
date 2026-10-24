@@ -78,58 +78,79 @@ export const POST = withIntegrationRoute("transactions", async ({ req, user, req
     });
   }
 
-  const outcome = await withIdempotency({
-    userId: user.id,
-    endpoint: IDEMPOTENCY_ENDPOINT,
-    key: idempotencyKey,
-    body: parsed.data,
-    execute: async (): Promise<{ status: number; body: Record<string, unknown> }> => {
-      try {
-        // Values from an integration caller (n8n's AI parsing) can be wrong, so
-        // plain income/expense rows land in the reconcile inbox as unreviewed.
-        const reviewable =
-          parsed.data.type !== "transfer" && !parsed.data.isRecurring && !parsed.data.splits;
-        const result = await createTransaction({
-          ...parsed.data,
-          userId: user.id,
-          actor: user,
-          provenance: reviewable ? { source: "n8n", reviewStatus: "unreviewed" } : { source: "n8n" },
-        });
-        const transaction = result.transaction as {
-          _id: { toString(): string };
-          type: string;
-          amount: number;
-          currency: string;
-          category: string;
-          account: { toString(): string };
-          transferTo?: { toString(): string } | null;
-          date: Date;
-          createdAt: Date;
-          updatedAt: Date;
-        };
-        const responseBody = {
-          id: transaction._id.toString(),
-          type: transaction.type,
-          amount: transaction.amount,
-          currency: transaction.currency,
-          category: transaction.category,
-          accountId: transaction.account.toString(),
-          transferToId: transaction.transferTo ? transaction.transferTo.toString() : null,
-          date: transaction.date,
-          seriesId: result.kind === "series" ? result.seriesId : null,
-          count: result.kind === "series" ? result.count : 1,
-          createdAt: transaction.createdAt,
-          updatedAt: transaction.updatedAt,
-        };
-        return { status: 201, body: responseBody };
-      } catch (err) {
-        if (err instanceof TransactionServiceError) {
-          return { status: 404, body: { errorCode: err.code, message: err.message } };
+  let outcome: Awaited<ReturnType<typeof withIdempotency>>;
+  try {
+    outcome = await withIdempotency({
+      userId: user.id,
+      endpoint: IDEMPOTENCY_ENDPOINT,
+      key: idempotencyKey,
+      body: parsed.data,
+      execute: async (): Promise<{ status: number; body: Record<string, unknown> }> => {
+        try {
+          // Values from an integration caller (n8n's AI parsing) can be wrong, so
+          // plain income/expense rows land in the reconcile inbox as unreviewed.
+          const reviewable =
+            parsed.data.type !== "transfer" && !parsed.data.isRecurring && !parsed.data.splits;
+          const result = await createTransaction({
+            ...parsed.data,
+            userId: user.id,
+            actor: user,
+            provenance: reviewable ? { source: "n8n", reviewStatus: "unreviewed" } : { source: "n8n" },
+          });
+          const transaction = result.transaction as {
+            _id: { toString(): string };
+            type: string;
+            amount: number;
+            currency: string;
+            originalAmount?: number | null;
+            originalCurrency?: string | null;
+            originalExponent?: number | null;
+            rate?: number | null;
+            rateDate?: Date | null;
+            category: string;
+            account: { toString(): string };
+            transferTo?: { toString(): string } | null;
+            date: Date;
+            createdAt: Date;
+            updatedAt: Date;
+          };
+          const responseBody = {
+            id: transaction._id.toString(),
+            type: transaction.type,
+            amount: transaction.amount,
+            currency: transaction.currency,
+            originalAmount: transaction.originalAmount ?? null,
+            originalCurrency: transaction.originalCurrency ?? null,
+            originalExponent: transaction.originalExponent ?? null,
+            rate: transaction.rate ?? null,
+            rateDate: transaction.rateDate ?? null,
+            category: transaction.category,
+            accountId: transaction.account.toString(),
+            transferToId: transaction.transferTo ? transaction.transferTo.toString() : null,
+            date: transaction.date,
+            seriesId: result.kind === "series" ? result.seriesId : null,
+            count: result.kind === "series" ? result.count : 1,
+            createdAt: transaction.createdAt,
+            updatedAt: transaction.updatedAt,
+          };
+          return { status: 201, body: responseBody };
+        } catch (err) {
+          // A missing rate can pass in minutes, so it is not stored against the
+          // Idempotency-Key: a retry with the same key must try again.
+          if (err instanceof TransactionServiceError && err.code === "RATE_UNAVAILABLE") throw err;
+          if (err instanceof TransactionServiceError) {
+            return { status: err.code === "CONVERSION_FAILED" ? 400 : 404, body: { errorCode: err.code, message: err.message } };
+          }
+          throw err;
         }
-        throw err;
-      }
-    },
-  });
+      },
+    });
+  } catch (err) {
+    if (err instanceof TransactionServiceError && err.code === "RATE_UNAVAILABLE") {
+      return integrationError("VALIDATION_ERROR", err.message, requestId, { details: { errorCode: err.code } });
+    }
+    throw err;
+  }
 
   if (outcome.kind === "conflict") {
     if (outcome.reason === "fingerprint_mismatch") {
@@ -147,6 +168,9 @@ export const POST = withIntegrationRoute("transactions", async ({ req, user, req
   }
 
   const body_ = outcome.body as { errorCode?: string; message?: string } & Record<string, unknown>;
+  if (outcome.status === 400 && body_.errorCode) {
+    return integrationError("VALIDATION_ERROR", body_.message ?? "Request failed", requestId, { details: { errorCode: body_.errorCode } });
+  }
   if (outcome.status === 404 && body_.errorCode) {
     return integrationError("NOT_FOUND", body_.message ?? "Not found", requestId);
   }

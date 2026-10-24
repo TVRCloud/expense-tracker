@@ -13,6 +13,9 @@ import { computeInstallmentDates, OPEN_ENDED_WINDOW } from "@/lib/recurrence";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { ruleOverridesForTransaction } from "@/lib/rule-service";
 import logger from "@/lib/logger";
+import { getBaseCurrency } from "@/lib/base-currency";
+import { convertMinor, CurrencyError, isSupportedCurrency, MAX_MINOR_AMOUNT, minorExponent } from "@/lib/currency";
+import { getRate, RateUnavailableError } from "@/lib/exchange-rate-service";
 
 // Shared transaction-creation business logic, used by both the browser-facing
 // POST /api/transactions route and the n8n-facing POST /api/integrations/transactions
@@ -26,8 +29,16 @@ export const transactionCreateSchema = z
   .object({
     accountId: z.string(),
     type: z.enum(["income", "expense", "transfer"]),
-    amount: z.number().int().positive(),
-    currency: z.string().default("INR"),
+    // Paise of the base currency. Leave out when sending originalAmount.
+    amount: z.number().int().positive().optional(),
+    // Ignored: `currency` on a stored row is always the base currency.
+    currency: z.string().optional(),
+    // Foreign spend: minor units of originalCurrency (cents, yen, fils...).
+    // The server converts to the base currency and sets `amount`.
+    originalAmount: z.number().int().positive().max(MAX_MINOR_AMOUNT).optional(),
+    originalCurrency: z.string().refine(isSupportedCurrency, "Unsupported currency").optional(),
+    // Base units per 1 unit of originalCurrency; the server's own rate is used when omitted.
+    rate: z.number().positive().finite().optional(),
     category: z.string().min(1).optional(),
     subcategory: z.string().optional(),
     description: z.string().optional(),
@@ -54,6 +65,31 @@ export const transactionCreateSchema = z
     if (!Types.ObjectId.isValid(data.accountId)) {
       ctx.addIssue({ code: "custom", path: ["accountId"], message: "Invalid account" });
     }
+    const foreign = data.originalAmount !== undefined || data.originalCurrency !== undefined;
+    if (foreign) {
+      if (data.originalAmount === undefined || data.originalCurrency === undefined) {
+        ctx.addIssue({ code: "custom", path: ["originalAmount"], message: "Send originalAmount and originalCurrency together" });
+      }
+      if (data.amount !== undefined) {
+        ctx.addIssue({ code: "custom", path: ["amount"], message: "Send either amount or originalAmount, not both" });
+      }
+      if (data.type === "transfer") {
+        ctx.addIssue({ code: "custom", path: ["originalAmount"], message: "Transfers must be in the base currency" });
+      }
+      if (data.splits) {
+        ctx.addIssue({ code: "custom", path: ["originalAmount"], message: "Split transactions must be in the base currency" });
+      }
+      if (data.isRecurring) {
+        ctx.addIssue({ code: "custom", path: ["originalAmount"], message: "Recurring transactions must be in the base currency" });
+      }
+    } else {
+      if (data.amount === undefined) {
+        ctx.addIssue({ code: "custom", path: ["amount"], message: "Amount is required" });
+      }
+      if (data.rate !== undefined) {
+        ctx.addIssue({ code: "custom", path: ["rate"], message: "rate only applies with originalAmount" });
+      }
+    }
     if (data.splits) {
       if (data.type !== "expense") {
         ctx.addIssue({ code: "custom", path: ["splits"], message: "Only expenses can be split" });
@@ -62,7 +98,7 @@ export const transactionCreateSchema = z
         ctx.addIssue({ code: "custom", path: ["splits"], message: "Split transactions can't be recurring" });
       }
       const splitTotal = data.splits.reduce((sum, s) => sum + s.amount, 0);
-      if (splitTotal !== data.amount) {
+      if (data.amount !== undefined && splitTotal !== data.amount) {
         ctx.addIssue({ code: "custom", path: ["splits"], message: "Split amounts must add up to the total" });
       }
     } else if (!data.category) {
@@ -121,6 +157,8 @@ export type CreateTransactionResult =
 export type TransactionServiceErrorCode =
   | "ACCOUNT_NOT_FOUND"
   | "TRANSFER_ACCOUNT_NOT_FOUND"
+  | "RATE_UNAVAILABLE"
+  | "CONVERSION_FAILED"
   | "TRANSACTION_NOT_FOUND"
   | "TRANSACTION_LOCKED"
   | "INSTALLMENT_NOT_FOUND";
@@ -188,8 +226,56 @@ export async function invalidateStatsCacheMany(userId: string, dates: Date[]) {
   }
 }
 
+type ResolvedAmount = {
+  amount: number;
+  baseCurrency: string;
+  stored: {
+    originalAmount?: number;
+    originalCurrency?: string;
+    originalExponent?: number;
+    rate?: number;
+    rateDate?: Date;
+  };
+};
+
+// Works out the base-currency `amount` and the foreign-spend fields to store.
+// Plain base-currency requests pass through untouched.
+async function resolveAmount(
+  userId: string,
+  input: { amount?: number; originalAmount?: number; originalCurrency?: string; rate?: number }
+): Promise<ResolvedAmount> {
+  const baseCurrency = await getBaseCurrency(userId);
+  if (input.originalAmount === undefined || input.originalCurrency === undefined) {
+    if (input.amount === undefined) throw new Error("createTransaction needs amount or originalAmount");
+    return { amount: input.amount, baseCurrency, stored: {} };
+  }
+  const { originalAmount, originalCurrency } = input;
+  if (originalCurrency === baseCurrency) {
+    // Same currency as the base: nothing to convert.
+    return { amount: originalAmount, baseCurrency, stored: {} };
+  }
+  try {
+    const resolved = await getRate(originalCurrency, baseCurrency, input.rate);
+    return {
+      amount: convertMinor(originalAmount, originalCurrency, baseCurrency, resolved.rate),
+      baseCurrency,
+      stored: {
+        originalAmount,
+        originalCurrency,
+        originalExponent: minorExponent(originalCurrency),
+        rate: resolved.rate,
+        rateDate: resolved.rateDate,
+      },
+    };
+  } catch (err) {
+    if (err instanceof RateUnavailableError) throw new TransactionServiceError("RATE_UNAVAILABLE", err.message);
+    if (err instanceof CurrencyError) throw new TransactionServiceError("CONVERSION_FAILED", err.message);
+    throw err;
+  }
+}
+
 export async function createTransaction(input: CreateTransactionInput): Promise<CreateTransactionResult> {
-  const { userId, actor, accountId, transferToId, provenance, ruleText, skipBalance, ...rest } = input;
+  const { userId, actor, accountId, transferToId, provenance, ruleText, skipBalance, ...restIn } = input;
   const quiet = provenance?.source === "import";
   await connectDB();
 
@@ -204,6 +290,11 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     }
   }
 
+  const foreignFields = await resolveAmount(userId, restIn);
+  // `currency` is the base currency's code and `amount` is paise of it; the
+  // schema guarantees an amount exists once resolveAmount has run.
+  const { currency: _ignoredCurrency, originalAmount: _a, originalCurrency: _c, rate: _r, ...restBase } = restIn;
+  const rest = { ...restBase, amount: foreignFields.amount, currency: foreignFields.baseCurrency };
   const startDate = new Date(rest.date);
 
   // Categorise rules (src/lib/rule-service.ts) fill in what the person left
@@ -379,6 +470,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
 
   const transaction = await Transaction.create({
     ...rest,
+    ...foreignFields.stored,
     ...(provenance ?? {}),
     account: accountId,
     user: userId,

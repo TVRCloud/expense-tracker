@@ -3,6 +3,7 @@ import connectDB from "@/lib/mongodb";
 import Account from "@/models/Account";
 import type { AuthUser } from "@/lib/auth-guard";
 import { appendLedgerBlock } from "@/lib/ledger";
+import { isSupportedCurrency } from "@/lib/currency";
 import { accountCreateSchema, creditMetaSchema } from "@/features/accounts/schemas/account.schema";
 
 export { accountCreateSchema };
@@ -38,6 +39,8 @@ export async function createAccount(input: CreateAccountInput) {
 // No `balance` here on purpose: a direct balance edit would desync the ledger.
 export const accountUpdateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
+  // The account's own currency, a label: balances stay in the base currency.
+  currency: z.string().refine(isSupportedCurrency, "Unsupported currency").optional(),
   color: z.string().optional(),
   icon: z.string().optional(),
   isArchived: z.boolean().optional(),

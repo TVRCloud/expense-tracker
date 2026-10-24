@@ -96,6 +96,27 @@ A transfer is one `type: "transfer"` row (`account` is the source, `transferTo` 
 
 A row is a duplicate when the account already has a live row on the same calendar day (user's clock) with the same type and amount; equal rows inside one file only match as many as already exist, so re-importing a file adds nothing. Income and expense only: transfers are not imported. Amounts accept a comma only as thousands grouping (`1,234.50`, `1,23,456`); `12,50` is refused as unreadable. Any negative marker (`-`, brackets, `Dr`) makes an amount negative; `Cr` is positive, and a cell with both (`(500) Cr`, `-250 Cr`) is refused. A row on a day the user's zone skipped (Samoa, 2011-12-30) is a row error. Up to 500 rows per file.
 
+## Multi-currency
+
+`amount` is always integer paise (minor units) of the user's base currency (`preferences.currency`, default INR), so stats, budgets and limits never see a foreign amount. A payment in another currency also keeps what was actually paid.
+
+`POST /api/transactions` and `POST /api/integrations/transactions` take, instead of `amount`:
+
+| Field | Notes |
+|-------|-------|
+| `originalAmount` | Integer minor units of `originalCurrency` (cents, yen, fils), 1 to 1e13 |
+| `originalCurrency` | Supported ISO 4217 code, capitals (`USD`, `JPY`, `KWD`, ...). Same as the base currency: treated as a plain `amount` |
+| `rate` | Optional, base units per 1 unit of `originalCurrency`. Wins over the server's rate and never calls the provider |
+
+Send `originalAmount` and `originalCurrency` together, and not together with `amount`. Not allowed with transfers, splits or recurring series (400). The server converts once (half up, minor-unit digits of both currencies) and stores `amount` (base) with `originalAmount`, `originalCurrency`, `originalExponent`, `rate` (10 significant digits) and `rateDate`. The integrations POST answers with those five fields (null on a plain row); lists and `PATCH` return them as stored. Input `currency` is ignored: a stored `currency` is the base currency's code. A conversion that rounds to 0 or passes the cap is a 400; no usable rate (provider down and cache older than 30 days or empty) is a 400 whose message says to send `rate`. `PATCH` does not change amounts, so these fields cannot be edited.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/integrations/currencies` | `{base, canChangeBase, currencies: [{code, name, exponent}], rates: {USD: 83.33333333, ...}, rateDate, stale}`. `rates` is base units per 1 unit; empty and `rateDate` null when the provider is down and nothing is cached; `stale` when the cached table is over a day old |
+| PATCH | `/api/integrations/currencies` | `{base}` with `Idempotency-Key`. 400 unsupported code, or the user already has transactions (every stored amount is in the base) |
+
+Rates come from open.er-api.com (free, no key, daily; the provider asks for attribution, "Rates by Exchange Rate API", https://www.exchangerate-api.com). One table per base is cached in `exchange_rates` and refreshed after 24 hours; if the refresh fails the old table serves for up to 30 days. `PATCH /api/me/preferences` `currency` follows the same whitelist and the same fixed-once-transactions rule. Accounts take a supported `currency` (create and `PATCH`); it labels the account, balances stay in the base currency.
+
 ## Cash
 
 | Method | Path | Description |
