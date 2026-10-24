@@ -196,6 +196,24 @@ Sparse index: `{user, externalLoanId}`
 | `isCompleted` / `completedAt` | Boolean / Date | |
 | `isDeleted` / `deletedAt` / `deletedBy` | | soft delete |
 
+## sinking_funds
+
+Money set aside for a cost on a due date. Progress (`remaining`, `percent`, `monthsLeft`, `suggestedMonthly`, `status`) is computed on read, never stored.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | |
+| `name` | String | |
+| `targetAmount` / `savedAmount` | Number | cents |
+| `currency` | String | |
+| `dueDate` | Date | required |
+| `monthlyAmount` | Number | the person's plan, cents; absent means use the suggested amount |
+| `icon` | String | |
+| `isCompleted` / `completedAt` | Boolean / Date | `savedAmount >= targetAmount`; kept in step by the service |
+| `isDeleted` / `deletedAt` / `deletedBy` | | soft delete |
+
+Index `{user, isDeleted, dueDate}`.
+
 ## notifications
 
 | Field | Type | Notes |

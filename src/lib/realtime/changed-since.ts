@@ -11,6 +11,7 @@ import Repayment from "@/models/Repayment";
 import CreditStatement from "@/models/CreditStatement";
 import SpendLimit from "@/models/SpendLimit";
 import SubscriptionDecision from "@/models/SubscriptionDecision";
+import SinkingFund from "@/models/SinkingFund";
 import { RESOURCE_NAMES, type RealtimeResource } from "@/lib/realtime/changes";
 
 const MODELS: Record<RealtimeResource, Model<any>> = { // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -25,6 +26,7 @@ const MODELS: Record<RealtimeResource, Model<any>> = { // eslint-disable-line @t
   statements: CreditStatement,
   spendLimits: SpendLimit,
   subscriptions: SubscriptionDecision,
+  sinkingFunds: SinkingFund,
 };
 
 /** Parses `?since=` (epoch ms). Anything missing/non-numeric/<=0 is null. */

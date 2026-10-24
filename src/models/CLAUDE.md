@@ -4,7 +4,7 @@ Purpose: Mongoose schemas, one file per collection. Field tables: [docs/database
 ## Files
 - User (incl. `preferences.timezone` and `preferences.billReminders`), Session (collection `userSession`), ApiKey: identity and access.
 - Account (cash accounts also carry `lowBalanceAt`), Transaction (also `refundOf`, `refundStatus` for refund matching), TransactionCorrection, CreditStatement: money records and corrections.
-- Budget, SpendLimit (one doc per user: daily and weekly limit, plus `limitHistory` of the amounts over time), SubscriptionDecision (confirm or dismiss choice per detected subscription), Goal, Loan, Repayment, Rule (categorise rules; hard-deleted), Notification, PushSubscription: feature data.
+- Budget, SpendLimit (one doc per user: daily and weekly limit, plus `limitHistory` of the amounts over time), SubscriptionDecision (confirm or dismiss choice per detected subscription), Goal, SinkingFund (money set aside for a cost on a due date), Loan, Repayment, Rule (categorise rules; hard-deleted), Notification, PushSubscription: feature data.
 - CapturedMessage, IdempotencyRecord: bank message inbox; integration idempotency.
 - LedgerBlock, LedgerBackfill, LogSecurity, LogUnlockSession, SecurityRateLimit: ledger chain, logs unlock, rate limits.
 - Shared TypeScript shapes live in src/types/models.ts.

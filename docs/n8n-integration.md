@@ -103,6 +103,10 @@ Authorization: Bearer <YOUR_API_KEY>
 | POST | `/api/integrations/bills/[id]/pay` | Mark a bill paid (needs `Idempotency-Key`; optional `{amount, accountId}` for loans). Cards answer 400 `NOT_PAYABLE` |
 | GET, PATCH | `/api/integrations/bills/settings` | Reminder settings `{enabled, leadDays}` (off by default, `leadDays` 1 to 14); PATCH changes only what is sent (needs `Idempotency-Key`) |
 | GET | `/api/integrations/forecast` | Cash flow forecast: balance of the money in hand day by day, the lowest point and whether it goes below zero. `days` 1 to 60, default 30 |
+| GET, POST | `/api/integrations/sinking-funds` | List sinking funds (with computed progress and `totals`), create one (needs `Idempotency-Key`); see below |
+| GET, PATCH, DELETE | `/api/integrations/sinking-funds/[id]` | Read, edit (name, target, due date, monthly plan), soft delete a fund (writes need `Idempotency-Key`) |
+| POST | `/api/integrations/sinking-funds/[id]/contribute` | `{amount}` in paise: positive saves into the fund, negative takes out (balance stops at 0); needs `Idempotency-Key` |
+| GET | `/api/integrations/savings-rate` | Share of income saved per month, average and trend; `months` 1 to 24, default 6; see below |
 | GET | `/api/integrations/summary` | Snapshot: accounts, monthly stats, budgets |
 | POST | `/api/integrations/sms` | Parse a bank/NBFC SMS and create a transaction or loan repayment |
 
@@ -147,6 +151,43 @@ Repeating charges found in the user's expense history. Query: `status` (`detecte
 Amounts are cents. `cadence` is `weekly`, `monthly`, `quarterly` or `yearly`. `active` is false once the next charge is more than a quarter of a cycle overdue (hidden unless `includeLapsed=true`). `totals` count active, non-dismissed ones. A charge needs 4 repeats weekly, 3 monthly or quarterly, 2 yearly, with at least 75% of gaps and amounts fitting.
 
 `PATCH /api/integrations/subscriptions/{id}` with `{"status":"confirmed"|"dismissed"|"detected"}` and an `Idempotency-Key` returns the updated item. `400 VALIDATION_ERROR` for a bad id, status or missing key, `404 NOT_FOUND` if the id is not a current detection of this user. Realtime resource: `subscriptions`.
+
+### Sinking funds
+
+Money put aside for a cost with a due date (insurance, tax, travel). Amounts are paise. `POST /api/integrations/sinking-funds` body (needs `Idempotency-Key`):
+
+```json
+{ "name": "Car insurance", "targetAmount": 1200000, "dueDate": "2026-12-15T00:00:00.000Z", "savedAmount": 200000, "monthlyAmount": 150000, "icon": "car" }
+```
+
+`savedAmount` (default 0), `monthlyAmount` (your plan) and `icon` are optional. Every read returns each fund as:
+
+```json
+{ "id": "...", "name": "Car insurance", "targetAmount": 1200000, "savedAmount": 200000, "currency": "INR",
+  "dueDate": "2026-12-15T00:00:00.000Z", "monthlyAmount": 150000, "icon": "car",
+  "isCompleted": false, "completedAt": null, "createdAt": "...", "updatedAt": "...",
+  "remaining": 1000000, "percent": 16, "monthsLeft": 2, "suggestedMonthly": 500000, "status": "behind" }
+```
+
+Computed on every read, never stored: `remaining` (never below 0), `percent` (whole, capped at 100), `monthsLeft` (calendar months from this month to the due month, 0 in the due month or later), `suggestedMonthly` (`remaining` over the months left, rounded up; all of it when none are left; 0 when done) and `status`: `done` (saved reached the target), `overdue` (due date passed), `on_track` (saved is at least what a straight line from creation to the due date would have by now) or `behind`. `GET` answers `{funds, totals}` (soonest due first) where `totals` is `{count, targetAmount, savedAmount, remaining, monthlyNeeded}`; `monthlyNeeded` adds, for funds not done, the fund's own `monthlyAmount` or else its `suggestedMonthly`.
+
+`PATCH /sinking-funds/{id}` takes any of `name`, `targetAmount`, `dueDate`, `monthlyAmount` (`null` clears the plan), `icon` (at least one; `savedAmount` is not editable here). Changing the target can finish or reopen the fund. `POST /sinking-funds/{id}/contribute` with `{"amount": 25000}` adds, `{"amount": -5000}` takes out; it is atomic, so two phones saving at once both count, and a retried request with the same key adds once. Reaching the target stamps `completedAt` and creates one `goal_reached` notification (`meta.sinkingFundId`); taking money out reopens it. Errors: `400 VALIDATION_ERROR` (bad id, body, amount 0 or fractional, missing key), `404 NOT_FOUND` (not yours, or deleted), `409 IDEMPOTENCY_CONFLICT`. Browser equivalents (session auth, `{data}`): `/api/sinking-funds`, `/api/sinking-funds/:id`, `/api/sinking-funds/:id/contribute`.
+
+### GET /api/integrations/savings-rate
+
+`months` (1 to 24, default 6; anything else is `400`). Month totals come from the same numbers as every other stat, so transfers between accounts never count and a confirmed refund comes off spending.
+
+```json
+{ "success": true, "data": {
+  "months": [{ "year": 2026, "month": 9, "income": 100000, "expense": 80000, "saved": 20000, "rate": 0.2 },
+             { "year": 2026, "month": 10, "income": 100000, "expense": 40000, "saved": 60000, "rate": 0.6 }],
+  "current": { "year": 2026, "month": 10, "income": 100000, "expense": 40000, "saved": 60000, "rate": 0.6 },
+  "average": { "income": 200000, "expense": 120000, "saved": 80000, "rate": 0.4 },
+  "trend": "up"
+}, "requestId": "..." }
+```
+
+`months` is oldest first and ends with the month in progress. `saved` is income minus spending (negative when more was spent than earned). `rate` is `saved` over `income` as a fraction rounded to 4 decimals, `null` for a month with no income. `average` adds the whole window together first. `trend` compares the average rate of the latest 3 months with the 3 before (months with income only; with fewer, the latest month against the earliest): `up` or `down` for a move of more than 2 points, else `flat`; `null` when fewer than 2 months have income. Browser equivalent: `GET /api/savings-rate?months=`.
 
 ### Categorise rules
 

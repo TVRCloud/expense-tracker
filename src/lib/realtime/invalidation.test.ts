@@ -19,6 +19,10 @@ describe("INVALIDATION_MAP", () => {
     expect(INVALIDATION_MAP.spendLimits.map((k) => k[0])).toEqual(["spend-limit", "budgets"]);
     expect(INVALIDATION_MAP.transactions.map((k) => k[0])).toContain("spend-limit");
   });
+  it("sinking funds refresh their list, and spending refreshes the savings rate", () => {
+    expect(INVALIDATION_MAP.sinkingFunds).toEqual([["sinking-funds"], ["notifications"]]);
+    expect(INVALIDATION_MAP.transactions.map((k) => k[0])).toContain("savings-rate");
+  });
   it("captures touch reconcile and notifications", () => {
     expect(INVALIDATION_MAP.captures).toEqual([["reconcile"], ["notifications"]]);
   });

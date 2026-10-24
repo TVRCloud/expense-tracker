@@ -13,6 +13,7 @@ Purpose: API-key surface for n8n and the Android companion app. Contracts: [docs
 - captures, sms: bank message ingest (phone app, n8n). review/*: phone review inbox, confirm, correct, resolve, discard, history.
 - subscriptions (GET detected repeating charges, `[id]` PATCH confirm or dismiss) over subscription-service.
 - refunds (GET suggestions, `[id]/confirm` and `[id]/reject` POST): refund and reversal matching over refund-service.
+- sinking-funds (GET, POST, `[id]` GET PATCH DELETE, `[id]/contribute` POST) and savings-rate (GET): money set aside for a cost on a due date, and the share of income saved, over sinking-fund-service and savings-rate.
 - stats (month totals, daily, history) and notifications (list, `[id]` PATCH, read-all POST).
 - events (SSE), changes (`?since=` polling): realtime for the app.
 - app-update, app-update/download: newest Android release and a signed APK URL.
