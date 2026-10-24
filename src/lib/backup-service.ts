@@ -1,4 +1,4 @@
-import { createHash } from "crypto";
+import { createHmac } from "crypto";
 import { Types, type Model } from "mongoose";
 import { z } from "zod";
 import connectDB from "@/lib/mongodb";
@@ -14,6 +14,7 @@ import SpendLimit from "@/models/SpendLimit";
 import SubscriptionDecision from "@/models/SubscriptionDecision";
 import Transaction from "@/models/Transaction";
 import { BackupError, MAX_PLAIN_BYTES } from "@/lib/backup-crypto";
+import { deriveSubkey } from "@/lib/crypto";
 
 // What goes into a backup, how it is checked on the way back in, and the
 // restore itself. The file is untrusted input: every field is whitelisted and
@@ -513,11 +514,18 @@ async function ownersOf(model: AnyModel, ids: string[]): Promise<Map<string, Hel
   return out;
 }
 
-// The id a row gets when the file's own id is held by someone else. The same
-// (person, kind, original id) always gives the same id, so running a restore
-// again finds the rows it made and skips them instead of copying them.
-const derivedId = (userId: string, kind: string, id: string) =>
-  new Types.ObjectId(createHash("sha256").update(`${userId}:${kind}:${id}`).digest("hex").slice(0, 24)).toHexString();
+// The id a row gets when the file's own id is held by someone else: an HMAC of
+// (person, kind, original id, attempt) under a server-only subkey, so it is the
+// same every time for the same person (a re-run finds the rows it made and skips
+// them) but nobody without the server secret can work it out and plant a row on
+// it. If the id at one attempt is held by another person anyway, the next
+// attempt is tried; the order is fixed, so a re-run lands on the same one.
+const MAX_ATTEMPTS = 8;
+export function derivedId(userId: string, kind: string, id: string, attempt = 0) {
+  const key = deriveSubkey("CAPTURE_ENCRYPTION_KEY", "backup-restore-ids");
+  const hex = createHmac("sha256", key).update(`${userId}:${kind}:${id}:${attempt}`).digest("hex").slice(0, 24);
+  return new Types.ObjectId(hex).toHexString();
+}
 
 type Planned = { final: Map<string, string>; create: Set<string>; existing: Set<string>; trashed: number };
 
@@ -545,19 +553,27 @@ async function plan(model: AnyModel, kind: string, rows: { id: string }[], userI
       create.add(id);
     }
   }
-  const derived = new Map(moved.map((id) => [id, derivedId(userId, kind, id)]));
-  const derivedHeld = await ownersOf(model, [...derived.values()]);
-  for (const [id, d] of derived) {
-    const held = derivedHeld.get(d);
-    final.set(id, d);
-    if (held?.owner === userId) {
-      existing.add(id);
-      if (held.trashed) trashed += 1;
-    } else if (held) {
-      throw new BackupError("invalid", "Could not place a row from the backup");
-    } else {
-      create.add(id);
+  let pending = moved;
+  for (let attempt = 0; pending.length > 0; attempt += 1) {
+    if (attempt >= MAX_ATTEMPTS) throw new BackupError("invalid", "Could not place a row from the backup");
+    const candidates = new Map(pending.map((id) => [id, derivedId(userId, kind, id, attempt)]));
+    const heldBy = await ownersOf(model, [...candidates.values()]);
+    const next: string[] = [];
+    for (const [id, d] of candidates) {
+      const held = heldBy.get(d);
+      if (held && held.owner !== userId) {
+        next.push(id);
+        continue;
+      }
+      final.set(id, d);
+      if (held) {
+        existing.add(id);
+        if (held.trashed) trashed += 1;
+      } else {
+        create.add(id);
+      }
     }
+    pending = next;
   }
   return { final, create, existing, trashed };
 }
@@ -566,23 +582,39 @@ async function plan(model: AnyModel, kind: string, rows: { id: string }[], userI
 // person's rows already carry the file's id, this person's rows get a derived
 // one instead, so they never join a series that is not theirs.
 async function groupIds(userId: string, txs: { recurringId?: string; splitGroupId?: string }[]) {
+  const me = new Types.ObjectId(userId);
+  // Which of these ids do other people's rows already carry?
+  const usedByOthers = async (ids: string[]) => {
+    const found = new Set<string>();
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const slice = ids.slice(i, i + CHUNK).map((id) => new Types.ObjectId(id));
+      for (const field of ["recurringId", "splitGroupId"] as const) {
+        const rows = await Transaction.find({ [field]: { $in: slice }, user: { $ne: me } }, { [field]: 1 }).lean<Record<string, Types.ObjectId>[]>();
+        for (const r of rows) found.add(String(r[field]));
+      }
+    }
+    return found;
+  };
+
   const wanted = new Set<string>();
   for (const t of txs) {
     if (t.recurringId) wanted.add(t.recurringId.toLowerCase());
     if (t.splitGroupId) wanted.add(t.splitGroupId.toLowerCase());
   }
-  const foreign = new Set<string>();
-  const all = [...wanted];
-  for (let i = 0; i < all.length; i += CHUNK) {
-    const slice = all.slice(i, i + CHUNK).map((id) => new Types.ObjectId(id));
-    for (const field of ["recurringId", "splitGroupId"] as const) {
-      const rows = await Transaction.find({ [field]: { $in: slice }, user: { $ne: new Types.ObjectId(userId) } }, { [field]: 1 }).lean<
-        Record<string, Types.ObjectId>[]
-      >();
-      for (const r of rows) foreign.add(String(r[field]));
+  const foreign = await usedByOthers([...wanted]);
+  const replaced = new Map<string, string>();
+  let pending = [...foreign];
+  for (let attempt = 0; pending.length > 0; attempt += 1) {
+    if (attempt >= MAX_ATTEMPTS) throw new BackupError("invalid", "Could not place a row from the backup");
+    const candidates = new Map(pending.map((id) => [id, derivedId(userId, "group", id, attempt)]));
+    const taken = await usedByOthers([...candidates.values()]);
+    pending = [];
+    for (const [id, d] of candidates) {
+      if (taken.has(d)) pending.push(id);
+      else replaced.set(id, d);
     }
   }
-  return (id?: string) => (id ? (foreign.has(id.toLowerCase()) ? derivedId(userId, "group", id.toLowerCase()) : id.toLowerCase()) : undefined);
+  return (id?: string) => (id ? (replaced.get(id.toLowerCase()) ?? id.toLowerCase()) : undefined);
 }
 
 async function insertChunks(model: AnyModel, docs: Record<string, unknown>[]) {

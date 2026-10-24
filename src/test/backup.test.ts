@@ -587,6 +587,84 @@ describe("encrypted backup and restore", () => {
     });
   });
 
+  describe("derived ids cannot be squatted", () => {
+    it("a row planted on the id a restore would use does not break it, and a re-run is still a no-op", async () => {
+      const ids = await seed(a);
+      const { data } = await (await exportBackup()).json();
+      const { default: User } = await import("@/models/User");
+      const { default: Account } = await import("@/models/Account");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const { derivedId } = await import("@/lib/backup-service");
+      const squatter = await User.create({ name: "C", email: `c${Date.now()}${Math.random()}@x.com`, password: "h", isActive: true });
+      // the squatter works out the first id and then the second one, and sits on both
+      for (const attempt of [0, 1]) {
+        await Account.create({ _id: derivedId(b, "account", ids.bank, attempt), user: squatter._id, name: "Squat", type: "bank" });
+      }
+
+      const first = await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B, idem: "sq-1" });
+      expect(first.status).toBe(200);
+      const mine = await Account.find({ user: b }).lean();
+      expect(mine).toHaveLength(3);
+      expect(mine.map((x) => String(x._id))).toContain(derivedId(b, "account", ids.bank, 2));
+      const txs = await Transaction.find({ user: b }).lean();
+      const mineIds = new Set(mine.map((x) => String(x._id)));
+      expect(txs).toHaveLength(5);
+      expect(txs.every((t) => mineIds.has(String(t.account)))).toBe(true);
+      // the squatter's rows are untouched
+      expect(await Account.countDocuments({ user: squatter._id })).toBe(2);
+
+      const again = (await (await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B, idem: "sq-2" })).json()).data;
+      for (const k of Object.keys(again.counts)) expect(again.counts[k].toCreate).toBe(0);
+      expect(await Account.countDocuments({ user: b })).toBe(3);
+      expect(await Transaction.countDocuments({ user: b })).toBe(5);
+    });
+
+    it("the derived id is not the plain hash of public values", async () => {
+      const { createHash } = await import("crypto");
+      const { derivedId } = await import("@/lib/backup-service");
+      const id = new mongoose.Types.ObjectId().toHexString();
+      const plain = createHash("sha256").update(`${b}:account:${id}`).digest("hex").slice(0, 24);
+      expect(derivedId(b, "account", id)).not.toBe(plain);
+      expect(derivedId(b, "account", id)).toBe(derivedId(b, "account", id));
+      expect(derivedId(b, "account", id)).not.toBe(derivedId(a, "account", id));
+      expect(derivedId(b, "account", id)).not.toBe(derivedId(b, "loan", id));
+    });
+
+    it("a series id planted on the derived group id is skipped too", async () => {
+      const { default: User } = await import("@/models/User");
+      const { default: Account } = await import("@/models/Account");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const { derivedId } = await import("@/lib/backup-service");
+      const { encryptBackup } = await import("@/lib/backup-crypto");
+      const other = await User.create({ name: "D", email: `d${Date.now()}${Math.random()}@x.com`, password: "h", isActive: true });
+      const acct = await Account.create({ user: other._id, name: "Theirs", type: "bank" });
+      const R = new mongoose.Types.ObjectId().toHexString();
+      const row = (recurringId: string) => ({
+        user: other._id, account: acct._id, type: "expense", amount: 1, category: "x", date: new Date(), recurringId,
+      });
+      await Transaction.create(row(R)); // another person uses the file's series id
+      await Transaction.create(row(derivedId(b, "group", R, 0))); // and the first replacement is planted
+
+      const accountId = new mongoose.Types.ObjectId().toHexString();
+      const backup = await encryptBackup(
+        {
+          app: "expense-tracker", version: 1, createdAt: new Date().toISOString(),
+          data: {
+            accounts: [{ id: accountId, name: "Mine", type: "bank", balance: 0 }],
+            transactions: [{ id: new mongoose.Types.ObjectId().toHexString(), account: accountId, type: "expense", amount: 1, category: "y", date: new Date().toISOString(), recurringId: R }],
+          },
+        },
+        PASS
+      );
+      expect((await restore({ passphrase: PASS, backup }, { key: KEY_B, idem: "g-1" })).status).toBe(200);
+      const mine = (await Transaction.findOne({ user: b }).lean())!;
+      expect(String(mine.recurringId)).toBe(derivedId(b, "group", R, 1));
+      expect(await Transaction.countDocuments({ user: { $ne: b }, recurringId: mine.recurringId })).toBe(0);
+      const again = (await (await restore({ passphrase: PASS, backup }, { key: KEY_B, idem: "g-2" })).json()).data;
+      expect(again.counts.transactions.toCreate).toBe(0);
+    });
+  });
+
   it("a dry run does not use up the real restore quota", async () => {
     await seed(a);
     const { data } = await (await exportBackup()).json();
