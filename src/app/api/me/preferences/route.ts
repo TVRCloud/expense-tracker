@@ -54,7 +54,7 @@ export async function PATCH(req: NextRequest) {
         await setBaseCurrency(user.id, parsed.data.currency);
       } catch (err) {
         if (err instanceof BaseCurrencyError) {
-          return NextResponse.json({ error: err.message }, { status: 400 });
+          return NextResponse.json({ error: err.message, code: err.code }, { status: 400 });
         }
         throw err;
       }

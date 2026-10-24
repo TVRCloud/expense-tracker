@@ -12,7 +12,7 @@ import logger from "@/lib/logger";
 function statusOf(err: ReconcileError | TransactionServiceError) {
   if (err instanceof TransactionServiceError) {
     if (err.code === "TRANSACTION_LOCKED") return 409;
-    if (err.code === "RATE_UNAVAILABLE" || err.code === "RATE_OUT_OF_BAND" || err.code === "CONVERSION_FAILED" || err.code === "CURRENCY_MISMATCH") return 400;
+    if (err.code === "RATE_UNAVAILABLE" || err.code === "RATE_OUT_OF_BAND" || err.code === "CONVERSION_FAILED" || err.code === "CURRENCY_MISMATCH" || err.code === "UNSUPPORTED_BASE_CURRENCY") return 400;
     return 404;
   }
   switch (err.code) {

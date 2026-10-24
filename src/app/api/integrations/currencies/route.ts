@@ -4,7 +4,7 @@ import { integrationOk, integrationError } from "@/lib/integrations/response";
 import { withIdempotency } from "@/lib/integrations/idempotency";
 import { conflictMessage, idempotencyKeyOf, readJsonBody } from "@/lib/integrations/write-helpers";
 import { BaseCurrencyError, getBaseCurrency, hasMoneyData, setBaseCurrency } from "@/lib/base-currency";
-import { currencyName, minorExponent, SUPPORTED_CURRENCIES } from "@/lib/currency";
+import { currencyName, isSupportedAsBase, minorExponent, SUPPORTED_CURRENCIES } from "@/lib/currency";
 import { listRates } from "@/lib/exchange-rate-service";
 import User from "@/models/User";
 import connectDB from "@/lib/mongodb";
@@ -30,7 +30,12 @@ export const GET = withIntegrationRoute("currencies", async ({ user, requestId }
     {
       base,
       canChangeBase: !locked && !hasMoney,
-      currencies: SUPPORTED_CURRENCIES.map((code) => ({ code, name: currencyName(code), exponent: minorExponent(code) })),
+      currencies: SUPPORTED_CURRENCIES.map((code) => ({
+        code,
+        name: currencyName(code),
+        exponent: minorExponent(code),
+        supportedAsBase: isSupportedAsBase(code),
+      })),
       rates,
       rateDate,
       stale,

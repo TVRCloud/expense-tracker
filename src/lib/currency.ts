@@ -37,6 +37,16 @@ export function minorExponent(code: string): number {
   return EXPONENT_OVERRIDES[code] ?? 2;
 }
 
+// The app and parts of the server read base-currency money as hundredths, so
+// for now only a two-decimal currency can be the base. Any currency can still
+// be the original of a foreign spend.
+export const BASE_EXPONENT = 2;
+export const BASE_CURRENCY_ONLY_TWO_DECIMALS = "Only currencies with two decimals can be the base currency for now.";
+
+export function isSupportedAsBase(code: string): boolean {
+  return isSupportedCurrency(code) && minorExponent(code) === BASE_EXPONENT;
+}
+
 export function currencyName(code: string): string {
   try {
     return new Intl.DisplayNames(["en"], { type: "currency" }).of(code) ?? code;
