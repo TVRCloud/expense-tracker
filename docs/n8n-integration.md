@@ -85,6 +85,8 @@ Authorization: Bearer <YOUR_API_KEY>
 | GET, POST | `/api/integrations/loans` | List loans (`direction`, `isSettled`), create one (needs `Idempotency-Key`) |
 | GET, PATCH, DELETE | `/api/integrations/loans/[id]` | Read, edit, soft delete a loan (writes need `Idempotency-Key`) |
 | GET, POST | `/api/integrations/loans/[id]/repayments` | List and record repayments (POST needs `Idempotency-Key`) |
+| POST | `/api/integrations/transfers` | Move money between two own accounts: `{fromAccountId, toAccountId, amount (paise, int), date?, note?, description?}` (needs `Idempotency-Key`). Not income or spending |
+| GET, PATCH, DELETE | `/api/integrations/transfers/[id]` | Read, edit (amount, accounts, date, notes; both balances are corrected) and delete a transfer, which puts both balances back (writes need `Idempotency-Key`) |
 | GET | `/api/integrations/spend-limit` | Daily and weekly limit settings, today and week progress, safe to spend |
 | PUT | `/api/integrations/spend-limit` | Set, change or clear the limits (needs `Idempotency-Key`) |
 | GET | `/api/integrations/summary` | Snapshot: accounts, monthly stats, budgets |

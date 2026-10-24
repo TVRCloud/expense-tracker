@@ -20,6 +20,8 @@ export type ListTransactionsParams = {
   dateTo?: string | null;
   hideFuture?: boolean;
   includeUnpaidRecurring?: boolean;
+  /** With accountId: also rows whose `transferTo` is that account (money coming in). Off by default so existing callers see the same rows. */
+  includeIncomingTransfers?: boolean;
   /** Count all matches for paging (default true). Dashboards showing the
    *  latest few rows skip it: the count is the expensive part. */
   includeTotal?: boolean;
@@ -42,13 +44,20 @@ export async function listTransactions(params: ListTransactionsParams) {
     dateTo,
     hideFuture,
     includeUnpaidRecurring,
+    includeIncomingTransfers,
     includeTotal = true,
   } = params;
 
   const query: Record<string, unknown> = { user: userId, isDeleted: { $ne: true } };
   if (type) query.type = type;
   if (category) query.category = category;
-  if (accountId) query.account = accountId;
+  const incoming = Boolean(accountId && includeIncomingTransfers);
+  if (accountId && !incoming) query.account = accountId;
+  if (accountId && incoming) {
+    // ObjectIds, not strings: the search path runs as an aggregation, which does not cast.
+    const id = new Types.ObjectId(accountId);
+    query.$and = [{ $or: [{ account: id }, { type: "transfer", transferTo: id }] }];
+  }
   if (search) query.$text = { $search: search };
   if (dateFrom || dateTo) {
     query.date = {};
@@ -95,7 +104,7 @@ export async function listTransactions(params: ListTransactionsParams) {
     const aggregateQuery = {
       ...query,
       user: new Types.ObjectId(userId),
-      ...(accountId ? { account: new Types.ObjectId(accountId) } : {}),
+      ...(accountId && !incoming ? { account: new Types.ObjectId(accountId) } : {}),
     };
 
     // Fast path. Rows are ordered by "activity date": paidAt for paid

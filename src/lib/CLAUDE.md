@@ -4,7 +4,7 @@ Purpose: server business logic shared by browser routes, integration routes, ser
 ## Files
 - Core: mongodb.ts (cached connection), redis.ts (optional), config.ts (env getters), logger.ts (pino), crypto.ts (AES-256-GCM field encryption).
 - Auth: auth-options.ts, auth-guard.ts (`requireAuth`), cron-auth.ts, security-rate-limit.ts, log-security.ts, log-auth-request.ts, device-label.ts, email.ts.
-- Money services: account-service.ts, transaction-service.ts, transaction-query.ts, transaction-activity.ts, stats-service.ts (month, range and daily totals), notification-service.ts, budget-service.ts, budget-alert.ts, spend-limit.ts (daily and weekly limit status, alerts and the end-of-day summary; its zod schema lives in features/budgets/schemas/spend-limit.schema.ts), spend-limit-time.ts (day and week bounds in the user's time zone), goal-service.ts, loan-service.ts, credit-card-service.ts (summary and statements read paths), credit-card.ts, credit-balance.ts, ledger.ts.
+- Money services: account-service.ts, transaction-service.ts, transfer-service.ts (transfers between own accounts: create, edit, delete over transaction-service), transaction-query.ts, transaction-activity.ts, stats-service.ts (month, range and daily totals), notification-service.ts, budget-service.ts, budget-alert.ts, spend-limit.ts (daily and weekly limit status, alerts and the end-of-day summary; its zod schema lives in features/budgets/schemas/spend-limit.schema.ts), spend-limit-time.ts (day and week bounds in the user's time zone), goal-service.ts, loan-service.ts, credit-card-service.ts (summary and statements read paths), credit-card.ts, credit-balance.ts, ledger.ts.
 - Recurring and reminders: recurrence.ts, recurring-topup.ts, recurring-series.ts (series list, get, cancel; shared by browser and integration routes), reminder-scheduler.ts, emi-notifications.ts, credit-notifications.ts, push.ts.
 - capture/ (ingest, parsers, source priority, account matching), reconcile/ (correct, inbox, http): [docs/reconcile.md](../../docs/reconcile.md).
 - integrations/ (API-key auth, handler, idempotency, rate-limit, response, sms-parser), app-update.ts: [docs/n8n-integration.md](../../docs/n8n-integration.md).
@@ -17,6 +17,7 @@ Purpose: server business logic shared by browser routes, integration routes, ser
 
 ## Rules and gotchas
 - budget-service and goal-service own create, update and soft delete; the browser `[id]` routes and the integration `[id]` routes both call them.
+- transfer-service owns transfer edit (amount, accounts, date: balances fixed in one pass); create and delete call transaction-service. A transfer row is never income or spending.
 - loan-service owns loan create, update, delete and repayments; the browser and integration loan routes both call it.
 - Put logic here, not in routes. transaction-service, loan-service, goal-service, budget-service and stats-service exist so web and integration routes cannot drift.
 - No mongoose sessions anywhere; multi-step writes are sequential.

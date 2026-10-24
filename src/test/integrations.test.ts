@@ -2829,3 +2829,203 @@ describe("GET /api/integrations/accounts details", () => {
     ]);
   });
 });
+
+// ── /api/integrations/transfers ────────────────────────────────────────────
+
+describe("integration transfers between accounts", () => {
+  const KEY = "test-transfers-api-key";
+  let userId: string;
+  let fromId: string;
+  let toId: string;
+  let otherAccountId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { default: Account } = await import("@/models/Account");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Transfer User", email: `tf${Date.now()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `tfo${Date.now()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    const from = await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 100000, currency: "INR" });
+    const to = await Account.create({ user: user._id, name: "Wallet", type: "cash", balance: 5000, currency: "INR" });
+    const theirs = await Account.create({ user: other._id, name: "Theirs", type: "bank", balance: 777, currency: "INR" });
+    userId = user._id.toString();
+    fromId = from._id.toString();
+    toId = to._id.toString();
+    otherAccountId = theirs._id.toString();
+  });
+
+  function req(path: string, method: "GET" | "POST" | "PATCH" | "DELETE", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${KEY}`,
+        "content-type": "application/json",
+        "idempotency-key": `transfer-key-${n}`,
+        ...headers,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+  const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+  const balance = async (id: string) => {
+    const { default: Account } = await import("@/models/Account");
+    return (await Account.findById(id).lean<{ balance: number }>())!.balance;
+  };
+  const create = async (over: Record<string, unknown> = {}, headers: Record<string, string> = {}) => {
+    const { POST } = await import("@/app/api/integrations/transfers/route");
+    return POST(req("transfers", "POST", { fromAccountId: fromId, toAccountId: toId, amount: 20000, ...over }, headers), {});
+  };
+
+  it("POST moves the money, answers with both accounts, and replays on the same key", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const first = await create({ note: "Cash for the week" }, { "idempotency-key": "same" });
+    const json = await first.json();
+    expect(first.status).toBe(201);
+    expect(json.data).toMatchObject({ type: "transfer", amount: 20000, fromAccountId: fromId, toAccountId: toId, note: "Cash for the week" });
+    expect(await balance(fromId)).toBe(80000);
+    expect(await balance(toId)).toBe(25000);
+
+    const replay = await create({ note: "Cash for the week" }, { "idempotency-key": "same" });
+    expect((await replay.json()).data.id).toBe(json.data.id);
+    expect(await Transaction.countDocuments({ type: "transfer" })).toBe(1);
+    expect(await balance(fromId)).toBe(80000);
+
+    const reused = await create({ amount: 1 }, { "idempotency-key": "same" });
+    expect(reused.status).toBe(409);
+  });
+
+  it("POST rejects bad data, a missing key, the same account twice, another user's account and a bad API key", async () => {
+    const { POST } = await import("@/app/api/integrations/transfers/route");
+    expect((await create({ amount: 0 })).status).toBe(400);
+    expect((await create({ amount: 10.5 })).status).toBe(400);
+    expect((await create({ toAccountId: fromId })).status).toBe(400);
+    expect((await create({ toAccountId: "nope" })).status).toBe(400);
+    const noKey = new NextRequest("http://localhost/api/integrations/transfers", {
+      method: "POST",
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
+      body: JSON.stringify({ fromAccountId: fromId, toAccountId: toId, amount: 100 }),
+    });
+    expect((await POST(noKey, {})).status).toBe(400);
+    expect((await create({ toAccountId: otherAccountId })).status).toBe(404);
+    expect((await create({ fromAccountId: otherAccountId })).status).toBe(404);
+    expect((await create({}, { authorization: "Bearer wrong" })).status).toBe(401);
+    expect(await balance(fromId)).toBe(100000);
+    expect(await balance(otherAccountId)).toBe(777);
+  });
+
+  it("a transfer is neither income nor spending in stats, budgets or limits", async () => {
+    const { getRangeStats } = await import("@/lib/stats-service");
+    await create({ amount: 30000 });
+    const now = new Date();
+    const [month] = await getRangeStats(userId, [{ year: now.getFullYear(), month: now.getMonth() + 1 }]);
+    expect(month.stats.income).toBe(0);
+    expect(month.stats.expense).toBe(0);
+    expect(month.stats.byCategory).toEqual([]);
+  });
+
+  it("GET returns one transfer, and 404 for an unknown id or another user's", async () => {
+    const { GET } = await import("@/app/api/integrations/transfers/[id]/route");
+    const created = await (await create()).json();
+    const ok = await GET(req("transfers/x", "GET"), ctx(created.data.id));
+    expect((await ok.json()).data.amount).toBe(20000);
+    expect((await GET(req("transfers/x", "GET"), ctx("64f000000000000000000000"))).status).toBe(404);
+    expect((await GET(req("transfers/x", "GET"), ctx("nope"))).status).toBe(400);
+  });
+
+  it("PATCH changes the amount and fixes both balances", async () => {
+    const { PATCH } = await import("@/app/api/integrations/transfers/[id]/route");
+    const created = await (await create({ amount: 20000 })).json();
+    const res = await PATCH(req("transfers/x", "PATCH", { amount: 30000, note: "More" }), ctx(created.data.id));
+    expect(res.status).toBe(200);
+    expect((await res.json()).data).toMatchObject({ amount: 30000, note: "More" });
+    expect(await balance(fromId)).toBe(70000);
+    expect(await balance(toId)).toBe(35000);
+  });
+
+  it("PATCH moves the destination to another account and puts the old one back", async () => {
+    const { PATCH } = await import("@/app/api/integrations/transfers/[id]/route");
+    const { default: Account } = await import("@/models/Account");
+    const third = await Account.create({ user: userId, name: "Savings", type: "savings", balance: 0, currency: "INR" });
+    const created = await (await create({ amount: 20000 })).json();
+    const res = await PATCH(req("transfers/x", "PATCH", { toAccountId: third._id.toString() }), ctx(created.data.id));
+    expect(res.status).toBe(200);
+    expect(await balance(fromId)).toBe(80000);
+    expect(await balance(toId)).toBe(5000);
+    expect(await balance(third._id.toString())).toBe(20000);
+  });
+
+  it("PATCH refuses the same account, another user's account, an empty body and a missing transfer", async () => {
+    const { PATCH } = await import("@/app/api/integrations/transfers/[id]/route");
+    const created = await (await create()).json();
+    const id = created.data.id;
+    expect((await PATCH(req("transfers/x", "PATCH", { toAccountId: fromId }), ctx(id))).status).toBe(400);
+    expect((await PATCH(req("transfers/x", "PATCH", { fromAccountId: toId }), ctx(id))).status).toBe(400);
+    expect((await PATCH(req("transfers/x", "PATCH", { toAccountId: otherAccountId }), ctx(id))).status).toBe(404);
+    expect((await PATCH(req("transfers/x", "PATCH", {}), ctx(id))).status).toBe(400);
+    expect((await PATCH(req("transfers/x", "PATCH", { amount: 1 }), ctx("64f000000000000000000000"))).status).toBe(404);
+    expect(await balance(fromId)).toBe(80000);
+    expect(await balance(otherAccountId)).toBe(777);
+  });
+
+  it("PATCH and DELETE only act on transfers, not on an expense id", async () => {
+    const { PATCH, DELETE } = await import("@/app/api/integrations/transfers/[id]/route");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const expense = await Transaction.create({
+      user: userId, account: fromId, type: "expense", amount: 500, category: "Food", date: new Date(),
+    });
+    expect((await PATCH(req("transfers/x", "PATCH", { amount: 1 }), ctx(String(expense._id)))).status).toBe(404);
+    expect((await DELETE(req("transfers/x", "DELETE"), ctx(String(expense._id)))).status).toBe(404);
+  });
+
+  it("DELETE puts both balances back, replays, and a second delete is 404", async () => {
+    const { DELETE } = await import("@/app/api/integrations/transfers/[id]/route");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const created = await (await create({ amount: 20000 })).json();
+    const id = created.data.id;
+    const first = await DELETE(req("transfers/x", "DELETE", undefined, { "idempotency-key": "del" }), ctx(id));
+    expect(first.status).toBe(200);
+    expect((await first.json()).data).toEqual({ id, deleted: true });
+    expect(await balance(fromId)).toBe(100000);
+    expect(await balance(toId)).toBe(5000);
+    expect((await Transaction.findById(id).lean<{ isDeleted?: boolean }>())?.isDeleted).toBe(true);
+
+    const replay = await DELETE(req("transfers/x", "DELETE", undefined, { "idempotency-key": "del" }), ctx(id));
+    expect(replay.status).toBe(200);
+    expect((await DELETE(req("transfers/x", "DELETE"), ctx(id))).status).toBe(404);
+    expect(await balance(fromId)).toBe(100000);
+  });
+
+  it("the transactions list shows incoming transfers only when asked", async () => {
+    const { GET } = await import("@/app/api/integrations/transactions/route");
+    await create({ amount: 20000 });
+    const list = async (q: string) =>
+      (await (await GET(req(`transactions?${q}`, "GET"), {})).json()).data.data as Array<{ type: string }>;
+    expect(await list(`accountId=${toId}`)).toHaveLength(0);
+    expect(await list(`accountId=${toId}&includeIncomingTransfers=true`)).toHaveLength(1);
+    expect(await list(`accountId=${fromId}`)).toHaveLength(1);
+    expect(await list(`accountId=${fromId}&includeIncomingTransfers=true`)).toHaveLength(1);
+    expect(await list(`accountId=${toId}&includeIncomingTransfers=true&hideFuture=true`)).toHaveLength(1);
+    expect(await list(`accountId=${toId}&includeIncomingTransfers=true&hideFuture=true&search=zzz`)).toHaveLength(0);
+  });
+
+  it("POST /transactions with type transfer now answers with transferToId", async () => {
+    const { POST } = await import("@/app/api/integrations/transactions/route");
+    const res = await POST(
+      req("transactions", "POST", {
+        accountId: fromId, transferToId: toId, type: "transfer", amount: 1000, category: "Transfer", date: new Date().toISOString(),
+      }),
+      {}
+    );
+    expect((await res.json()).data.transferToId).toBe(toId);
+    const expense = await POST(
+      req("transactions", "POST", { accountId: fromId, type: "expense", amount: 100, category: "Food", date: new Date().toISOString() }),
+      {}
+    );
+    expect((await expense.json()).data.transferToId).toBeNull();
+  });
+});
