@@ -91,7 +91,7 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `deletedAt` | Date | |
 | `deletedBy` | ObjectId | ref: User |
 
-Indexes: `{user, isDeleted, date}` plus `{user, isDeleted, <account\|transferTo\|type\|category\|splitGroupId\|reviewStatus\|refundStatus>, date}`, sparse `{user, refundOf}`, recurring-series indexes, `{user, tags}`, full-text on `{description, note}`
+Indexes: `{user, isDeleted, date}` plus `{user, isDeleted, <account\|transferTo\|type\|category\|splitGroupId\|reviewStatus\|refundStatus>, date}`, sparse `{user, refundOf}`, sparse `{recurringId}` and `{splitGroupId}` (restore checks whether other people's rows use an id), recurring-series indexes, `{user, tags}`, full-text on `{description, note}`
 
 ## budgets
 
@@ -384,3 +384,7 @@ Index: `{user, revoked}`
 | `keys.p256dh` | String | |
 | `keys.auth` | String | |
 | `isActive` | Boolean | set false on 410 |
+
+## Backup files
+
+No collection. A backup is built from the user's rows (accounts, transactions, budgets, goals, loans, repayments, rules, sinking funds, manual assets, subscription decisions, spend limit) and returned to the caller as an encrypted file; a restore inserts rows with the caller as `user`. Format and rules: [backup.md](backup.md).
