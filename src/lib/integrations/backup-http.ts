@@ -140,6 +140,12 @@ export function backupFailure(err: unknown, requestId: string, route: string): R
     if (err.reason === "too_large_for_response") {
       return integrationError("TOO_LARGE_FOR_RESPONSE", err.message, requestId, { reason: "too_large_for_response" });
     }
+    if (err.reason === "base_currency_mismatch") {
+      return integrationError("BASE_CURRENCY_MISMATCH", err.message, requestId, { reason: "base_currency_mismatch" });
+    }
+    if (err.reason === "base_currency_unknown") {
+      return integrationError("BASE_CURRENCY_UNKNOWN", err.message, requestId, { reason: "base_currency_unknown" });
+    }
     if (err.reason === "timeout") return integrationError("INTERNAL_ERROR", err.message, requestId, { reason: "timeout" });
     if (err.reason === "busy") return integrationError("RATE_LIMITED", err.message, requestId, { retryAfterSeconds: 5, reason: "busy" });
     return integrationError("VALIDATION_ERROR", err.message, requestId, { reason: err.reason });

@@ -7,6 +7,12 @@ import { type BackupBucket, backupBusy, backupFailure, refundBackupBuckets, back
 import { BackupError, backupEnvelopeSchema, decryptBackup, envelopeDigest, passphraseSchema, withKeyGate } from "@/lib/backup-crypto";
 import { parsePayload, restoreBackup } from "@/lib/backup-service";
 
+// The restore may run up to 60 s (the gate's own limit is 50 s). The pending
+// idempotency record is kept twice that, like the import commit route: a retry
+// never overlaps a live run, and a killed run frees its key within minutes.
+export const maxDuration = 60;
+const RESTORE_PENDING_TTL_SECONDS = 120;
+
 const bodySchema = z.object({
   passphrase: passphraseSchema,
   backup: backupEnvelopeSchema,
@@ -66,6 +72,7 @@ export const POST = withIntegrationRoute("backup-restore", async ({ req, user, r
         userId: user.id,
         endpoint: "integrations:backup-restore:POST",
         key: key!,
+        pendingTtlSeconds: RESTORE_PENDING_TTL_SECONDS,
         body: { backup: envelopeDigest(backup), mode: "merge" },
         execute: async () => {
           const report = await restoreBackup(user.id, payload, { dryRun: false });

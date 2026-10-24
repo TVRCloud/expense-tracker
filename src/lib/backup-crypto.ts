@@ -35,7 +35,7 @@ export const MAX_BACKUP_BYTES = 3_000_000;
 // file that does open).
 export const MAX_PLAIN_BYTES = 48 * 1024 * 1024;
 
-export type BackupFailure = "unreadable" | "invalid" | "too_large" | "too_large_for_response" | "busy" | "timeout";
+export type BackupFailure = "unreadable" | "invalid" | "too_large" | "too_large_for_response" | "busy" | "timeout" | "base_currency_mismatch" | "base_currency_unknown";
 
 export class BackupError extends Error {
   constructor(

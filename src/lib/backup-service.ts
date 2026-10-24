@@ -15,6 +15,11 @@ import SubscriptionDecision from "@/models/SubscriptionDecision";
 import Transaction from "@/models/Transaction";
 import { BackupError, MAX_PLAIN_BYTES } from "@/lib/backup-crypto";
 import { deriveSubkey } from "@/lib/crypto";
+import { BaseCurrencyError, getBaseState, hasMoneyData, lockBaseCurrency, setBaseCurrency } from "@/lib/base-currency";
+import { isSupportedCurrency, MAX_RATE, MAX_MINOR_AMOUNT, MIN_RATE, minorExponent } from "@/lib/currency";
+import { MAX_CATEGORY_LENGTH, MAX_DEDUCTIBLE_CATEGORIES, getTaxSettings, normaliseCategories } from "@/lib/tax-settings";
+import { userTagsOnly } from "@/lib/tags";
+import User from "@/models/User";
 
 // What goes into a backup, how it is checked on the way back in, and the
 // restore itself. The file is untrusted input: every field is whitelisted and
@@ -26,7 +31,10 @@ import { deriveSubkey } from "@/lib/crypto";
 // and net worth history (derived or secret). The user's preferences stay on
 // the account they belong to.
 
-export const BACKUP_PAYLOAD_VERSION = 1;
+// Payload version 2 adds the base currency, foreign-currency originals, the
+// per-row tax flag and the deductible categories. Version 1 files still read:
+// every new field is optional, and a file with no `baseCurrency` is INR.
+export const BACKUP_PAYLOAD_VERSION = 2;
 
 type AnyModel = Model<Record<string, unknown>>;
 
@@ -57,7 +65,8 @@ const when = z
   .refine((s) => !Number.isNaN(Date.parse(s)))
   .transform((s) => new Date(s));
 const stamps = { createdAt: nul(when), updatedAt: nul(when) };
-const currency = nul(text(8));
+const supportedCurrency = z.string().max(8).refine(isSupportedCurrency, "Unsupported currency");
+const currency = nul(supportedCurrency);
 const tags = nul(z.array(text(50)).max(50));
 
 const accountSchema = z.object({
@@ -108,7 +117,15 @@ const transactionSchema = z.object({
   note: nul(text(5000)),
   date: when,
   tags,
-  attachments: nul(z.array(z.string().max(2048).regex(/^https?:\/\//i)).max(20)),
+  // `attachments` holds receipt ids. Receipts (the photos) are not in a backup, so
+  // the field is not read: it is neither exported nor restored.
+  originalAmount: nul(z.number().int().min(0).max(MAX_MINOR_AMOUNT)),
+  originalCurrency: nul(supportedCurrency),
+  originalExponent: nul(z.number().int().min(0).max(4)),
+  rate: nul(z.number().min(MIN_RATE).max(MAX_RATE)),
+  rateDate: nul(when),
+  rateSource: nul(z.enum(["provider", "client"])),
+  deductible: nul(z.boolean()),
   transferTo: nul(oid),
   isRecurring: nul(z.boolean()),
   recurringId: nul(oid),
@@ -130,6 +147,23 @@ const transactionSchema = z.object({
   refundStatus: nul(z.enum(["suggested", "confirmed", "rejected"])),
   refundPriorCategory: nul(text(100)),
   ...stamps,
+}).superRefine((t, ctx) => {
+  // A foreign spend is stored as one group (the amount in the other currency, which
+  // currency, its digits and the rate). The rate date is left out for a client rate.
+  const group = [t.originalAmount, t.originalCurrency, t.originalExponent, t.rate];
+  const set = group.filter((v) => v !== undefined).length;
+  if (set > 0 && set < group.length) {
+    ctx.addIssue({ code: "custom", message: "A foreign amount needs originalAmount, originalCurrency, originalExponent and rate together" });
+    return;
+  }
+  if (set === 0) {
+    if (t.rateDate !== undefined || t.rateSource !== undefined) ctx.addIssue({ code: "custom", message: "A rate date or source without a foreign amount" });
+    return;
+  }
+  if (t.originalAmount! < 1) ctx.addIssue({ code: "custom", message: "originalAmount must be at least 1" });
+  if (t.originalExponent !== minorExponent(t.originalCurrency!)) {
+    ctx.addIssue({ code: "custom", message: "originalExponent does not match originalCurrency" });
+  }
 });
 
 const budgetSchema = z.object({
@@ -273,11 +307,26 @@ const dataSchema = z.object({
   spendLimit: nul(spendLimitSchema),
 });
 
-export const payloadSchema = z.object({
+const payloadObject = z.object({
   app: z.literal("expense-tracker"),
-  version: z.literal(BACKUP_PAYLOAD_VERSION),
+  version: z.union([z.literal(1), z.literal(2)]),
   createdAt: z.string().max(40),
+  // The currency every amount in the file is in. Absent only in version 1 files, which never recorded it.
+  baseCurrency: nul(z.string().refine(isSupportedCurrency)),
+  // Settings that belong to the person, not to a row.
+  tax: nul(
+    z.object({
+      deductibleCategories: nul(z.array(text(MAX_CATEGORY_LENGTH).min(1)).max(MAX_DEDUCTIBLE_CATEGORIES)),
+    })
+  ),
   data: dataSchema,
+});
+
+// Version 2 files always record their base currency; only a version 1 file may lack it.
+export const payloadSchema = payloadObject.superRefine((p, ctx) => {
+  if (p.version >= 2 && p.baseCurrency === undefined) {
+    ctx.addIssue({ code: "custom", path: ["baseCurrency"], message: "A version 2 backup records its base currency" });
+  }
 });
 
 export type BackupData = z.infer<typeof dataSchema>;
@@ -318,12 +367,14 @@ async function readAll<S extends z.ZodType>(
   cap: number,
   label: string,
   omitted: Record<string, number>,
-  budget: Budget
+  budget: Budget,
+  onRaw?: (doc: Record<string, unknown>) => void
 ): Promise<z.infer<S>[]> {
   const tooBig = () => new BackupError("too_large", `Too much data for one backup (${label})`);
   if ((await model.countDocuments(filter)) > cap) throw new BackupError("too_large", `Too many ${label} for one backup (limit ${cap})`);
   const out: z.infer<S>[] = [];
   for await (const doc of model.find(filter).sort({ _id: 1 }).lean<Record<string, unknown>[]>().cursor({ batchSize: 500 })) {
+    onRaw?.(doc as Record<string, unknown>);
     const parsed = schema.safeParse(wire(doc as Record<string, unknown>));
     if (!parsed.success) {
       omitted[label] = (omitted[label] ?? 0) + 1;
@@ -340,6 +391,7 @@ export type BackupBuild = {
   payload: BackupPayload;
   counts: Record<CollectionName | "spendLimit", number>;
   omitted: Record<string, number>;
+  warnings: string[];
 };
 
 export async function buildBackup(userId: string): Promise<BackupBuild> {
@@ -366,7 +418,10 @@ export async function buildBackup(userId: string): Promise<BackupBuild> {
     omitted,
     budget
   );
-  const transactions = await readAll(m(Transaction), live, transactionSchema, CAPS.transactions, "transactions", omitted, budget);
+  const receiptsOn = new Map<string, number>();
+  const transactions = await readAll(m(Transaction), live, transactionSchema, CAPS.transactions, "transactions", omitted, budget, (doc) => {
+    if (Array.isArray(doc.attachments) && doc.attachments.length > 0) receiptsOn.set(String(doc._id), doc.attachments.length);
+  });
   const repayments = await readAll(m(Repayment), live, repaymentSchema, CAPS.repayments, "repayments", omitted, budget);
   const limitDoc = await SpendLimit.findOne({ user }).lean<Record<string, unknown> | null>();
   const parsedLimit = limitDoc ? spendLimitSchema.safeParse(wire(limitDoc)) : null;
@@ -385,6 +440,9 @@ export async function buildBackup(userId: string): Promise<BackupBuild> {
     if (!ok) drop("transactions");
     return ok;
   });
+  // A stored transaction's currency is the base currency; some writers left the model default, so say it plainly.
+  const baseCurrency = (await getBaseState(userId)).base;
+  for (const t of keptTx) t.currency = baseCurrency;
   const txIds = new Set(keptTx.map((t) => t.id));
   for (const t of keptTx) {
     if (t.refundOf && !txIds.has(t.refundOf)) {
@@ -405,6 +463,12 @@ export async function buildBackup(userId: string): Promise<BackupBuild> {
     return true;
   });
 
+  const warnings: string[] = [];
+  // only the receipts on transactions that are in the file
+  const receipts = keptTx.reduce((n, t) => n + (receiptsOn.get(t.id) ?? 0), 0);
+  if (receipts > 0) {
+    warnings.push(`${receipts} receipt${receipts === 1 ? "" : "s"} ${receipts === 1 ? "is" : "are"} not included in the backup: the photos stay on the server and are not restored.`);
+  }
   const data: BackupData = {
     accounts,
     loans,
@@ -431,10 +495,19 @@ export async function buildBackup(userId: string): Promise<BackupBuild> {
     repayments: keptRepayments.length,
     spendLimit: spendLimit ? 1 : 0,
   };
+  const tax = await getTaxSettings(userId);
   return {
-    payload: { app: "expense-tracker", version: BACKUP_PAYLOAD_VERSION, createdAt: new Date().toISOString(), data },
+    payload: {
+      app: "expense-tracker",
+      version: BACKUP_PAYLOAD_VERSION,
+      createdAt: new Date().toISOString(),
+      baseCurrency,
+      tax: tax.deductibleCategories.length > 0 ? { deductibleCategories: tax.deductibleCategories } : undefined,
+      data,
+    },
     counts,
     omitted,
+    warnings,
   };
 }
 
@@ -446,15 +519,70 @@ export type RestoreReport = {
   restored: boolean;
   backupCreatedAt: string;
   counts: Record<CollectionName | "spendLimit", RestoreCounts>;
+  // The currency of the amounts in the file, the one in force here, and whether a
+  // real restore sets the base from the file (only possible while there is no money data).
+  baseCurrency: { inBackup: string | null; current: string; willSet: boolean };
   warnings: string[];
 };
+
+const mismatch = (message: string) => new BackupError("base_currency_mismatch", message);
+
+// Reads only. A file in another currency than the person's base is refused once
+// they have money data (or the base is locked), because every stored amount is in
+// the base. With no money data the base can follow the file. A version 1 file did
+// not record its base: it is only taken for a base of INR (what such files held
+// before other bases existed), and never sets the base.
+async function checkBaseCurrency(userId: string, fileBase: string | undefined) {
+  const state = await getBaseState(userId);
+  if (fileBase === undefined) {
+    if (state.base !== "INR") {
+      throw new BackupError(
+        "base_currency_unknown",
+        `This is an older backup that did not record its currency, and your base currency is ${state.base}. It can only be restored into an account whose base currency is INR.`
+      );
+    }
+    return { current: state.base, willSet: false, unknown: true };
+  }
+  if (state.base === fileBase) return { current: state.base, willSet: false, unknown: false };
+  if (state.locked || (await hasMoneyData(userId))) {
+    throw mismatch(
+      `This backup is in ${fileBase} but your base currency is ${state.base}, which cannot change once you have amounts stored. Restore it into an account with the same base currency.`
+    );
+  }
+  return { current: state.base, willSet: true, unknown: false };
+}
+
+// Merge only: the file's deductible categories are used when the person has none.
+// The same list already there says nothing (a re-run); a different one is kept.
+async function restoreTaxCategories(userId: string, fileCategories: string[] | undefined, dryRun: boolean, warnings: string[]) {
+  const wanted = normaliseCategories(fileCategories ?? []);
+  if (wanted.length === 0) return;
+  const have = (await getTaxSettings(userId)).deductibleCategories;
+  if (have.length > 0) {
+    if (have.join("\n") !== wanted.join("\n")) warnings.push("Your deductible tax categories were not changed, because you already have some set.");
+    return;
+  }
+  if (!dryRun) {
+    // null matches a missing field and an explicit null; $size 0 an empty list
+    const res = await User.updateOne(
+      { _id: userId, $or: [{ "preferences.tax.deductibleCategories": null }, { "preferences.tax.deductibleCategories": { $size: 0 } }] },
+      { $set: { "preferences.tax.deductibleCategories": wanted } }
+    );
+    if (res.matchedCount === 0) {
+      warnings.push("Your deductible tax categories were not changed, because you already have some set.");
+      return;
+    }
+  }
+  warnings.push(`Your deductible tax categories ${dryRun ? "will be" : "were"} restored from the backup (${wanted.length}).`);
+}
 
 export function parsePayload(raw: unknown): BackupPayload {
   const parsed = payloadSchema.safeParse(raw);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     const where = issue ? issue.path.join(".") : "";
-    const newer = typeof raw === "object" && raw !== null && (raw as { version?: unknown }).version !== BACKUP_PAYLOAD_VERSION;
+    const version = typeof raw === "object" && raw !== null ? (raw as { version?: unknown }).version : undefined;
+    const newer = typeof version === "number" && version > BACKUP_PAYLOAD_VERSION;
     throw new BackupError(
       "invalid",
       newer ? "This backup was made by a newer version and cannot be restored here" : `The backup contents are not valid${where ? ` (${where})` : ""}`
@@ -465,6 +593,16 @@ export function parsePayload(raw: unknown): BackupPayload {
 
 function invalid(message: string): never {
   throw new BackupError("invalid", message);
+}
+
+// A stored transaction's currency is always the base currency (the original foreign
+// amount is kept apart), so a row labelled otherwise is a corrupt or foreign file.
+// Budgets, goals, loans and funds carry a label that is only a default; they are
+// relabelled with the base on restore, as accounts without one are.
+function checkRowCurrencies(d: BackupData, base: string) {
+  for (const t of d.transactions) {
+    if (t.currency !== undefined && t.currency !== base) invalid(`The backup has a transaction in ${t.currency}, but its amounts are in ${base}`);
+  }
 }
 
 function checkConsistency(d: BackupData) {
@@ -630,6 +768,11 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
   await connectDB();
   const d = payload.data;
   checkConsistency(d);
+  const fileBase = payload.baseCurrency ?? undefined;
+  const baseCheck = await checkBaseCurrency(userId, fileBase);
+  // The currency every restored row is labelled with: the file's, or for an older file the account's own.
+  const rowBase = fileBase ?? baseCheck.current;
+  checkRowCurrencies(d, rowBase);
   const user = new Types.ObjectId(userId);
   const m = <T,>(model: T) => model as unknown as AnyModel;
 
@@ -662,9 +805,18 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
       taken.add(k);
       return true;
     });
-  const budgets = pick(d.budgets, haveBudgets, budgetKey);
-  const rules = pick(d.rules, haveRules, ruleKey);
-  const decisions = pick(d.subscriptionDecisions, haveDecisions, (r) => r.key);
+  // These three go through the same placement as every other kind (owner check, derived
+  // ids, trash), and then the person's unique key as well.
+  const budgetsPlan = await plan(m(Budget), "budget", d.budgets, userId);
+  const rulesPlan = await plan(m(Rule), "rule", d.rules, userId);
+  const decisionsPlan = await plan(m(SubscriptionDecision), "decision", d.subscriptionDecisions, userId);
+  const budgets = pick(d.budgets.filter((r) => budgetsPlan.create.has(r.id.toLowerCase())), haveBudgets, budgetKey);
+  const rules = pick(d.rules.filter((r) => rulesPlan.create.has(r.id.toLowerCase())), haveRules, ruleKey);
+  const decisions = pick(
+    d.subscriptionDecisions.filter((r) => decisionsPlan.create.has(r.id.toLowerCase())),
+    haveDecisions,
+    (r) => r.key
+  );
 
   const fin = (p: Planned, id?: string) => (id ? p.final.get(id.toLowerCase()) : undefined);
   const mine = (p: Planned) => (r: { id: string }) => p.create.has(r.id.toLowerCase());
@@ -691,7 +843,7 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
     );
   }
 
-  const trashed = [accounts, loans, goals, sinking, assets, txs, repayments].reduce((n, p) => n + p.trashed, 0);
+  const trashed = [accounts, loans, goals, sinking, assets, txs, repayments, budgetsPlan, rulesPlan, decisionsPlan].reduce((n, p) => n + p.trashed, 0);
   if (trashed > 0) {
     warnings.push(`${trashed} row${trashed === 1 ? "" : "s"} in the backup already exist in your trash and ${trashed === 1 ? "was" : "were"} not restored.`);
   }
@@ -711,30 +863,63 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
     repayments: count(d.repayments.length, newRepayments.length),
     spendLimit: count(d.spendLimit ? 1 : 0, limitCreate),
   };
-  const base = { backupCreatedAt: payload.createdAt, counts, warnings };
-  if (opts.dryRun) return { dryRun: true, restored: false, ...base };
+  // Setting and locking the base only matters when something is written.
+  const insertsAnything = Object.values(counts).some((c) => c.toCreate > 0);
+  const willSet = baseCheck.willSet && insertsAnything;
+  if (baseCheck.unknown) {
+    warnings.push("This older backup did not record its currency; its amounts are taken as your base currency (INR).");
+  }
+  const base = {
+    backupCreatedAt: payload.createdAt,
+    counts,
+    baseCurrency: { inBackup: fileBase ?? null, current: baseCheck.current, willSet },
+    warnings,
+  };
+  if (opts.dryRun) {
+    if (willSet) warnings.push(`Your base currency will be set to ${fileBase} from the backup.`);
+    await restoreTaxCategories(userId, payload.tax?.deductibleCategories, true, warnings);
+    return { dryRun: true, restored: false, ...base };
+  }
+
+  // The base is set (when allowed) and locked before any amount is written, so a
+  // change of base cannot land between the check above and the inserts.
+  if (insertsAnything) {
+    if (willSet) {
+      try {
+        await setBaseCurrency(userId, fileBase!);
+      } catch (err) {
+        if (err instanceof BaseCurrencyError) throw mismatch("Your base currency could not be set from the backup because you now have amounts stored.");
+        throw err;
+      }
+      warnings.push(`Your base currency was set to ${fileBase} from the backup.`);
+    }
+    if ((await lockBaseCurrency(userId)) !== rowBase) {
+      throw mismatch("Your base currency changed while the backup was being restored. Nothing was written; try again.");
+    }
+  }
+  await restoreTaxCategories(userId, payload.tax?.deductibleCategories, false, warnings);
 
   // Parents first so every reference points at a row that exists.
   const owned = { user };
   await insertChunks(
     m(Account),
-    newAccounts.map((a) => strip({ ...a, ...owned, _id: fin(accounts, a.id), id: undefined }))
+    newAccounts.map((a) => strip({ ...a, ...owned, _id: fin(accounts, a.id), id: undefined, currency: a.currency ?? rowBase }))
   );
   await insertChunks(
     m(Loan),
-    newLoans.map((l) => strip({ ...l, ...owned, _id: fin(loans, l.id), id: undefined, account: fin(accounts, l.account) }))
+    newLoans.map((l) => strip({ ...l, ...owned, _id: fin(loans, l.id), id: undefined, currency: rowBase, account: fin(accounts, l.account) }))
   );
-  await insertChunks(m(Goal), newGoals.map((g) => strip({ ...g, ...owned, _id: fin(goals, g.id), id: undefined })));
-  await insertChunks(m(Budget), budgets.map((b) => strip({ ...b, ...owned, _id: new Types.ObjectId(), id: undefined })));
+  await insertChunks(m(Goal), newGoals.map((g) => strip({ ...g, ...owned, _id: fin(goals, g.id), id: undefined, currency: rowBase })));
+  await insertChunks(m(Budget), budgets.map((b) => strip({ ...b, ...owned, _id: fin(budgetsPlan, b.id), id: undefined, currency: rowBase })));
   await insertChunks(
     m(Rule),
-    rules.map((r) => strip({ ...r, ...owned, _id: new Types.ObjectId(), id: undefined, account: fin(accounts, r.account) }))
+    rules.map((r) => strip({ ...r, ...owned, _id: fin(rulesPlan, r.id), id: undefined, account: fin(accounts, r.account) }))
   );
-  await insertChunks(m(SinkingFund), newFunds.map((f) => strip({ ...f, ...owned, _id: fin(sinking, f.id), id: undefined })));
+  await insertChunks(m(SinkingFund), newFunds.map((f) => strip({ ...f, ...owned, _id: fin(sinking, f.id), id: undefined, currency: rowBase })));
   await insertChunks(m(ManualAsset), newAssets.map((a) => strip({ ...a, ...owned, _id: fin(assets, a.id), id: undefined })));
   await insertChunks(
     m(SubscriptionDecision),
-    decisions.map((s) => strip({ ...s, ...owned, _id: new Types.ObjectId(), id: undefined }))
+    decisions.map((s) => strip({ ...s, ...owned, _id: fin(decisionsPlan, s.id), id: undefined }))
   );
   await insertChunks(
     m(Transaction),
@@ -744,9 +929,12 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
         ...owned,
         _id: fin(txs, t.id),
         id: undefined,
+        currency: rowBase,
         account: fin(accounts, t.account),
         transferTo: fin(accounts, t.transferTo),
         refundOf: fin(txs, t.refundOf),
+        // the server's own link tags (loan:, repayment:, credit_statement:) name ids that were just remapped, so they are dropped
+        tags: userTagsOnly(t.tags ?? []),
         recurringId: group(t.recurringId),
         splitGroupId: group(t.splitGroupId),
         // an open-ended series is grown by its series id; without one it would be a loose row the top-up must not touch
