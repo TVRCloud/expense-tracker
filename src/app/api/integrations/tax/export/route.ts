@@ -11,5 +11,5 @@ export const GET = withIntegrationRoute("tax", async ({ req, user, requestId }) 
   const fy = raw === null ? undefined : parseFy(raw);
   if (fy === null) return integrationError("VALIDATION_ERROR", "fy must be a year such as 2025", requestId);
   const summary = await getTaxSummary(user.id, fy);
-  return csvResponse(toCsv(taxCsvRows(summary), taxCsvColumns(summary.currency)), `tax-summary-${summary.label}.csv`);
+  return csvResponse(toCsv(taxCsvRows(summary), taxCsvColumns(summary.currency), { numericColumns: [taxCsvColumns(summary.currency)[2]] }), `tax-summary-${summary.label}.csv`);
 });

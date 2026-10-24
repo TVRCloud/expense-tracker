@@ -8974,8 +8974,11 @@ describe("integration export and import", () => {
 
   it("keeps the pending key and lock at least twice the commit route's run time", async () => {
     const { maxDuration } = await import("@/app/api/integrations/import/commit/route");
+    const { maxDuration: previewDuration } = await import("@/app/api/integrations/import/preview/route");
     const { IMPORT_PENDING_TTL_SECONDS } = await import("@/lib/transaction-import");
     expect(IMPORT_PENDING_TTL_SECONDS).toBeGreaterThanOrEqual(2 * maxDuration);
+    // A preview does the same reading as a commit, so it gets the same limit.
+    expect(previewDuration).toBe(maxDuration);
   });
 
   it("the pending idempotency record expires in minutes, the finished one keeps the full time", async () => {
@@ -9122,13 +9125,52 @@ describe("integration export and import", () => {
     expect(majorUnits(5, 3)).toBe("0.005");
   });
 
-  it("writes plain numbers unquoted, negative ones too, and still defangs text", async () => {
+  it("writes plain numbers unquoted only in numeric columns, and defangs text everywhere else", async () => {
     const { toCsv } = await import("@/lib/csv");
-    const csv = toCsv(
-      [{ a: "-5.00", b: "1250.50", c: "125050", d: -7, e: "-5 off", f: "=1+1", g: "'-5", h: "-1e5", i: "-" }],
-      ["a", "b", "c", "d", "e", "f", "g", "h", "i"]
-    );
-    expect(csv.split("\n")[1]).toBe("-5.00,1250.50,125050,-7,'-5 off,'=1+1,''-5,'-1e5,'-");
+    const row = { a: "-5.00", b: "1250.50", c: "125050", d: -7, e: "-5 off", f: "=1+1", g: "'-5", h: "-1e5", i: "-" };
+    const cols = ["a", "b", "c", "d", "e", "f", "g", "h", "i"];
+    const numeric = toCsv([row], cols, { numericColumns: ["a", "b", "c", "d"] });
+    expect(numeric.split("\n")[1]).toBe("-5.00,1250.50,125050,-7,'-5 off,'=1+1,''-5,'-1e5,'-");
+    // Without the option the same strings are text: only a real JS number stays a number.
+    const text = toCsv([row], cols);
+    expect(text.split("\n")[1]).toBe("'-5.00,1250.50,125050,-7,'-5 off,'=1+1,''-5,'-1e5,'-");
+    // A numeric column does not make other strings numeric: a label is still defanged.
+    expect(toCsv([{ n: "-abc", m: "-9.5" }], ["n", "m"], { numericColumns: ["m"] }).split("\n")[1]).toBe("'-abc,-9.5");
+  });
+
+  it("keeps description and note text as text through an export and an import", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { default: Account } = await import("@/models/Account");
+    const values = ["007", "1250", "-5", "-5.00", "0.50", "'-5", "=SUM(A1)"];
+    const base = { user: userId, account: accountId, type: "expense", amount: 4500, category: "food" };
+    for (const [i, v] of values.entries()) {
+      await Transaction.create({ ...base, description: v, note: v, date: new Date(Date.UTC(2026, 9, i + 1, 6)) });
+    }
+    const csv = await (await exportCsv()).text();
+    const lines = csv.split("\n").slice(1);
+    // The amount column is a number; the text columns are text: a negative-looking one carries the quote.
+    expect(lines[0]).toBe("2026-10-01,expense,45.00,INR,food,,007,Bank,007,,manual");
+    expect(lines[1]).toBe("2026-10-02,expense,45.00,INR,food,,1250,Bank,1250,,manual");
+    expect(lines[2]).toBe("2026-10-03,expense,45.00,INR,food,,'-5,Bank,'-5,,manual");
+    expect(lines[3]).toBe("2026-10-04,expense,45.00,INR,food,,'-5.00,Bank,'-5.00,,manual");
+    const fresh = await Account.create({ user: userId, name: "Fresh", type: "bank", balance: 0, currency: "INR" });
+    expect((await commit({ csv, accountId: fresh._id.toString() })).status).toBe(201);
+    const rows = await Transaction.find({ account: fresh._id }).sort({ date: 1 }).lean();
+    expect(rows.map((r) => r.description)).toEqual(values);
+    expect(rows.map((r) => r.note)).toEqual(values);
+    expect(rows.every((r) => r.amount === 4500)).toBe(true);
+  });
+
+  it("the budgets and web transactions exports keep amounts numeric and descriptions text", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    sessionUser.current = { id: userId, name: "EI", email: "e@x.com", role: "user" };
+    await Transaction.create({ user: userId, account: accountId, type: "expense", amount: 4500, category: "food", description: "-5", note: "007", date: new Date("2026-10-05T06:00:00Z") });
+    const { GET } = await import("@/app/api/transactions/route");
+    const res = await GET(new NextRequest("http://localhost/api/transactions?format=csv"));
+    const lines = (await res.text()).split("\n");
+    expect(lines[0]).toBe("date,type,category,subcategory,description,note,amount,currency,account,tags");
+    expect(lines[1]).toBe("2026-10-05,expense,food,,'-5,007,45.00,INR,Bank,");
+    sessionUser.current = null;
   });
 
   it("reads a negative amount written plain, defanged by an older export, or in debit and credit columns", async () => {

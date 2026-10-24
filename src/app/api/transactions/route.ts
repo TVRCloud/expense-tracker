@@ -74,7 +74,8 @@ export async function GET(req: NextRequest) {
           account: t.account?.name ?? "",
           tags: (t.tags ?? []).join(";"),
         })),
-        ["date", "type", "category", "subcategory", "description", "note", "amount", "currency", "account", "tags"]
+        ["date", "type", "category", "subcategory", "description", "note", "amount", "currency", "account", "tags"],
+        { numericColumns: ["amount"] }
       );
       return csvResponse(csv, `transactions-${new Date().toISOString().slice(0, 10)}.csv`);
     }
