@@ -81,7 +81,8 @@ export type BuildForecastInput = {
 export function buildForecast(input: BuildForecastInput): Forecast {
   const days = clampDays(input.days);
   const todayDay = keyToUtcDay(localDateKey(input.now, input.timeZone));
-  const change = new Array<number>(days).fill(0);
+  // Fixed size, not `days`: the length never depends on the request, and `days` is at most MAX_FORECAST_DAYS.
+  const change = new Array<number>(MAX_FORECAST_DAYS).fill(0);
   const events: ForecastEventOut[] = [];
   let inflows = 0;
   let outflows = 0;
@@ -127,33 +128,40 @@ export function buildForecast(input: BuildForecastInput): Forecast {
   };
 }
 
-function nextOccurrence(cadence: string, d: Date): Date {
+/** The k-th charge counted from the first one. Always measured from the anchor, so a monthly charge on the 31st
+ *  returns to the 31st after a short month instead of staying on the 28th. */
+function occurrenceAt(cadence: string, anchor: Date, k: number): Date {
   switch (cadence) {
     case "weekly":
-      return addWeeks(d, 1);
+      return addWeeks(anchor, k);
     case "quarterly":
-      return addMonths(d, 3);
+      return addMonths(anchor, 3 * k);
     case "yearly":
-      return addYears(d, 1);
+      return addYears(anchor, k);
     default:
-      return addMonths(d, 1);
+      return addMonths(anchor, k);
   }
 }
 
-/** Charges of one subscription inside the window: an overdue one counts today, then the cadence repeats. */
+/** Charges of one subscription inside the window: an overdue one counts once today, then the cadence repeats. */
 export function subscriptionOccurrences(nextDate: Date, cadence: string, now: Date, days: number, timeZone: string): Date[] {
+  if (Number.isNaN(nextDate.getTime())) return [];
   const todayDay = keyToUtcDay(localDateKey(now, timeZone));
+  const dayOf = (k: number) => keyToUtcDay(localDateKey(occurrenceAt(cadence, nextDate, k), timeZone));
   const out: Date[] = [];
-  let d = new Date(nextDate);
-  let guard = 0;
-  if (keyToUtcDay(localDateKey(d, timeZone)) < todayDay) {
+  let k = 0;
+  if (dayOf(0) < todayDay) {
+    // Overdue: it counts once, today. Catch up to the first charge after today (own counter, so a very stale
+    // date cannot leak past-dated charges into the window loop below).
     out.push(now);
-    d = nextOccurrence(cadence, d);
+    let catchUp = 0;
+    while (dayOf(k) <= todayDay && catchUp++ < 2000) k++;
+    if (dayOf(k) <= todayDay) return out;
   }
-  while (keyToUtcDay(localDateKey(d, timeZone)) < todayDay && guard++ < 200) d = nextOccurrence(cadence, d);
-  while (keyToUtcDay(localDateKey(d, timeZone)) - todayDay < days && guard++ < 400) {
-    out.push(new Date(d));
-    d = nextOccurrence(cadence, d);
+  let inWindow = 0;
+  while (dayOf(k) - todayDay < days && inWindow++ < 400) {
+    out.push(occurrenceAt(cadence, nextDate, k));
+    k++;
   }
   return out;
 }

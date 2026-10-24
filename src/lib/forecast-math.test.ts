@@ -143,6 +143,37 @@ describe("subscriptionOccurrences", () => {
     expect(dates).toHaveLength(4); // days 2, 9, 16, 23
   });
 
+  it("catches a long-overdue weekly charge up to today instead of emitting past-dated ones", () => {
+    // About ten years behind: more than the old shared 200-step guard allowed.
+    const dates = subscriptionOccurrences(at(-3650), "weekly", now, 30, KOLKATA);
+    expect(localDateKey(dates[0], KOLKATA)).toBe("2026-10-24"); // the overdue charge counts once, today
+    for (let i = 1; i < dates.length; i++) {
+      const gapDays = (dates[i].getTime() - dates[i - 1].getTime()) / 86_400_000;
+      if (i > 1) expect(gapDays).toBe(7);
+      expect(localDateKey(dates[i], KOLKATA) > "2026-10-24").toBe(true);
+    }
+    expect(dates.length).toBeLessThanOrEqual(6);
+  });
+
+  it("counts a charge exactly one cadence step overdue once today, not twice", () => {
+    for (const [cadence, back] of [["weekly", -7], ["monthly", -30], ["quarterly", -92], ["yearly", -365]] as const) {
+      const dates = subscriptionOccurrences(at(back), cadence, now, 30, KOLKATA);
+      const today = dates.filter((d) => localDateKey(d, KOLKATA) === "2026-10-24");
+      expect(today, cadence).toHaveLength(1);
+    }
+  });
+
+  it("keeps a month-end charge on the 31st after a short month", () => {
+    const anchor = new Date("2026-01-31T04:30:00.000Z"); // 10:00 in Kolkata
+    const longAfter = new Date("2026-03-25T04:30:00.000Z");
+    const dates = subscriptionOccurrences(anchor, "monthly", longAfter, 10, KOLKATA);
+    expect(dates.map((d) => localDateKey(d, KOLKATA))).toEqual(["2026-03-25", "2026-03-31"]);
+  });
+
+  it("returns nothing for an invalid date", () => {
+    expect(subscriptionOccurrences(new Date("nope"), "monthly", now, 30, KOLKATA)).toEqual([]);
+  });
+
   it("counts an overdue charge today, then continues on the cadence", () => {
     const dates = subscriptionOccurrences(at(-2), "monthly", now, 40, KOLKATA);
     expect(dates).toHaveLength(2);
