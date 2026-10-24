@@ -102,8 +102,29 @@ Authorization: Bearer <YOUR_API_KEY>
 | GET | `/api/integrations/bills` | What is coming due: recurring payments, card statements, loans you owe. `days` 0 to 60, default 14; overdue from the last 60 days included. Returns `{bills, settings, days}` |
 | POST | `/api/integrations/bills/[id]/pay` | Mark a bill paid (needs `Idempotency-Key`; optional `{amount, accountId}` for loans). Cards answer 400 `NOT_PAYABLE` |
 | GET, PATCH | `/api/integrations/bills/settings` | Reminder settings `{enabled, leadDays}` (off by default, `leadDays` 1 to 14); PATCH changes only what is sent (needs `Idempotency-Key`) |
+| GET | `/api/integrations/forecast` | Cash flow forecast: balance of the money in hand day by day, the lowest point and whether it goes below zero. `days` 1 to 60, default 30 |
 | GET | `/api/integrations/summary` | Snapshot: accounts, monthly stats, budgets |
 | POST | `/api/integrations/sms` | Parse a bank/NBFC SMS and create a transaction or loan repayment |
+
+### GET /api/integrations/forecast
+
+The expected balance of the money in hand (bank, cash, wallet and savings accounts) over the next days. Query: `days`, a whole number from 1 to 60 (default 30); anything else is `400 VALIDATION_ERROR`.
+
+```json
+{ "success": true, "data": {
+  "days": 30, "generatedAt": "2026-10-24T04:30:00.000Z", "timeZone": "Asia/Kolkata", "currency": "INR",
+  "startingBalance": 1000000, "endBalance": 300000,
+  "lowest": { "date": "2026-10-27", "balance": -200000 },
+  "goesNegative": true, "firstNegativeDate": "2026-10-27",
+  "points": [{ "date": "2026-10-24", "balance": 1000000, "change": 0 }, { "date": "2026-10-25", "balance": 990000, "change": -10000 }],
+  "events": [{ "date": "2026-10-27", "kind": "recurring", "label": "Rent", "amount": -300000 }],
+  "totals": { "inflows": 500000, "outflows": 300000, "dailySpendTotal": 290000 },
+  "inputs": { "accounts": 1, "lookbackDays": 30, "dailyAverageSpend": 10000, "recurringCount": 2, "billCount": 0,
+              "subscriptionCount": 0, "assumptions": ["Counts bank, cash, wallet and savings accounts; ..."] }
+}, "requestId": "..." }
+```
+
+Amounts are paise. `points` has one entry per day, today first, each the balance at the end of that day in the user's time zone (`preferences.timezone`); `change` is what moved that day (events plus the daily spend). `events` are the known items used, soonest first: `kind` is `recurring` (unpaid recurring payments and income), `card` (the next unpaid card statement), `loan` (a loan the user owes) or `subscription` (a detected subscription, repeated by its cadence). Something overdue counts today. The daily spend (`inputs.dailyAverageSpend`) is the average of the last 30 days of everyday expenses on those accounts, not counting subscriptions and recurring payments, and is applied from tomorrow on. Money other people owe the user is not counted. `inputs.assumptions` says all this in words for the screen. Cards, investments and archived accounts are not part of the starting balance. No accounts gives a zero forecast.
 
 ### GET /api/integrations/subscriptions
 

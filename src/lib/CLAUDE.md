@@ -6,6 +6,7 @@ Purpose: server business logic shared by browser routes, integration routes, ser
 - Auth: auth-options.ts, auth-guard.ts (`requireAuth`), cron-auth.ts, security-rate-limit.ts, log-security.ts, log-auth-request.ts, device-label.ts, email.ts.
 - Money services: account-service.ts, transaction-service.ts, transfer-service.ts (transfers between own accounts: create, edit, delete over transaction-service), cash-service.ts (the cash account: low-cash view, setup on demand; `findCashAccount` is in account-service.ts), transaction-query.ts, transaction-activity.ts, stats-service.ts (month, range and daily totals), notification-service.ts, budget-service.ts, budget-alert.ts, spend-limit.ts (daily and weekly limit status, alerts and the end-of-day summary; a change to the amounts applies from today and is kept in `limitHistory`, `limitOn(history, current, date)` gives the limit a past day had; its zod schema lives in features/budgets/schemas/spend-limit.schema.ts), spend-limit-time.ts (day and week bounds in the user's time zone), goal-service.ts, loan-service.ts, credit-card-service.ts (summary and statements read paths), credit-card.ts, credit-balance.ts, rule-service.ts (categorise rules: CRUD, first-match evaluation, the overrides applied on a new transaction), ledger.ts.
 - Subscriptions: subscription-detector.ts (pure: finds repeating merchant charges, cadence, next date, yearly cost) and subscription-service.ts (reads 24 months of expenses, merges the user's confirm and dismiss decisions; shared by browser and integration routes).
+- Forecast: forecast-math.ts (pure: daily balance points, lowest point, shortfall, subscription repeats) and cash-flow-forecast.ts (gathers liquid balances, unpaid recurring items, card and loan dues from bills.ts, subscriptions and the 30 day average spend).
 - Bills: bills.ts (upcoming bills from recurring payments, card statements and loans owed; mark paid), bill-settings.ts (`preferences.billReminders`), bill-reminders.ts (once per bill per due date, from 09:00 local; `sendBillReminders`).
 - Recurring and reminders: recurrence.ts, recurring-topup.ts, recurring-series.ts (series list, get, cancel; shared by browser and integration routes), reminder-scheduler.ts, emi-notifications.ts, credit-notifications.ts, push.ts.
 - refund-service.ts (match a credit to the expense it refunds, suggest, confirm, reject; stats and budgets net confirmed refunds out), see [docs/reconcile.md](../../docs/reconcile.md).
@@ -34,7 +35,7 @@ Purpose: server business logic shared by browser routes, integration routes, ser
 - integrations/sms-parser.ts (`parseBankSms`) has no importer in src, scripts or server.ts; ingest uses `parseCapture` from capture/parsers.
 
 ## Tests
-- `src/test/integrations.test.ts`, `src/lib/realtime/*.test.ts`, `src/lib/subscription-detector.test.ts`.
+- `src/test/integrations.test.ts`, `src/lib/realtime/*.test.ts`, `src/lib/subscription-detector.test.ts`, `src/lib/forecast-math.test.ts`.
 
 ## Last changed
 - e19229d feat(realtime): live updates for every screen and an app event channel
