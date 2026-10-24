@@ -1,3 +1,4 @@
+import { deleteReceiptsOfTransactions } from "@/lib/receipt-service";
 import connectDB from "@/lib/mongodb";
 import Loan from "@/models/Loan";
 import Repayment from "@/models/Repayment";
@@ -354,6 +355,7 @@ export async function deleteLoan(userId: string, loanId: string, actor: AuthUser
     { _id: { $in: linkedTransactions.map((txn) => txn._id) }, user: userId },
     { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: userId } }
   );
+  await deleteReceiptsOfTransactions(userId, linkedTransactions.map((txn) => txn._id));
   for (const txn of linkedTransactions) {
     await appendLedgerBlock({
       userId,

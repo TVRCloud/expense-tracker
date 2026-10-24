@@ -13,6 +13,8 @@ import { computeInstallmentDates, OPEN_ENDED_WINDOW } from "@/lib/recurrence";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { ruleOverridesForTransaction } from "@/lib/rule-service";
 import logger from "@/lib/logger";
+import { isReservedTag, MAX_TAGS, mergeUserTags, normaliseTags, tagListSchema } from "@/lib/tags";
+import { deleteReceiptsOfTransaction } from "@/lib/receipt-service";
 
 // Shared transaction-creation business logic, used by both the browser-facing
 // POST /api/transactions route and the n8n-facing POST /api/integrations/transactions
@@ -21,6 +23,14 @@ import logger from "@/lib/logger";
 // This preserves the app's existing (weaker) consistency model exactly: no
 // mongoose sessions/transactions are used anywhere in this codebase, so
 // mutations below remain sequential and non-atomic, same as before extraction.
+
+export const MAX_SPLIT_LINES = 20;
+
+export const splitLineSchema = z.object({
+  category: z.string().trim().min(1),
+  amount: z.number().int().positive(),
+  description: z.string().optional(),
+});
 
 export const transactionCreateSchema = z
   .object({
@@ -33,7 +43,7 @@ export const transactionCreateSchema = z
     description: z.string().optional(),
     note: z.string().optional(),
     date: z.string(),
-    tags: z.array(z.string()).default([]),
+    tags: tagListSchema.default([]),
     transferToId: z.string().optional(),
     isRecurring: z.boolean().default(false),
     recurrenceFrequency: z.enum(["daily", "weekly", "monthly", "yearly"]).optional(),
@@ -44,11 +54,7 @@ export const transactionCreateSchema = z
     // Split-purchase lines — when present, `category` above is ignored and
     // one sibling Transaction document is created per split line instead
     // (see splitGroupId on the model). Sum of split amounts must equal `amount`.
-    splits: z.array(z.object({
-      category: z.string().min(1),
-      amount: z.number().int().positive(),
-      description: z.string().optional(),
-    })).min(2).optional(),
+    splits: z.array(splitLineSchema).min(2).max(MAX_SPLIT_LINES).optional(),
   })
   .superRefine((data, ctx) => {
     if (!Types.ObjectId.isValid(data.accountId)) {
@@ -118,7 +124,8 @@ export type TransactionServiceErrorCode =
   | "TRANSFER_ACCOUNT_NOT_FOUND"
   | "TRANSACTION_NOT_FOUND"
   | "TRANSACTION_LOCKED"
-  | "INSTALLMENT_NOT_FOUND";
+  | "INSTALLMENT_NOT_FOUND"
+  | "INVALID_SPLIT";
 
 export class TransactionServiceError extends Error {
   code: TransactionServiceErrorCode;
@@ -135,7 +142,7 @@ export const transactionUpdateSchema = z.object({
   note: z.string().optional(),
   category: z.string().optional(),
   subcategory: z.string().optional(),
-  tags: z.array(z.string()).optional(),
+  tags: tagListSchema.optional(),
   date: z.string().optional(),
 });
 
@@ -219,7 +226,8 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     if (overrides) {
       if (overrides.category) rest.category = overrides.category;
       if (overrides.description) rest.description = overrides.description;
-      if (overrides.tags) rest.tags = overrides.tags;
+      // A rule can only add plain tags, never the link tags the server owns.
+      if (overrides.tags) rest.tags = normaliseTags(overrides.tags).filter((t) => !isReservedTag(t)).slice(0, MAX_TAGS);
     }
   }
 
@@ -425,6 +433,8 @@ export async function updateTransaction(input: UpdateTransactionInput) {
   }
 
   const update: Record<string, unknown> = { ...rest };
+  // The server's own link tags stay on the row whatever the caller sends.
+  if (rest.tags) update.tags = mergeUserTags(existing.tags, rest.tags);
   if (rest.date) update.date = new Date(rest.date);
 
   const transaction = await Transaction.findOneAndUpdate(
@@ -551,6 +561,8 @@ export async function deleteTransaction(userId: string, transactionId: string, a
     actor,
   });
   await invalidateStatsCacheSingle(userId, new Date(txn.date));
+  // A receipt is private and has no meaning without its transaction.
+  await deleteReceiptsOfTransaction(userId, transactionId);
 
   return deleted;
 }

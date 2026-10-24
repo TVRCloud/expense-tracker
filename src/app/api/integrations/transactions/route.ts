@@ -16,6 +16,7 @@ export const GET = withIntegrationRoute("transactions", async ({ req, user, requ
   const limit = Math.min(Math.max(parseInt(searchParams.get("limit") ?? "20", 10) || 20, 1), 100);
   const type = searchParams.get("type");
   const category = searchParams.get("category");
+  const tag = searchParams.get("tag");
   const accountId = searchParams.get("accountId");
   const search = searchParams.get("search");
   const dateFrom = searchParams.get("dateFrom");
@@ -37,6 +38,7 @@ export const GET = withIntegrationRoute("transactions", async ({ req, user, requ
     limit,
     type,
     category,
+    tag,
     accountId,
     search,
     dateFrom,
@@ -104,6 +106,7 @@ export const POST = withIntegrationRoute("transactions", async ({ req, user, req
           account: { toString(): string };
           transferTo?: { toString(): string } | null;
           date: Date;
+          tags?: string[];
           createdAt: Date;
           updatedAt: Date;
         };
@@ -116,6 +119,8 @@ export const POST = withIntegrationRoute("transactions", async ({ req, user, req
           accountId: transaction.account.toString(),
           transferToId: transaction.transferTo ? transaction.transferTo.toString() : null,
           date: transaction.date,
+          tags: transaction.tags ?? [],
+          splitGroupId: result.kind === "split" ? result.splitGroupId : null,
           seriesId: result.kind === "series" ? result.seriesId : null,
           count: result.kind === "series" ? result.count : 1,
           createdAt: transaction.createdAt,

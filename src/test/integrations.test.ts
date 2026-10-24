@@ -6535,3 +6535,406 @@ describe("weekly review", () => {
     sessionUser.current = null;
   });
 });
+
+// ── tags, split edits and receipts ─────────────────────────────────────────
+
+describe("tags, split edits and receipts", () => {
+  const KEY = "test-receipts-api-key";
+  let userId: string;
+  let otherUserId: string;
+  let accountId: string;
+  let actor: { id: string; name: string; email: string; role: string };
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { default: Account } = await import("@/models/Account");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "TR User", email: `tr${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `tro${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    const account = await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 100000, currency: "INR" });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+    accountId = account._id.toString();
+    actor = { id: userId, name: "TR User", email: "tr@x.com", role: "user" };
+  });
+
+  const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from("receipt-bytes-1234567890")]);
+  const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from("png-body")]);
+
+  function req(path: string, method: "GET" | "POST" | "PUT" | "DELETE" = "GET", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    const raw = Buffer.isBuffer(body);
+    return new NextRequest(`http://localhost/api/integrations/${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${KEY}`,
+        ...(raw || body === undefined ? {} : { "content-type": "application/json" }),
+        ...(method === "GET" ? {} : { "idempotency-key": `tr-key-${n}` }),
+        ...headers,
+      },
+      body: body === undefined ? undefined : raw ? new Uint8Array(body as Buffer) : JSON.stringify(body),
+    });
+  }
+  const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+
+  async function addTxn(over: Record<string, unknown> = {}, user: string = userId) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    return Transaction.create({ user, account: accountId, type: "expense", amount: 10000, currency: "INR", category: "food", date: new Date(2026, 9, 5, 12), ...over });
+  }
+  async function balance() {
+    const { default: Account } = await import("@/models/Account");
+    return (await Account.findById(accountId).lean<{ balance: number }>())!.balance;
+  }
+  async function fetchRoute(transactionId: string, bytes: Buffer, _key: string) {
+    const { POST } = await import("@/app/api/integrations/transactions/[id]/receipts/route");
+    return POST(req(`transactions/${transactionId}/receipts`, "POST", bytes), ctx(transactionId));
+  }
+
+  describe("tags", () => {
+    it("are lower-cased, trimmed and de-duplicated on create", async () => {
+      const { transactionCreateSchema } = await import("@/lib/transaction-service");
+      const parsed = transactionCreateSchema.parse({ accountId, type: "expense", amount: 100, category: "food", date: "2026-10-05", tags: ["  Trip ", "trip", "Work  Lunch"] });
+      expect(parsed.tags).toEqual(["trip", "work lunch"]);
+    });
+
+    it("reject a colon, more than 10 tags and a long tag", async () => {
+      const { transactionCreateSchema, transactionUpdateSchema } = await import("@/lib/transaction-service");
+      const base = { accountId, type: "expense", amount: 100, category: "food", date: "2026-10-05" };
+      expect(transactionCreateSchema.safeParse({ ...base, tags: ["repayment:abc"] }).success).toBe(false);
+      expect(transactionCreateSchema.safeParse({ ...base, tags: Array.from({ length: 11 }, (_, i) => `t${i}`) }).success).toBe(false);
+      expect(transactionCreateSchema.safeParse({ ...base, tags: ["x".repeat(41)] }).success).toBe(false);
+      expect(transactionUpdateSchema.safeParse({ tags: ["loan:1"] }).success).toBe(false);
+      expect(transactionUpdateSchema.safeParse({ tags: ["ok"] }).success).toBe(true);
+    });
+
+    it("an edit keeps the link tags the server wrote", async () => {
+      const { updateTransaction } = await import("@/lib/transaction-service");
+      const t = await addTxn({ tags: ["loan:abc", "loan_principal", "old"] });
+      const res = await updateTransaction({ userId, transactionId: t._id.toString(), actor, tags: ["new"] });
+      expect((res as { tags: string[] }).tags.sort()).toEqual(["loan:abc", "loan_principal", "new"]);
+    });
+
+    it("filter the list and the tag list leaves out link tags, voided and deleted rows", async () => {
+      const { GET } = await import("@/app/api/integrations/transactions/route");
+      const { GET: TAGS } = await import("@/app/api/integrations/transactions/tags/route");
+      await addTxn({ tags: ["trip", "food"] });
+      await addTxn({ tags: ["trip", "loan:x"] });
+      await addTxn({ tags: ["work"], reviewStatus: "voided" });
+      await addTxn({ tags: ["gone"], isDeleted: true });
+      await addTxn({ tags: ["trip"] }, otherUserId);
+      const list = await (await GET(req("transactions?tag=TRIP"), undefined as never)).json();
+      expect(list.data.total).toBe(2);
+      const tags = await (await TAGS(req("transactions/tags"), undefined as never)).json();
+      expect(tags.data).toEqual([{ tag: "trip", count: 2 }, { tag: "food", count: 1 }]);
+    });
+  });
+
+  describe("split edits", () => {
+    async function makeSplit() {
+      const { createTransaction } = await import("@/lib/transaction-service");
+      const r = await createTransaction({
+        userId, actor, accountId, type: "expense", amount: 30000, currency: "INR", description: "Mart", date: "2026-10-05T10:00:00.000Z",
+        tags: [], isRecurring: false,
+        splits: [{ category: "food", amount: 20000 }, { category: "home", amount: 10000 }],
+      });
+      if (r.kind !== "split") throw new Error("not a split");
+      return { id: (r.transaction as { _id: { toString(): string } })._id.toString(), groupId: r.splitGroupId };
+    }
+    const put = async (id: string, splits: unknown) => {
+      const { PUT } = await import("@/app/api/integrations/transactions/[id]/splits/route");
+      return PUT(req(`transactions/${id}/splits`, "PUT", { splits }), ctx(id));
+    };
+
+    it("change the lines, keep the total and the balance", async () => {
+      const { id } = await makeSplit();
+      const before = await balance();
+      const res = await put(id, [{ category: "food", amount: 5000 }, { category: "home", amount: 5000 }, { category: "fun", amount: 20000 }]);
+      const json = await res.json();
+      expect(res.status).toBe(200);
+      expect(json.data.total).toBe(30000);
+      expect(json.data.lines.map((l: { category: string; amount: number }) => [l.category, l.amount])).toEqual([["food", 5000], ["home", 5000], ["fun", 20000]]);
+      expect(await balance()).toBe(before);
+    });
+
+    it("count each line under its own category in the month stats", async () => {
+      const { getMonthlyStats } = await import("@/lib/stats-service");
+      const { id } = await makeSplit();
+      await put(id, [{ category: "food", amount: 12000 }, { category: "fun", amount: 18000 }]);
+      const stats = await getMonthlyStats(userId, 2026, 10);
+      expect(stats.expense).toBe(30000);
+      expect(Object.fromEntries(stats.byCategory.map((c) => [c.category, c.total]))).toEqual({ food: 12000, fun: 18000 });
+    });
+
+    it("drop lines when there are fewer, and keep their receipts on the first line", async () => {
+      const { id, groupId } = await makeSplit();
+      const { default: Transaction } = await import("@/models/Transaction");
+      const { default: Receipt } = await import("@/models/Receipt");
+      await put(id, [{ category: "food", amount: 10000 }, { category: "home", amount: 10000 }, { category: "fun", amount: 10000 }]);
+      const rows = await Transaction.find({ splitGroupId: groupId, isDeleted: { $ne: true } }).sort({ _id: 1 }).lean<{ _id: { toString(): string } }[]>();
+      expect(rows).toHaveLength(3);
+      const { addReceipt } = await import("@/lib/receipt-service");
+      const r = await addReceipt({ userId, transactionId: rows[2]._id.toString(), bytes: JPEG });
+      const before = await balance();
+      const res = await put(id, [{ category: "food", amount: 15000 }, { category: "home", amount: 15000 }]);
+      expect(res.status).toBe(200);
+      const left = await Transaction.find({ splitGroupId: groupId, isDeleted: { $ne: true } }).sort({ _id: 1 }).lean<{ _id: { toString(): string }; attachments: string[] }[]>();
+      expect(left).toHaveLength(2);
+      expect(left[0].attachments).toEqual([r.id]);
+      expect((await Receipt.findById(r.id).lean<{ transaction: { toString(): string } }>())!.transaction.toString()).toBe(left[0]._id.toString());
+      expect(await balance()).toBe(before);
+    });
+
+    it("turn a plain expense into a split", async () => {
+      const t = await addTxn({ amount: 9000, category: "food" });
+      const res = await put(t._id.toString(), [{ category: "food", amount: 4000 }, { category: "fun", amount: 5000 }]);
+      const json = await res.json();
+      expect(res.status).toBe(200);
+      expect(json.data.splitGroupId).toBeTruthy();
+      expect(json.data.lines).toHaveLength(2);
+      expect(json.data.lines[0].id).toBe(t._id.toString());
+    });
+
+    it("reject lines that do not add up, too few lines and too many", async () => {
+      const t = await addTxn({ amount: 9000 });
+      expect((await put(t._id.toString(), [{ category: "a", amount: 4000 }, { category: "b", amount: 4000 }])).status).toBe(400);
+      expect((await put(t._id.toString(), [{ category: "a", amount: 9000 }])).status).toBe(400);
+      const many = Array.from({ length: 21 }, (_, i) => ({ category: `c${i}`, amount: 1 }));
+      expect((await put(t._id.toString(), many)).status).toBe(400);
+      expect((await put(t._id.toString(), [{ category: "a", amount: 4500.5 }, { category: "b", amount: 4499.5 }])).status).toBe(400);
+    });
+
+    it("refuse income, recurring, unreviewed, linked and refunded rows and other users' rows", async () => {
+      const lines = [{ category: "a", amount: 4500 }, { category: "b", amount: 4500 }];
+      const income = await addTxn({ amount: 9000, type: "income" });
+      expect((await put(income._id.toString(), lines)).status).toBe(400);
+      const recurring = await addTxn({ amount: 9000, isRecurring: true, recurringId: new mongoose.Types.ObjectId(), installmentStatus: "paid" });
+      expect((await put(recurring._id.toString(), lines)).status).toBe(400);
+      const unreviewed = await addTxn({ amount: 9000, reviewStatus: "unreviewed" });
+      expect((await put(unreviewed._id.toString(), lines)).status).toBe(409);
+      const repay = await addTxn({ amount: 9000, tags: ["repayment:x"] });
+      expect((await put(repay._id.toString(), lines)).status).toBe(409);
+      const refunded = await addTxn({ amount: 9000 });
+      await addTxn({ amount: 9000, type: "income", refundOf: refunded._id, refundStatus: "confirmed" });
+      expect((await put(refunded._id.toString(), lines)).status).toBe(409);
+      const theirs = await addTxn({ amount: 9000 }, otherUserId);
+      expect((await put(theirs._id.toString(), lines)).status).toBe(404);
+    });
+
+    it("an idempotent retry replays and a retry with other lines conflicts", async () => {
+      const { PUT } = await import("@/app/api/integrations/transactions/[id]/splits/route");
+      const t = await addTxn({ amount: 9000 });
+      const id = t._id.toString();
+      const a = [{ category: "a", amount: 4500 }, { category: "b", amount: 4500 }];
+      const b = [{ category: "a", amount: 1000 }, { category: "b", amount: 8000 }];
+      const first = await PUT(req(`transactions/${id}/splits`, "PUT", { splits: a }, { "idempotency-key": "same-key" }), ctx(id));
+      expect(first.status).toBe(200);
+      const replay = await PUT(req(`transactions/${id}/splits`, "PUT", { splits: a }, { "idempotency-key": "same-key" }), ctx(id));
+      expect(replay.status).toBe(200);
+      const other = await PUT(req(`transactions/${id}/splits`, "PUT", { splits: b }, { "idempotency-key": "same-key" }), ctx(id));
+      expect(other.status).toBe(409);
+    });
+
+    it("GET returns the lines of a split from any line, and the single row of a plain one", async () => {
+      const { GET } = await import("@/app/api/integrations/transactions/[id]/splits/route");
+      const { id } = await makeSplit();
+      const split = await (await GET(req(`transactions/${id}/splits`), ctx(id))).json();
+      expect(split.data.lines).toHaveLength(2);
+      const plain = await addTxn({ amount: 500 });
+      const one = await (await GET(req(`transactions/${plain._id}/splits`), ctx(plain._id.toString()))).json();
+      expect(one.data).toMatchObject({ splitGroupId: null, total: 500 });
+    });
+
+    it("create caps the lines at 20 and returns the group id", async () => {
+      const { transactionCreateSchema } = await import("@/lib/transaction-service");
+      const many = Array.from({ length: 21 }, (_, i) => ({ category: `c${i}`, amount: 1 }));
+      expect(transactionCreateSchema.safeParse({ accountId, type: "expense", amount: 21, date: "2026-10-05", splits: many }).success).toBe(false);
+      const { POST } = await import("@/app/api/integrations/transactions/route");
+      const res = await POST(req("transactions", "POST", {
+        accountId, type: "expense", amount: 300, date: "2026-10-05", tags: ["Trip"],
+        splits: [{ category: "food", amount: 100 }, { category: "fun", amount: 200 }],
+      }), undefined as never);
+      const json = await res.json();
+      expect(res.status).toBe(201);
+      expect(json.data.splitGroupId).toBeTruthy();
+      expect(json.data.tags).toEqual(["trip"]);
+    });
+  });
+
+  describe("receipts", () => {
+    it("sniffs the type from the bytes, not from a header", async () => {
+      const { sniffImageType } = await import("@/lib/receipt-service");
+      expect(sniffImageType(JPEG)).toBe("image/jpeg");
+      expect(sniffImageType(PNG)).toBe("image/png");
+      expect(sniffImageType(Buffer.concat([Buffer.from("RIFF"), Buffer.from([1, 2, 3, 4]), Buffer.from("WEBP")]))).toBe("image/webp");
+      expect(sniffImageType(Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from("ftypheic")]))).toBe("image/heic");
+      expect(sniffImageType(Buffer.from("<html><script>alert(1)</script>"))).toBeNull();
+      expect(sniffImageType(Buffer.from("GIF89a-----------"))).toBeNull();
+      expect(sniffImageType(Buffer.alloc(0))).toBeNull();
+    });
+
+    it("upload stores it encrypted, links it, and the owner reads it back with safe headers", async () => {
+      const { default: Receipt } = await import("@/models/Receipt");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const { GET } = await import("@/app/api/integrations/receipts/[id]/route");
+      const t = await addTxn();
+      const res = await fetchRoute(t._id.toString(), JPEG, KEY);
+      const json = await res.json();
+      expect(res.status).toBe(201);
+      expect(json.data).toMatchObject({ transactionId: t._id.toString(), contentType: "image/jpeg", size: JPEG.length });
+
+      const stored = await Receipt.findById(json.data.id);
+      expect(Buffer.from(stored!.data).includes(Buffer.from("receipt-bytes"))).toBe(false);
+      const row = await Transaction.findById(t._id).lean<{ attachments: string[] }>();
+      expect(row!.attachments).toEqual([json.data.id]);
+
+      const img = await GET(req(`receipts/${json.data.id}`), ctx(json.data.id));
+      expect(img.status).toBe(200);
+      expect(Buffer.from(await img.arrayBuffer()).equals(JPEG)).toBe(true);
+      expect(img.headers.get("content-type")).toBe("image/jpeg");
+      expect(img.headers.get("cache-control")).toBe("private, no-store");
+      expect(img.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(img.headers.get("content-security-policy")).toContain("sandbox");
+    });
+
+    it("refuse something that is not an image, however it is labelled", async () => {
+      const t = await addTxn();
+      const { POST } = await import("@/app/api/integrations/transactions/[id]/receipts/route");
+      const res = await POST(req(`transactions/${t._id}/receipts`, "POST", Buffer.from("<script>alert(1)</script>"), { "content-type": "image/jpeg" }), ctx(t._id.toString()));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.reason).toBe("UNSUPPORTED_TYPE");
+      const empty = await POST(req(`transactions/${t._id}/receipts`, "POST", Buffer.alloc(0)), ctx(t._id.toString()));
+      expect(empty.status).toBe(400);
+    });
+
+    it("refuse a file over 3 MB, from the header and from the stream", async () => {
+      const t = await addTxn();
+      const { POST } = await import("@/app/api/integrations/transactions/[id]/receipts/route");
+      const { MAX_RECEIPT_BYTES, readBodyCapped } = await import("@/lib/receipt-service");
+      const big = Buffer.concat([JPEG, Buffer.alloc(MAX_RECEIPT_BYTES)]);
+      const res = await POST(req(`transactions/${t._id}/receipts`, "POST", big), ctx(t._id.toString()));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.reason).toBe("TOO_LARGE");
+      const noLength = new Request("http://localhost/x", { method: "POST", body: new Uint8Array(big) });
+      expect(await readBodyCapped(noLength, MAX_RECEIPT_BYTES)).toBeNull();
+      expect((await readBodyCapped(new Request("http://localhost/x", { method: "POST", body: new Uint8Array(JPEG) }), MAX_RECEIPT_BYTES))!.equals(JPEG)).toBe(true);
+    });
+
+    it("another user can neither read, list, attach to nor delete a receipt", async () => {
+      const { addReceipt } = await import("@/lib/receipt-service");
+      const { GET, DELETE } = await import("@/app/api/integrations/receipts/[id]/route");
+      const { GET: LIST } = await import("@/app/api/integrations/transactions/[id]/receipts/route");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const theirTxn = await addTxn({}, otherUserId);
+      const theirs = await addReceipt({ userId: otherUserId, transactionId: theirTxn._id.toString(), bytes: JPEG });
+      expect((await GET(req(`receipts/${theirs.id}`), ctx(theirs.id))).status).toBe(404);
+      expect((await DELETE(req(`receipts/${theirs.id}`, "DELETE"), ctx(theirs.id))).status).toBe(404);
+      expect(await Receipt.countDocuments({ _id: theirs.id })).toBe(1);
+      expect((await LIST(req(`transactions/${theirTxn._id}/receipts`), ctx(theirTxn._id.toString()))).status).toBe(404);
+      expect((await fetchRoute(theirTxn._id.toString(), JPEG, KEY)).status).toBe(404);
+      expect((await GET(req("receipts/not-an-id"), ctx("not-an-id"))).status).toBe(404);
+    });
+
+    it("the browser routes need a session and check the owner too", async () => {
+      const { addReceipt } = await import("@/lib/receipt-service");
+      const { GET } = await import("@/app/api/receipts/[id]/route");
+      const t = await addTxn();
+      const r = await addReceipt({ userId, transactionId: t._id.toString(), bytes: PNG });
+      const call = () => GET(new NextRequest(`http://localhost/api/receipts/${r.id}`), ctx(r.id));
+      sessionUser.current = null;
+      expect((await call()).status).toBe(401);
+      sessionUser.current = { id: otherUserId, name: "Other", email: "o@x.com", role: "user" };
+      expect((await call()).status).toBe(404);
+      sessionUser.current = { id: userId, name: "TR User", email: "tr@x.com", role: "user" };
+      const ok = await call();
+      expect(ok.status).toBe(200);
+      expect(ok.headers.get("cache-control")).toBe("private, no-store");
+      sessionUser.current = null;
+    });
+
+    it("a blob moved to another user's record does not decrypt", async () => {
+      const { addReceipt, getReceiptImage } = await import("@/lib/receipt-service");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const t = await addTxn();
+      const r = await addReceipt({ userId, transactionId: t._id.toString(), bytes: JPEG });
+      await Receipt.updateOne({ _id: r.id }, { $set: { user: otherUserId } });
+      await expect(getReceiptImage(otherUserId, r.id)).rejects.toMatchObject({ code: "UNREADABLE" });
+    });
+
+    it("hold at most 5 per transaction, even when uploaded together", async () => {
+      const { addReceipt } = await import("@/lib/receipt-service");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const t = await addTxn();
+      const id = t._id.toString();
+      const results = await Promise.allSettled(Array.from({ length: 8 }, () => addReceipt({ userId, transactionId: id, bytes: JPEG })));
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(5);
+      const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+      expect(rejected.every((r) => r.reason.code === "TOO_MANY")).toBe(true);
+      expect(await Receipt.countDocuments({ user: userId })).toBe(5);
+      expect((await Transaction.findById(id).lean<{ attachments: string[] }>())!.attachments).toHaveLength(5);
+    });
+
+    it("stop at the per-user quota", async () => {
+      const { addReceipt, MAX_RECEIPTS_PER_USER } = await import("@/lib/receipt-service");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const t = await addTxn();
+      await Receipt.insertMany(
+        Array.from({ length: MAX_RECEIPTS_PER_USER }, () => ({
+          user: userId, transaction: new mongoose.Types.ObjectId(), contentType: "image/jpeg", size: 10,
+          iv: Buffer.alloc(12), tag: Buffer.alloc(16), data: Buffer.alloc(10),
+        }))
+      );
+      await expect(addReceipt({ userId, transactionId: t._id.toString(), bytes: JPEG })).rejects.toMatchObject({ code: "QUOTA_EXCEEDED" });
+    });
+
+    it("deleting a receipt unlinks it, deleting the transaction deletes its receipts for good", async () => {
+      const { addReceipt, deleteReceipt } = await import("@/lib/receipt-service");
+      const { deleteTransaction } = await import("@/lib/transaction-service");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const t = await addTxn({ amount: 1000 });
+      const id = t._id.toString();
+      const a = await addReceipt({ userId, transactionId: id, bytes: JPEG });
+      await addReceipt({ userId, transactionId: id, bytes: PNG });
+      await deleteReceipt(userId, a.id);
+      expect((await Transaction.findById(id).lean<{ attachments: string[] }>())!.attachments).toHaveLength(1);
+      expect(await Receipt.countDocuments({ transaction: id })).toBe(1);
+      await deleteTransaction(userId, id, actor);
+      expect(await Receipt.countDocuments({ transaction: id })).toBe(0);
+      await expect(addReceipt({ userId, transactionId: id, bytes: JPEG })).rejects.toMatchObject({ code: "TRANSACTION_NOT_FOUND" });
+    });
+
+    it("refuse a receipt on a voided transaction", async () => {
+      const { addReceipt } = await import("@/lib/receipt-service");
+      const t = await addTxn({ reviewStatus: "voided" });
+      await expect(addReceipt({ userId, transactionId: t._id.toString(), bytes: JPEG })).rejects.toMatchObject({ code: "TRANSACTION_NOT_FOUND" });
+    });
+
+    it("an idempotent upload retry makes one receipt", async () => {
+      const { default: Receipt } = await import("@/models/Receipt");
+      const { POST } = await import("@/app/api/integrations/transactions/[id]/receipts/route");
+      const t = await addTxn();
+      const send = () => POST(req(`transactions/${t._id}/receipts`, "POST", JPEG, { "idempotency-key": "up-1" }), ctx(t._id.toString()));
+      const a = await send();
+      const b = await send();
+      expect(a.status).toBe(201);
+      expect(b.status).toBe(201);
+      expect(await Receipt.countDocuments({ user: userId })).toBe(1);
+    });
+
+    it("write routes need an Idempotency-Key", async () => {
+      const t = await addTxn();
+      const { POST } = await import("@/app/api/integrations/transactions/[id]/receipts/route");
+      const r = new NextRequest(`http://localhost/api/integrations/transactions/${t._id}/receipts`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${KEY}` },
+        body: new Uint8Array(JPEG),
+      });
+      expect((await POST(r, ctx(t._id.toString()))).status).toBe(400);
+    });
+  });
+});

@@ -16,6 +16,7 @@ Purpose: API-key surface for n8n and the Android companion app. Contracts: [docs
 - net-worth (GET report with trend, `assets` GET POST, `assets/[id]` PATCH DELETE): net worth and manual assets over net-worth.ts.
 - refunds (GET suggestions, `[id]/confirm` and `[id]/reject` POST): refund and reversal matching over refund-service.
 - sinking-funds (GET, POST, `[id]` GET PATCH DELETE, `[id]/contribute` POST) and savings-rate (GET): money set aside for a cost on a due date, and the share of income saved, over sinking-fund-service and savings-rate.
+- transactions/tags (GET), transactions/[id]/splits (GET, PUT), transactions/[id]/receipts (GET list, POST raw image), receipts/[id] (GET image, DELETE): tags, split edits and receipt photos over tags.ts, split-service and receipt-service. Receipt image bytes use plain headers, not the JSON envelope.
 - stats (month totals, daily, history) and notifications (list, `[id]` PATCH, read-all POST).
 - events (SSE), changes (`?since=` polling): realtime for the app.
 - app-update, app-update/download: newest Android release and a signed APK URL.
