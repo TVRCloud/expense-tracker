@@ -19,6 +19,12 @@ const NotificationSchema = new Schema(
 
 NotificationSchema.index({ user: 1, isRead: 1, createdAt: -1 });
 NotificationSchema.index({ user: 1, type: 1 });
+// A weekly review is sent once per user per week: this makes "once" atomic when the timer and the cron route
+// run at the same moment. Limited to weekly review rows, so older notification kinds are not touched.
+NotificationSchema.index(
+  { user: 1, "meta.dedupKey": 1 },
+  { unique: true, partialFilterExpression: { "meta.kind": "weekly_review" } }
+);
 // TTL — auto-delete after 90 days
 NotificationSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 90 });
 

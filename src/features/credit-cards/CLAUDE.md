@@ -6,10 +6,11 @@ Purpose: credit-card views embedded in Accounts, Transactions and Dashboard (lim
 - components/CreditCardForm.tsx, CreditCardBanner.tsx, CreditCardSummaryWidget.tsx: create form, banner, dashboard widget.
 - components/StatementList.tsx, StatementRow.tsx, PayNowSheet.tsx: statements and paying one.
 - components/CreditUtilizationBar.tsx, BillingCycleHint.tsx, EmiCommitmentCard.tsx: small displays.
-- hooks/useCreditSummary.ts, useCreditStatements.ts: queries `["credit-summary"]`, `["credit-statements", id]`.
+- components/CardRewardsCard.tsx: rewards on the card detail rail (this cycle's estimate, the rule, a form to set or remove it).
+- hooks/useCreditSummary.ts, useCreditStatements.ts, useCardRewards.ts: queries `["credit-summary"]`, `["credit-statements", id]`, `["card-rewards", id]`.
 
 ## Talks to
-- `GET /api/credit-cards/summary`, `GET /api/credit-cards/:accountId/statements`, `PATCH .../statements/:statementId`; `/api/accounts/:id` and `/recalculate`.
+- `GET /api/credit-cards/summary`, `GET`, `PUT`, `DELETE /api/credit-cards/:accountId/rewards`, `GET /api/credit-cards/:accountId/statements`, `PATCH .../statements/:statementId`; `/api/accounts/:id` and `/recalculate`.
 - Models: Account (`creditMeta`), CreditStatement, Transaction. Redis: summary cached 60s.
 - Mobile: none.
 

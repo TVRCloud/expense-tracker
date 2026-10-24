@@ -4772,3 +4772,1766 @@ describe("integration cash account", () => {
     expect(list.find((a) => a.type === "bank")?.lowBalanceAt).toBeUndefined();
   });
 });
+
+// ── cash flow forecast ────────────────────────────────────────────────────
+
+describe("cash flow forecast", () => {
+  const KEY = "test-forecast-api-key";
+  const DAY = 86_400_000;
+  // Real clock on purpose: subscription detection and card cycles read "now" themselves. Whole-day offsets
+  // keep the local time of day, so the day an event lands on never depends on when the suite runs.
+  const now = new Date();
+  const at = (days: number) => new Date(now.getTime() + days * DAY);
+  let userId: string;
+  let otherUserId: string;
+  let bankId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Forecast User", email: `fc${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `fco${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    const bank = await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 1_000_000, currency: "INR" });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+    bankId = bank._id.toString();
+  });
+
+  async function installment(label: string, due: Date, over: Record<string, unknown> = {}, forUser = userId, account = bankId) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { Types } = await import("mongoose");
+    return Transaction.create({
+      user: forUser,
+      account,
+      type: "expense",
+      amount: 200_000,
+      category: "Rent",
+      date: due,
+      isRecurring: true,
+      recurringId: new Types.ObjectId(),
+      recurrenceLabel: label,
+      recurrenceFrequency: "monthly",
+      installmentIndex: 1,
+      installmentStatus: "upcoming",
+      ...over,
+    });
+  }
+  async function spend(amount: number, daysAgo: number, description = "Groceries", over: Record<string, unknown> = {}) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    return Transaction.create({ user: userId, account: bankId, type: "expense", amount, category: "Food", description, date: at(-daysAgo), ...over });
+  }
+  async function forecast(days = 30) {
+    const { getCashFlowForecast } = await import("@/lib/cash-flow-forecast");
+    return getCashFlowForecast(userId, { days, now });
+  }
+
+  it("starts from the money in hand: bank, cash, wallet and savings, not cards, investments or archived accounts", async () => {
+    const { default: Account } = await import("@/models/Account");
+    await Account.create({ user: userId, name: "Cash", type: "cash", balance: 50_000, currency: "INR" });
+    await Account.create({ user: userId, name: "Wallet", type: "wallet", balance: 20_000, currency: "INR" });
+    await Account.create({ user: userId, name: "Savings", type: "savings", balance: 300_000, currency: "INR" });
+    await Account.create({ user: userId, name: "Fund", type: "investment", balance: 9_000_000, currency: "INR" });
+    await Account.create({ user: userId, name: "Axis", type: "credit_card", balance: -400_000, currency: "INR" });
+    await Account.create({ user: userId, name: "Old", type: "bank", balance: 777_000, currency: "INR", isArchived: true });
+    await Account.create({ user: otherUserId, name: "Theirs", type: "bank", balance: 5_000_000, currency: "INR" });
+    const f = await forecast(10);
+    expect(f.startingBalance).toBe(1_370_000);
+    expect(f.inputs.accounts).toBe(4);
+    expect(f.currency).toBe("INR");
+    expect(f.timeZone).toBe("Asia/Kolkata");
+    expect(f.points).toHaveLength(10);
+    expect(f.points[0].balance).toBe(1_370_000);
+    expect(f.inputs.assumptions.length).toBeGreaterThan(2);
+  });
+
+  it("with no accounts it forecasts zero without failing", async () => {
+    const { default: Account } = await import("@/models/Account");
+    await Account.deleteMany({ user: userId });
+    const f = await forecast(5);
+    expect(f).toMatchObject({ startingBalance: 0, endBalance: 0, goesNegative: false, inputs: { accounts: 0 } });
+    expect(f.points).toHaveLength(5);
+  });
+
+  it("lands unpaid recurring payments and income on their days, and leaves out paid ones and other accounts", async () => {
+    const { default: Account } = await import("@/models/Account");
+    const card = await Account.create({ user: userId, name: "Axis", type: "credit_card", balance: 0, currency: "INR" });
+    await installment("Rent", at(3));
+    await installment("Salary", at(8), { type: "income", amount: 5_000_000, category: "Salary" });
+    await installment("Paid already", at(2), { installmentStatus: "paid" });
+    await installment("On the card", at(2), {}, userId, String(card._id));
+    await installment("Someone else's", at(2), {}, otherUserId, bankId);
+    await installment("Far away", at(45));
+    await installment("Gym", at(-2), { amount: 100_000 });
+    const f = await forecast(30);
+    const days = (offset: number) => f.points[offset].date;
+    expect(f.events.map((e) => [e.label, e.kind, e.amount])).toEqual([
+      ["Gym", "recurring", -100_000], // overdue: counts today
+      ["Rent", "recurring", -200_000],
+      ["Salary", "recurring", 5_000_000],
+    ]);
+    expect(f.events[0].date).toBe(days(0));
+    expect(f.events[1].date).toBe(days(3));
+    expect(f.events[2].date).toBe(days(8));
+    expect(f.points[0].balance).toBe(900_000);
+    expect(f.points[3].balance).toBe(700_000);
+    expect(f.points[8].balance).toBe(5_700_000);
+    expect(f.inputs.recurringCount).toBe(3);
+    expect(f.totals).toMatchObject({ inflows: 5_000_000, outflows: 300_000 });
+  });
+
+  it("flags a shortfall: rent due before payday takes the balance below zero", async () => {
+    const { default: Account } = await import("@/models/Account");
+    await Account.updateOne({ _id: bankId }, { $set: { balance: 100_000 } });
+    await installment("Rent", at(3), { amount: 300_000 });
+    await installment("Salary", at(10), { type: "income", amount: 500_000 });
+    const f = await forecast(14);
+    expect(f.goesNegative).toBe(true);
+    expect(f.firstNegativeDate).toBe(f.points[3].date);
+    expect(f.lowest).toEqual({ date: f.points[3].date, balance: -200_000 });
+    expect(f.points[10].balance).toBe(300_000);
+    expect(f.endBalance).toBe(300_000);
+  });
+
+  it("counts loans the user owes, not money others owe", async () => {
+    const { default: Loan } = await import("@/models/Loan");
+    const base = { user: userId, principalAmount: 500_000, remainingAmount: 500_000, startDate: at(-30) };
+    await Loan.create({ ...base, direction: "received", counterparty: "Asha", dueDate: at(4) });
+    await Loan.create({ ...base, direction: "given", counterparty: "Ravi", dueDate: at(4) });
+    await Loan.create({ ...base, direction: "received", counterparty: "Settled", dueDate: at(4), isSettled: true });
+    const f = await forecast(30);
+    expect(f.events.map((e) => [e.label, e.kind, e.amount])).toEqual([["Loan from Asha", "loan", -500_000]]);
+    expect(f.inputs.billCount).toBe(1);
+    expect(f.points[4].balance).toBe(500_000);
+  });
+
+  it("counts the next unpaid statement of a credit card on its due date", async () => {
+    const { default: Account } = await import("@/models/Account");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const closeDay = Math.min(new Date(now.getTime() - 10 * DAY).getDate(), 28);
+    const card = await Account.create({
+      user: userId,
+      name: "Axis",
+      type: "credit_card",
+      balance: 0,
+      currency: "INR",
+      creditMeta: { billingCycleDay: closeDay, paymentDueDay: 28, creditLimit: 5_000_000, minPaymentPct: 5 },
+    });
+    await Transaction.create({ user: userId, account: card._id, type: "expense", amount: 123_400, category: "shopping", date: at(-15) });
+    const f = await forecast(60);
+    const cardEvent = f.events.find((e) => e.kind === "card");
+    expect(cardEvent).toMatchObject({ label: "Axis payment", amount: -123_400 });
+    // card purchases do not hit the balance until the statement is paid
+    expect(f.points[0].balance).toBe(1_000_000);
+    expect(f.inputs.dailyAverageSpend).toBe(0);
+  });
+
+  it("repeats a detected subscription on its cadence and keeps it out of the daily average", async () => {
+    for (const daysAgo of [85, 55, 25]) await spend(64_900, daysAgo, "Netflix", { category: "Entertainment" });
+    const f = await forecast(40);
+    const subs = f.events.filter((e) => e.kind === "subscription");
+    expect(subs).toHaveLength(2); // in about 5 days and again a month later
+    expect(subs.every((e) => e.amount === -64_900 && e.label.toLowerCase().includes("netflix"))).toBe(true);
+    expect(f.inputs.subscriptionCount).toBe(1);
+    expect(f.inputs.dailyAverageSpend).toBe(0); // the one charge in the last 30 days is the subscription
+  });
+
+  it("ignores voided rows, in the daily average and in the upcoming recurring payments", async () => {
+    await spend(300_000, 10);
+    await spend(300_000, 12, "Groceries", { reviewStatus: "voided" }); // a duplicate that was voided
+    await installment("Phantom rent", at(2), { reviewStatus: "voided", amount: 900_000 });
+    const f = await forecast(5);
+    expect(f.inputs.dailyAverageSpend).toBe(10_000);
+    expect(f.events.map((e) => e.label)).not.toContain("Phantom rent");
+  });
+
+  async function refundOf(expense: { _id: unknown }, amount: number, account = bankId, daysAgo = 8) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    return Transaction.create({
+      user: userId, account, type: "income", amount, category: "Shopping", description: "Amazon", date: at(-daysAgo),
+      refundOf: expense._id, refundStatus: "confirmed",
+    });
+  }
+
+  it("takes a confirmed refund off the daily average when the expense it refunds is in the count", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const amazon = await spend(600_000, 10, "Amazon");
+    await refundOf(amazon, 300_000);
+    await Transaction.create({ user: userId, account: bankId, type: "income", amount: 500_000, category: "Salary", description: "Pay", date: at(-7) }); // ordinary income is not a refund
+    const f = await forecast(5);
+    expect(f.inputs.dailyAverageSpend).toBe(10_000); // (6,000 - 3,000) / 30 days
+  });
+
+  it("a refund into this account for a card purchase, or for a purchase older than the window, does not lower the average", async () => {
+    const { default: Account } = await import("@/models/Account");
+    const card = await Account.create({ user: userId, name: "Card", type: "credit_card", balance: 0, currency: "INR" });
+    const { default: Transaction } = await import("@/models/Transaction");
+    await spend(300_000, 10, "Groceries");
+    const onCard = await Transaction.create({ user: userId, account: card._id, type: "expense", amount: 900_000, category: "Shopping", description: "TV", date: at(-9) });
+    await refundOf(onCard, 900_000); // the refund lands in the bank account
+    const old = await spend(900_000, 45, "Sofa"); // before the 30 day window
+    await refundOf(old, 900_000, bankId, 5);
+    const f = await forecast(5);
+    expect(f.inputs.dailyAverageSpend).toBe(10_000); // only the groceries count
+  });
+
+  it("the reported daily average is the one applied, and is never negative", async () => {
+    const small = await spend(100_000, 10, "Amazon");
+    await refundOf(small, 900_000); // a refund larger than the spend
+    const f = await forecast(5);
+    expect(f.inputs.dailyAverageSpend).toBe(0);
+    expect(f.totals.dailySpendTotal).toBe(0);
+    expect(f.points.map((p) => p.balance)).toEqual([1_000_000, 1_000_000, 1_000_000, 1_000_000, 1_000_000]);
+  });
+
+  it("takes the daily average from ordinary spending of the last 30 days, from tomorrow on", async () => {
+    await spend(300_000, 10);
+    await spend(600_000, 40); // older than 30 days
+    await installment("Rent paid", at(-5), { installmentStatus: "paid", amount: 900_000 }); // recurring rows are not everyday spend
+    const f = await forecast(5);
+    expect(f.inputs.dailyAverageSpend).toBe(10_000);
+    expect(f.inputs.lookbackDays).toBe(30);
+    expect(f.points.map((p) => p.balance)).toEqual([1_000_000, 990_000, 980_000, 970_000, 960_000]);
+    expect(f.totals.dailySpendTotal).toBe(40_000);
+  });
+
+  it("uses the user's time zone for the days", async () => {
+    const { default: User } = await import("@/models/User");
+    const { localDateKey } = await import("@/lib/forecast-math");
+    await User.updateOne({ _id: userId }, { $set: { "preferences.timezone": "America/New_York" } });
+    const f = await forecast(3);
+    expect(f.timeZone).toBe("America/New_York");
+    expect(f.points[0].date).toBe(localDateKey(now, "America/New_York"));
+  });
+
+  describe("routes", () => {
+    function req(path = "", headers: Record<string, string> = { authorization: `Bearer ${KEY}` }) {
+      n += 1;
+      return new NextRequest(`http://localhost/api/integrations/forecast${path}`, { method: "GET", headers: { ...headers, "x-request-id": `fc-${n}` } });
+    }
+    const get = async (path = "", headers?: Record<string, string>) => {
+      const { GET } = await import("@/app/api/integrations/forecast/route");
+      return GET(req(path, headers), {});
+    };
+
+    it("GET answers the 30 day forecast in the integration envelope", async () => {
+      await installment("Rent", at(3));
+      const res = await get();
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.success).toBe(true);
+      expect(body.data).toMatchObject({ days: 30, startingBalance: 1_000_000, goesNegative: false, currency: "INR" });
+      expect(body.data.points).toHaveLength(30);
+      expect(body.data.events).toHaveLength(1);
+      expect(Object.keys(body.data.inputs)).toEqual(
+        expect.arrayContaining(["accounts", "lookbackDays", "dailyAverageSpend", "recurringCount", "billCount", "subscriptionCount", "assumptions"])
+      );
+    });
+
+    it("GET ?days sets the window from 1 to 60 and rejects anything else", async () => {
+      expect((await (await get("?days=7")).json()).data.points).toHaveLength(7);
+      expect((await (await get("?days=60")).json()).data.points).toHaveLength(60);
+      for (const bad of ["0", "61", "-3", "abc", "1.5", ""]) {
+        const res = await get(`?days=${bad}`);
+        expect(res.status, `days=${bad}`).toBe(400);
+        expect((await res.json()).error.code).toBe("VALIDATION_ERROR");
+      }
+    });
+
+    it("GET only sees the caller's own data", async () => {
+      const { default: Account } = await import("@/models/Account");
+      await Account.create({ user: otherUserId, name: "Theirs", type: "bank", balance: 9_000_000, currency: "INR" });
+      await installment("Theirs", at(2), {}, otherUserId, bankId);
+      const f = (await (await get()).json()).data;
+      expect(f.startingBalance).toBe(1_000_000);
+      expect(f.events).toEqual([]);
+    });
+
+    it("GET needs a valid API key", async () => {
+      expect((await get("", {})).status).toBe(401);
+      expect((await get("", { authorization: "Bearer wrong-key" })).status).toBe(401);
+    });
+
+    it("the browser route answers the same forecast for the signed-in user, and 401 when signed out", async () => {
+      const { GET } = await import("@/app/api/forecast/route");
+      const call = (path = "") => GET(new NextRequest(`http://localhost/api/forecast${path}`));
+      sessionUser.current = null;
+      expect((await call()).status).toBe(401);
+      sessionUser.current = { id: userId, name: "Forecast User", email: "fc@x.com", role: "user" };
+      try {
+        const res = await call("?days=5");
+        expect(res.status).toBe(200);
+        const { data } = await res.json();
+        expect(data).toMatchObject({ days: 5, startingBalance: 1_000_000 });
+        expect(data.points).toHaveLength(5);
+        expect((await call("?days=99")).status).toBe(400);
+      } finally {
+        sessionUser.current = null;
+      }
+    });
+  });
+});
+
+// ── sinking funds and savings rate ─────────────────────────────────────────
+
+describe("sinking fund maths", () => {
+  const base = (over: Record<string, unknown> = {}) => ({
+    _id: "f1",
+    name: "Insurance",
+    targetAmount: 120000,
+    savedAmount: 0,
+    dueDate: new Date("2026-12-15T00:00:00Z"),
+    createdAt: new Date("2026-06-15T00:00:00Z"),
+    ...over,
+  });
+
+  it("monthsUntil counts calendar months and stops at 0", async () => {
+    const { monthsUntil } = await import("@/lib/sinking-fund-service");
+    const now = new Date("2026-10-20T10:00:00Z");
+    expect(monthsUntil(new Date("2026-12-05T00:00:00Z"), now)).toBe(2);
+    expect(monthsUntil(new Date("2027-01-31T00:00:00Z"), now)).toBe(3);
+    expect(monthsUntil(new Date("2026-10-28T00:00:00Z"), now)).toBe(0);
+    expect(monthsUntil(new Date("2026-01-01T00:00:00Z"), now)).toBe(0);
+  });
+
+  it("suggests what is left spread over the months left, rounded up, and all of it when none are left", async () => {
+    const { describeFund } = await import("@/lib/sinking-fund-service");
+    const now = new Date("2026-10-20T10:00:00Z");
+    const v = describeFund(base({ savedAmount: 20000 }), now);
+    expect(v).toMatchObject({ remaining: 100000, percent: 16, monthsLeft: 2, suggestedMonthly: 50000 });
+    const odd = describeFund(base({ targetAmount: 100001 }), now);
+    expect(odd.suggestedMonthly).toBe(50001);
+    const inDueMonth = describeFund(base({ dueDate: new Date("2026-10-28T00:00:00Z") }), now);
+    expect(inDueMonth).toMatchObject({ monthsLeft: 0, suggestedMonthly: 120000 });
+  });
+
+  it("status: done, overdue, on_track against a straight line, behind", async () => {
+    const { describeFund } = await import("@/lib/sinking-fund-service");
+    const now = new Date("2026-09-15T00:00:00Z"); // 3 of 6 months in: half of 120000
+    expect(describeFund(base({ savedAmount: 120000 }), now).status).toBe("done");
+    expect(describeFund(base({ savedAmount: 130000 }), now)).toMatchObject({ status: "done", remaining: 0, percent: 100, suggestedMonthly: 0 });
+    // 92 of 183 days in: the line is at 60328
+    expect(describeFund(base({ savedAmount: 61000 }), now).status).toBe("on_track");
+    expect(describeFund(base({ savedAmount: 60000 }), now).status).toBe("behind");
+    expect(describeFund(base({ savedAmount: 10 }), new Date("2027-01-02T00:00:00Z")).status).toBe("overdue");
+  });
+
+  it("totals add up and monthlyNeeded uses the plan when there is one and skips finished funds", async () => {
+    const { describeFund, totalFunds } = await import("@/lib/sinking-fund-service");
+    const now = new Date("2026-10-20T10:00:00Z");
+    const funds = [
+      describeFund(base({ _id: "a", savedAmount: 20000 }), now), // needs 50000
+      describeFund(base({ _id: "b", monthlyAmount: 7000 }), now), // plan 7000
+      describeFund(base({ _id: "c", savedAmount: 120000 }), now), // done
+    ];
+    expect(totalFunds(funds)).toEqual({ count: 3, targetAmount: 360000, savedAmount: 140000, remaining: 220000, monthlyNeeded: 57000 });
+  });
+});
+
+describe("savings rate maths", () => {
+  it("rate is saved over income, null without income, and negative when overspent", async () => {
+    const { savingsPoint, ratio } = await import("@/lib/savings-rate");
+    expect(savingsPoint({ year: 2026, month: 10 }, 100000, 75000)).toMatchObject({ saved: 25000, rate: 0.25 });
+    expect(savingsPoint({ year: 2026, month: 10 }, 0, 5000)).toMatchObject({ saved: -5000, rate: null });
+    expect(savingsPoint({ year: 2026, month: 10 }, 100000, 130000).rate).toBe(-0.3);
+    expect(ratio(1, 3)).toBe(0.3333);
+  });
+
+  it("lastMonths ends at the current month, oldest first, across a year boundary", async () => {
+    const { lastMonths } = await import("@/lib/savings-rate");
+    expect(lastMonths(3, new Date(2026, 0, 20))).toEqual([
+      { year: 2025, month: 11 },
+      { year: 2025, month: 12 },
+      { year: 2026, month: 1 },
+    ]);
+  });
+
+  it("trend compares the latest three months with the three before, and is null with too little to compare", async () => {
+    const { savingsPoint, savingsTrend } = await import("@/lib/savings-rate");
+    const pts = (rates: Array<number | null>) =>
+      rates.map((r, i) => savingsPoint({ year: 2026, month: i + 1 }, r === null ? 0 : 100000, r === null ? 0 : 100000 * (1 - r)));
+    expect(savingsTrend(pts([0.1, 0.1, 0.1, 0.3, 0.3, 0.3]))).toBe("up");
+    expect(savingsTrend(pts([0.3, 0.3, 0.3, 0.1, 0.1, 0.1]))).toBe("down");
+    expect(savingsTrend(pts([0.2, 0.2, 0.2, 0.21, 0.2, 0.2]))).toBe("flat");
+    expect(savingsTrend(pts([0.1, 0.3]))).toBe("up");
+    expect(savingsTrend(pts([0.2]))).toBeNull();
+    expect(savingsTrend(pts([null, null, 0.2]))).toBeNull();
+  });
+});
+
+describe("integration sinking funds", () => {
+  const KEY = "test-sinking-funds-api-key";
+  let userId: string;
+  let otherUserId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "SF User", email: `sf${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `sfo${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+  });
+
+  function req(path: string, method: "GET" | "POST" | "PATCH" | "DELETE", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/${path}`, {
+      method,
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json", "idempotency-key": `sf-key-${n}`, ...headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+  const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+  // A fixed time of day so the same call twice sends the same body (the idempotency fingerprint).
+  const inMonths = (months: number) => {
+    const d = new Date();
+    d.setUTCMonth(d.getUTCMonth() + months, 15);
+    d.setUTCHours(0, 0, 0, 0);
+    return d.toISOString();
+  };
+  const fundBody = (over: Record<string, unknown> = {}) => ({ name: "Insurance", targetAmount: 120000, dueDate: inMonths(6), ...over });
+
+  async function create(over: Record<string, unknown> = {}, headers: Record<string, string> = {}) {
+    const { POST } = await import("@/app/api/integrations/sinking-funds/route");
+    return POST(req("sinking-funds", "POST", fundBody(over), headers), {});
+  }
+  async function contribute(id: string, amount: number, headers: Record<string, string> = {}) {
+    const { POST } = await import("@/app/api/integrations/sinking-funds/[id]/contribute/route");
+    return POST(req(`sinking-funds/${id}/contribute`, "POST", { amount }, headers), ctx(id));
+  }
+
+  it("POST creates a fund with its computed fields, and replays on the same key", async () => {
+    const { default: SinkingFund } = await import("@/models/SinkingFund");
+    const first = await create({ savedAmount: 20000 }, { "idempotency-key": "mk" });
+    expect(first.status).toBe(201);
+    const { data } = await first.json();
+    expect(data).toMatchObject({
+      name: "Insurance",
+      targetAmount: 120000,
+      savedAmount: 20000,
+      currency: "INR",
+      monthlyAmount: null,
+      remaining: 100000,
+      percent: 16,
+      isCompleted: false,
+    });
+    expect(data.monthsLeft).toBeGreaterThanOrEqual(5);
+    expect(data.suggestedMonthly).toBe(Math.ceil(100000 / data.monthsLeft));
+    expect(["on_track", "behind"]).toContain(data.status);
+
+    const replay = await create({ savedAmount: 20000 }, { "idempotency-key": "mk" });
+    expect((await replay.json()).data.id).toBe(data.id);
+    expect(await SinkingFund.countDocuments({ user: userId })).toBe(1);
+
+    const clash = await create({ name: "Other" }, { "idempotency-key": "mk" });
+    expect(clash.status).toBe(409);
+  });
+
+  it("POST rejects bad bodies and a missing key", async () => {
+    const { POST } = await import("@/app/api/integrations/sinking-funds/route");
+    expect((await create({ name: "" })).status).toBe(400);
+    expect((await create({ targetAmount: 0 })).status).toBe(400);
+    expect((await create({ targetAmount: 10.5 })).status).toBe(400);
+    expect((await create({ dueDate: "not a date" })).status).toBe(400);
+    expect((await create({ monthlyAmount: -1 })).status).toBe(400);
+    const noKey = new NextRequest("http://localhost/api/integrations/sinking-funds", {
+      method: "POST",
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
+      body: JSON.stringify(fundBody()),
+    });
+    expect((await POST(noKey, {})).status).toBe(400);
+  });
+
+  it("a fund created already at its target is done", async () => {
+    const res = await create({ savedAmount: 120000 });
+    expect((await res.json()).data).toMatchObject({ isCompleted: true, status: "done", remaining: 0, suggestedMonthly: 0 });
+  });
+
+  it("GET lists funds soonest due first with totals, and never another user's", async () => {
+    const { GET } = await import("@/app/api/integrations/sinking-funds/route");
+    const { default: SinkingFund } = await import("@/models/SinkingFund");
+    await create({ name: "Later", dueDate: inMonths(9) });
+    await create({ name: "Sooner", dueDate: inMonths(3), savedAmount: 30000 });
+    await SinkingFund.create({ user: otherUserId, name: "Theirs", targetAmount: 999, dueDate: new Date(), savedAmount: 0 });
+
+    const res = await GET(req("sinking-funds", "GET"), {});
+    expect(res.status).toBe(200);
+    const { data } = await res.json();
+    expect(data.funds.map((f: { name: string }) => f.name)).toEqual(["Sooner", "Later"]);
+    expect(data.totals).toMatchObject({ count: 2, targetAmount: 240000, savedAmount: 30000, remaining: 210000 });
+    expect(data.totals.monthlyNeeded).toBeGreaterThan(0);
+  });
+
+  it("GET one, PATCH, and ownership", async () => {
+    const { GET, PATCH } = await import("@/app/api/integrations/sinking-funds/[id]/route");
+    const { default: SinkingFund } = await import("@/models/SinkingFund");
+    const { data } = await (await create()).json();
+    const id = data.id as string;
+
+    const one = await GET(req(`sinking-funds/${id}`, "GET"), ctx(id));
+    expect((await one.json()).data.name).toBe("Insurance");
+
+    const edit = await PATCH(req(`sinking-funds/${id}`, "PATCH", { name: "Car insurance", monthlyAmount: 15000, targetAmount: 150000 }), ctx(id));
+    expect(edit.status).toBe(200);
+    expect((await edit.json()).data).toMatchObject({ name: "Car insurance", monthlyAmount: 15000, targetAmount: 150000, remaining: 150000 });
+    const cleared = await PATCH(req(`sinking-funds/${id}`, "PATCH", { monthlyAmount: null }), ctx(id));
+    expect((await cleared.json()).data.monthlyAmount).toBeNull();
+
+    expect((await PATCH(req(`sinking-funds/${id}`, "PATCH", {}), ctx(id))).status).toBe(400);
+    expect((await PATCH(req(`sinking-funds/${id}`, "PATCH", { savedAmount: 5 }), ctx(id))).status).toBe(400);
+    expect((await GET(req("sinking-funds/nope", "GET"), ctx("nope"))).status).toBe(400);
+
+    const theirs = await SinkingFund.create({ user: otherUserId, name: "Theirs", targetAmount: 999, dueDate: new Date(), savedAmount: 0 });
+    const tid = theirs._id.toString();
+    expect((await GET(req(`sinking-funds/${tid}`, "GET"), ctx(tid))).status).toBe(404);
+    expect((await PATCH(req(`sinking-funds/${tid}`, "PATCH", { name: "Mine now" }), ctx(tid))).status).toBe(404);
+    expect((await contribute(tid, 100)).status).toBe(404);
+    expect((await SinkingFund.findById(tid).lean<{ name: string }>())!.name).toBe("Theirs");
+  });
+
+  it("contribute adds once per key, takes money out down to 0, and rejects 0", async () => {
+    const { data } = await (await create({ savedAmount: 10000 })).json();
+    const id = data.id as string;
+
+    const add = await contribute(id, 25000, { "idempotency-key": "c1" });
+    expect(add.status).toBe(200);
+    expect((await add.json()).data).toMatchObject({ savedAmount: 35000, remaining: 85000, percent: 29 });
+    const replay = await contribute(id, 25000, { "idempotency-key": "c1" });
+    expect((await replay.json()).data.savedAmount).toBe(35000);
+
+    const take = await contribute(id, -5000);
+    expect((await take.json()).data.savedAmount).toBe(30000);
+    const floor = await contribute(id, -999999);
+    expect((await floor.json()).data.savedAmount).toBe(0);
+
+    expect((await contribute(id, 0)).status).toBe(400);
+    expect((await contribute(id, 1.5)).status).toBe(400);
+  });
+
+  it("reaching the target completes the fund and notifies once; taking money out reopens it", async () => {
+    const { default: Notification } = await import("@/models/Notification");
+    const { default: SinkingFund } = await import("@/models/SinkingFund");
+    const { data } = await (await create({ savedAmount: 100000 })).json();
+    const id = data.id as string;
+
+    const done = await contribute(id, 20000);
+    expect((await done.json()).data).toMatchObject({ isCompleted: true, status: "done", remaining: 0 });
+    expect(await Notification.countDocuments({ user: userId, "meta.sinkingFundId": id })).toBe(1);
+    expect((await SinkingFund.findById(id).lean<{ completedAt?: Date }>())!.completedAt).toBeInstanceOf(Date);
+
+    await contribute(id, 5000); // still done: no second notification
+    expect(await Notification.countDocuments({ user: userId, "meta.sinkingFundId": id })).toBe(1);
+
+    const reopened = await contribute(id, -50000);
+    expect((await reopened.json()).data).toMatchObject({ isCompleted: false, completedAt: null });
+    expect((await SinkingFund.findById(id).lean<{ completedAt?: Date }>())!.completedAt).toBeUndefined();
+  });
+
+  it("two contributions that both cross the target send one alert", async () => {
+    const { default: Notification } = await import("@/models/Notification");
+    const { data } = await (await create({ targetAmount: 100000, savedAmount: 90000 })).json();
+    const id = data.id as string;
+    const [a, b] = await Promise.all([contribute(id, 10000), contribute(id, 10000)]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    expect(await Notification.countDocuments({ user: userId, "meta.sinkingFundId": id })).toBe(1);
+  });
+
+  it("two edits that both complete the fund send one alert", async () => {
+    const { default: Notification } = await import("@/models/Notification");
+    const { PATCH } = await import("@/app/api/integrations/sinking-funds/[id]/route");
+    const { data } = await (await create({ targetAmount: 120000, savedAmount: 100000 })).json();
+    const id = data.id as string;
+    const edit = () => PATCH(req(`sinking-funds/${id}`, "PATCH", { targetAmount: 100000 }), ctx(id));
+    const [a, b] = await Promise.all([edit(), edit()]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    expect(await Notification.countDocuments({ user: userId, "meta.sinkingFundId": id })).toBe(1);
+  });
+
+  it("refuses absurd amounts and never lets the balance pass the cap", async () => {
+    expect((await create({ targetAmount: 1e15 })).status).toBe(400);
+    expect((await create({ savedAmount: 1e15 })).status).toBe(400);
+    expect((await create({ monthlyAmount: 1e15 })).status).toBe(400);
+    const { data } = await (await create({ targetAmount: 1e14 })).json();
+    const id = data.id as string;
+    expect((await contribute(id, 1e15)).status).toBe(400);
+    expect((await contribute(id, -1e15)).status).toBe(400);
+    expect((await contribute(id, 1e14)).status).toBe(200);
+    const second = await contribute(id, 1e14);
+    expect(second.status).toBe(400); // refused, not quietly capped
+    const { default: SinkingFund } = await import("@/models/SinkingFund");
+    expect((await SinkingFund.findById(id).lean<{ savedAmount: number }>())!.savedAmount).toBe(1e14);
+    const small = await contribute(id, 1);
+    expect(small.status).toBe(400); // even one paise over
+    expect((await contribute(id, -1)).status).toBe(200); // taking money out still works
+  });
+
+  it("a deposit on a fund that is not yours is a 404, not a limit error", async () => {
+    const { default: SinkingFund } = await import("@/models/SinkingFund");
+    const theirs = await SinkingFund.create({ user: otherUserId, name: "Theirs", targetAmount: 100, savedAmount: 0, dueDate: new Date() });
+    expect((await contribute(theirs._id.toString(), 50)).status).toBe(404);
+  });
+
+  it("a failed goal_reached alert does not fail or repeat the contribution", async () => {
+    const { default: Notification } = await import("@/models/Notification");
+    const { default: SinkingFund } = await import("@/models/SinkingFund");
+    const { data } = await (await create({ targetAmount: 100000, savedAmount: 90000 })).json();
+    const id = data.id as string;
+    const spy = vi.spyOn(Notification, "create").mockRejectedValueOnce(new Error("notifications are down") as never);
+    try {
+      const first = await contribute(id, 10000, { "idempotency-key": "reach-1" });
+      expect(first.status).toBe(200);
+      expect((await first.json()).data).toMatchObject({ savedAmount: 100000, isCompleted: true, status: "done" });
+      const replay = await contribute(id, 10000, { "idempotency-key": "reach-1" });
+      expect((await replay.json()).data.savedAmount).toBe(100000);
+      expect(spy).toHaveBeenCalledTimes(1); // the alert really was attempted, and its failure changed nothing
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await SinkingFund.findById(id).lean<{ savedAmount: number }>())!.savedAmount).toBe(100000); // added once
+  });
+
+  it("the answer to a write does not depend on a read after it", async () => {
+    const { default: SinkingFund } = await import("@/models/SinkingFund");
+    const { PATCH } = await import("@/app/api/integrations/sinking-funds/[id]/route");
+    const { data } = await (await create({ savedAmount: 5000 })).json();
+    const id = data.id as string;
+    const spy = vi.spyOn(SinkingFund, "findOne").mockImplementation((() => {
+      throw new Error("no read allowed after the write");
+    }) as never);
+    try {
+      const saved = await contribute(id, 100);
+      expect(saved.status).toBe(200);
+      expect((await saved.json()).data).toMatchObject({ savedAmount: 5100 });
+      const edited = await PATCH(req(`sinking-funds/${id}`, "PATCH", { name: "Renamed", monthlyAmount: 700 }), ctx(id));
+      expect(edited.status).toBe(200);
+      expect((await edited.json()).data).toMatchObject({ name: "Renamed", monthlyAmount: 700, savedAmount: 5100 });
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await SinkingFund.findById(id).lean<{ name: string; savedAmount: number }>())).toMatchObject({ name: "Renamed", savedAmount: 5100 });
+  });
+
+  it("an edit and a contribution move updatedAt forward", async () => {
+    const { PATCH } = await import("@/app/api/integrations/sinking-funds/[id]/route");
+    const { data } = await (await create({ savedAmount: 5000 })).json();
+    const id = data.id as string;
+    await new Promise((r) => setTimeout(r, 15));
+    const edited = (await (await PATCH(req(`sinking-funds/${id}`, "PATCH", { name: "Renamed" }), ctx(id))).json()).data;
+    expect(Date.parse(edited.updatedAt)).toBeGreaterThan(Date.parse(data.updatedAt));
+    await new Promise((r) => setTimeout(r, 15));
+    const saved = (await (await contribute(id, 100)).json()).data;
+    expect(Date.parse(saved.updatedAt)).toBeGreaterThan(Date.parse(edited.updatedAt));
+  });
+
+  it("a name that starts with a dollar sign is stored as text, not read as a field", async () => {
+    const { PATCH } = await import("@/app/api/integrations/sinking-funds/[id]/route");
+    const { data } = await (await create({ savedAmount: 5000 })).json();
+    const id = data.id as string;
+    const res = await PATCH(req(`sinking-funds/${id}`, "PATCH", { name: "$savedAmount" }), ctx(id));
+    expect((await res.json()).data).toMatchObject({ name: "$savedAmount", savedAmount: 5000 });
+  });
+
+  it("DELETE soft-deletes, replays, and the fund leaves the list", async () => {
+    const { DELETE } = await import("@/app/api/integrations/sinking-funds/[id]/route");
+    const { GET } = await import("@/app/api/integrations/sinking-funds/route");
+    const { default: SinkingFund } = await import("@/models/SinkingFund");
+    const { data } = await (await create()).json();
+    const id = data.id as string;
+
+    const del = await DELETE(req(`sinking-funds/${id}`, "DELETE", undefined, { "idempotency-key": "d1" }), ctx(id));
+    expect(del.status).toBe(200);
+    expect((await del.json()).data).toEqual({ id, deleted: true });
+    expect((await DELETE(req(`sinking-funds/${id}`, "DELETE", undefined, { "idempotency-key": "d1" }), ctx(id))).status).toBe(200);
+    expect((await DELETE(req(`sinking-funds/${id}`, "DELETE"), ctx(id))).status).toBe(404);
+    expect((await SinkingFund.findById(id).lean<{ isDeleted?: boolean }>())!.isDeleted).toBe(true);
+    expect((await (await GET(req("sinking-funds", "GET"), {})).json()).data.funds).toEqual([]);
+  });
+
+  it("announces itself on realtime: its collection maps to the sinkingFunds resource", async () => {
+    const { resourcesChangedSince } = await import("@/lib/realtime/changed-since");
+    const before = new Date(Date.now() - 1000);
+    await create();
+    expect(await resourcesChangedSince(userId, before)).toContain("sinkingFunds");
+    expect(await resourcesChangedSince(otherUserId, before)).not.toContain("sinkingFunds");
+  });
+
+  it("the browser routes list and create for the signed-in user", async () => {
+    const { GET, POST } = await import("@/app/api/sinking-funds/route");
+    sessionUser.current = { id: userId, name: "SF User", email: "sf@x.com", role: "user" };
+    const made = await POST(
+      new NextRequest("http://localhost/api/sinking-funds", { method: "POST", body: JSON.stringify(fundBody({ name: "Tax" })) })
+    );
+    expect(made.status).toBe(201);
+    const list = await (await GET()).json();
+    expect(list.data.funds.map((f: { name: string }) => f.name)).toEqual(["Tax"]);
+    const bad = await POST(new NextRequest("http://localhost/api/sinking-funds", { method: "POST", body: JSON.stringify({}) }));
+    expect(bad.status).toBe(400);
+    sessionUser.current = null;
+    expect((await GET()).status).toBe(401);
+  });
+});
+
+describe("integration savings rate", () => {
+  const KEY = "test-savings-rate-api-key";
+  let userId: string;
+  let otherUserId: string;
+  let accountId: string;
+  let otherAccountId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { default: Account } = await import("@/models/Account");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "SR User", email: `sr${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `sro${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    const account = await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 0, currency: "INR" });
+    const wallet = await Account.create({ user: user._id, name: "Wallet", type: "cash", balance: 0, currency: "INR" });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+    accountId = account._id.toString();
+    otherAccountId = wallet._id.toString();
+  });
+
+  const call = async (query = "") => {
+    n += 1;
+    const { GET } = await import("@/app/api/integrations/savings-rate/route");
+    return GET(
+      new NextRequest(`http://localhost/api/integrations/savings-rate${query}`, { headers: { authorization: `Bearer ${KEY}` } }),
+      {}
+    );
+  };
+  async function add(type: "income" | "expense" | "transfer", amount: number, monthsAgo: number, extra: Record<string, unknown> = {}, user = userId) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const now = new Date();
+    return Transaction.create({
+      user,
+      account: accountId,
+      type,
+      amount,
+      currency: "INR",
+      category: type === "income" ? "salary" : "food",
+      date: new Date(now.getFullYear(), now.getMonth() - monthsAgo, 10, 12),
+      ...extra,
+    });
+  }
+
+  it("answers one entry per month, oldest first, ending with this month", async () => {
+    const res = await call("?months=3");
+    expect(res.status).toBe(200);
+    const { data } = await res.json();
+    expect(data.months).toHaveLength(3);
+    const now = new Date();
+    expect(data.months[2]).toMatchObject({ year: now.getFullYear(), month: now.getMonth() + 1 });
+    expect(data.current).toEqual(data.months[2]);
+    expect(data.months.every((m: { rate: number | null }) => m.rate === null)).toBe(true);
+    expect(data.average).toEqual({ income: 0, expense: 0, saved: 0, rate: null });
+    expect(data.trend).toBeNull();
+  });
+
+  it("income minus spending over income, per month, with the average over the window", async () => {
+    await add("income", 100000, 0);
+    await add("expense", 40000, 0);
+    await add("income", 100000, 1);
+    await add("expense", 80000, 1);
+    await add("expense", 5000, 2); // spent with no income that month
+    const { data } = await (await call("?months=3")).json();
+    expect(data.months[2]).toMatchObject({ income: 100000, expense: 40000, saved: 60000, rate: 0.6 });
+    expect(data.months[1]).toMatchObject({ income: 100000, expense: 80000, saved: 20000, rate: 0.2 });
+    expect(data.months[0]).toMatchObject({ income: 0, expense: 5000, saved: -5000, rate: null });
+    expect(data.average).toEqual({ income: 200000, expense: 125000, saved: 75000, rate: 0.375 });
+    expect(data.trend).toBe("up");
+  });
+
+  it("transfers between accounts do not count, and a confirmed refund comes off spending", async () => {
+    await add("income", 100000, 0);
+    await add("expense", 30000, 0);
+    await add("transfer", 50000, 0, { transferTo: otherAccountId });
+    await add("income", 10000, 0, { refundStatus: "confirmed", category: "food" });
+    const { data } = await (await call("?months=1")).json();
+    expect(data.months[0]).toMatchObject({ income: 100000, expense: 20000, saved: 80000, rate: 0.8 });
+  });
+
+  it("is per user and validates months", async () => {
+    await add("income", 100000, 0, {}, otherUserId);
+    const { default: Account } = await import("@/models/Account");
+    expect(await Account.countDocuments({ user: otherUserId })).toBe(0); // the row above has no account of theirs: ignored by user
+    const { data } = await (await call("?months=1")).json();
+    expect(data.months[0].income).toBe(0);
+    expect((await call("?months=0")).status).toBe(400);
+    expect((await call("?months=25")).status).toBe(400);
+    expect((await call("?months=abc")).status).toBe(400);
+    expect((await call("?months=1.5")).status).toBe(400);
+    expect((await (await call()).json()).data.months).toHaveLength(6);
+  });
+
+  it("the browser route answers the same view", async () => {
+    const { GET } = await import("@/app/api/savings-rate/route");
+    await add("income", 100000, 0);
+    await add("expense", 25000, 0);
+    sessionUser.current = { id: userId, name: "SR User", email: "sr@x.com", role: "user" };
+    const res = await GET(new NextRequest("http://localhost/api/savings-rate?months=2"));
+    expect(res.status).toBe(200);
+    expect((await res.json()).data.current).toMatchObject({ income: 100000, expense: 25000, rate: 0.75 });
+    expect((await GET(new NextRequest("http://localhost/api/savings-rate?months=99"))).status).toBe(400);
+    sessionUser.current = null;
+    expect((await GET(new NextRequest("http://localhost/api/savings-rate"))).status).toBe(401);
+  });
+});
+
+describe("integration card rewards", () => {
+  const KEY = "test-card-rewards-api-key";
+  let userId: string;
+  let cardId: string;
+  let n = 0;
+
+  async function makeCard(user: string, over: Record<string, unknown> = {}) {
+    const { default: Account } = await import("@/models/Account");
+    const card = await Account.create({
+      user,
+      name: "Axis Magnus",
+      type: "credit_card",
+      balance: 0,
+      currency: "INR",
+      creditMeta: { billingCycleDay: 5, paymentDueDay: 25, creditLimit: 1_000_000, lastFourDigits: "4242" },
+      ...over,
+    });
+    return card._id.toString();
+  }
+
+  async function spendOn(account: string, amount: number, category: string, extra: Record<string, unknown> = {}) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    await Transaction.create({ user: userId, account, type: "expense", amount, category, date: new Date(), ...extra });
+  }
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Rewards", email: `rw${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    userId = user._id.toString();
+    cardId = await makeCard(userId);
+  });
+
+  function req(path: string, method = "GET", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/credit-cards${path}`, {
+      method,
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json", "idempotency-key": `rw-key-${n}`, ...headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+  const ctx = (id: string) => ({ params: Promise.resolve({ accountId: id }) });
+  const card = async () => await import("@/app/api/integrations/credit-cards/[accountId]/rewards/route");
+  const getCard = async (id = cardId, query = "") => (await card()).GET(req(`/${id}/rewards${query}`), ctx(id));
+  const putRule = async (body: unknown, id = cardId, headers: Record<string, string> = {}) =>
+    (await card()).PUT(req(`/${id}/rewards`, "PUT", body, headers), ctx(id));
+
+  it("a card with no rule says so, and an overview lists it", async () => {
+    const res = await getCard();
+    expect(res.status).toBe(200);
+    expect((await res.json()).data).toMatchObject({ accountId: cardId, name: "Axis Magnus", lastFourDigits: "4242", rule: null, reason: "no_rule", cycles: [], total: null });
+
+    const { GET } = await import("@/app/api/integrations/credit-cards/rewards/route");
+    const overview = (await (await GET(req("/rewards"), {})).json()).data;
+    expect(overview.currentValue).toBe(0);
+    expect(overview.cards).toHaveLength(1);
+    expect(overview.cards[0]).toMatchObject({ accountId: cardId, reason: "no_rule" });
+  });
+
+  it("PUT validates the rule and the key", async () => {
+    for (const bad of [
+      {},
+      { kind: "cashback", baseRate: 150 },
+      { kind: "cashback", baseRate: 1, pointValue: 25 },
+      { kind: "points", baseRate: 1, categoryRates: [{ category: "a", rate: 1 }, { category: "A", rate: 2 }] },
+      { kind: "cashback", baseRate: 1, other: true },
+    ]) {
+      expect((await putRule(bad)).status).toBe(400);
+    }
+    const { PUT } = await card();
+    const noKey = await PUT(
+      new NextRequest("http://localhost/x", {
+        method: "PUT",
+        headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ kind: "cashback", baseRate: 1 }),
+      }),
+      ctx(cardId)
+    );
+    expect(noKey.status).toBe(400);
+  });
+
+  it("PUT stores the rule, replays on the same key, refuses the same key with another body", async () => {
+    const rule = { kind: "cashback", baseRate: 1.5, categoryRates: [{ category: "Fuel", rate: 5 }], cap: 100000 };
+    const first = await putRule(rule, cardId, { "idempotency-key": "set-rule" });
+    expect(first.status).toBe(200);
+    expect((await first.json()).data.rule).toEqual({ kind: "cashback", baseRate: 1.5, categoryRates: [{ category: "fuel", rate: 5 }], cap: 100000, pointValue: null });
+
+    const replay = await putRule(rule, cardId, { "idempotency-key": "set-rule" });
+    expect(replay.status).toBe(200);
+    const other = await putRule({ ...rule, baseRate: 2 }, cardId, { "idempotency-key": "set-rule" });
+    expect(other.status).toBe(409);
+
+    const got = (await (await getCard()).json()).data;
+    expect(got.rule.baseRate).toBe(1.5);
+    expect(got.reason).toBeNull();
+  });
+
+  it("estimates the current cycle: category rates, a cap and a confirmed refund", async () => {
+    await putRule({ kind: "cashback", baseRate: 1, categoryRates: [{ category: "fuel", rate: 5 }], cap: 5_500 });
+    await spendOn(cardId, 100_000, "Fuel"); // 5,000
+    await spendOn(cardId, 100_000, "food"); // 1,000
+    await spendOn(cardId, 50_000, "food"); // 500
+    const { default: Transaction } = await import("@/models/Transaction");
+    await Transaction.create({ user: userId, account: cardId, type: "income", amount: 50_000, category: "food", date: new Date(), refundStatus: "confirmed" }); // -500
+    await Transaction.create({ user: userId, account: cardId, type: "income", amount: 90_000, category: "payment", date: new Date() }); // a card payment: ignored
+
+    const data = (await (await getCard(cardId, "?cycles=2")).json()).data;
+    expect(data.cycles).toHaveLength(2);
+    const current = data.cycles[0];
+    expect(current).toMatchObject({ isCurrent: true, unit: "paise", spend: 250_000, refunded: 50_000, uncapped: 6_000, earned: 5_500, capReached: true, value: 5_500 });
+    expect(current.byCategory.map((c: { category: string; earned: number }) => [c.category, c.earned])).toEqual([["fuel", 5_000], ["food", 1_000]]);
+    expect(data.cycles[1]).toMatchObject({ isCurrent: false, earned: 0 });
+    expect(data.total).toEqual({ earned: 5_500, value: 5_500 });
+  });
+
+  it("a voided row (a duplicate or not a transaction) earns nothing", async () => {
+    await putRule({ kind: "cashback", baseRate: 10 });
+    await spendOn(cardId, 20_000, "food");
+    await spendOn(cardId, 80_000, "food", { reviewStatus: "voided" });
+    const cycle = (await (await getCard(cardId, "?cycles=1")).json()).data.cycles[0];
+    expect(cycle).toMatchObject({ spend: 20_000, earned: 2_000 });
+  });
+
+  it("points rules count points and value them", async () => {
+    await putRule({ kind: "points", baseRate: 4, pointValue: 50 });
+    await spendOn(cardId, 250_000, "travel");
+    const cycle = (await (await getCard(cardId, "?cycles=1")).json()).data.cycles[0];
+    expect(cycle).toMatchObject({ unit: "points", earned: 100, value: 5_000 });
+  });
+
+  it("only this card's own spending counts", async () => {
+    const { default: Account } = await import("@/models/Account");
+    const other = await makeCard(userId, { name: "Other card" });
+    await putRule({ kind: "cashback", baseRate: 10 });
+    await spendOn(other, 100_000, "food");
+    await spendOn(cardId, 20_000, "food");
+    void Account;
+    const cycle = (await (await getCard(cardId, "?cycles=1")).json()).data.cycles[0];
+    expect(cycle).toMatchObject({ spend: 20_000, earned: 2_000 });
+  });
+
+  it("a card without a billing cycle says why there is no estimate", async () => {
+    const bare = await makeCard(userId, { name: "Bare", creditMeta: { creditLimit: 100_000 } });
+    expect((await putRule({ kind: "cashback", baseRate: 1 }, bare)).status).toBe(200);
+    expect((await (await getCard(bare)).json()).data).toMatchObject({ reason: "billing_cycle_not_set", cycles: [], total: null });
+  });
+
+  it("DELETE removes the rule", async () => {
+    await putRule({ kind: "cashback", baseRate: 1 });
+    const { DELETE } = await card();
+    const res = await DELETE(req(`/${cardId}/rewards`, "DELETE"), ctx(cardId));
+    expect(res.status).toBe(200);
+    expect((await res.json()).data).toEqual({ id: cardId, deleted: true });
+    expect((await (await getCard()).json()).data.rule).toBeNull();
+  });
+
+  it("overview adds up what the current cycles are worth", async () => {
+    const second = await makeCard(userId, { name: "Second" });
+    await putRule({ kind: "cashback", baseRate: 1 });
+    await putRule({ kind: "cashback", baseRate: 2 }, second);
+    await spendOn(cardId, 100_000, "food"); // 1,000
+    await spendOn(second, 100_000, "food"); // 2,000
+    const { GET } = await import("@/app/api/integrations/credit-cards/rewards/route");
+    const data = (await (await GET(req("/rewards"), {})).json()).data;
+    expect(data.currentValue).toBe(3_000);
+    expect(data.cards).toHaveLength(2);
+  });
+
+  it("rejects other people's cards, non-cards, archived cards and bad ids", async () => {
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const stranger = await User.create({ name: "S", email: `s${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    const theirs = await makeCard(stranger._id.toString());
+    expect((await getCard(theirs)).status).toBe(404);
+    expect((await putRule({ kind: "cashback", baseRate: 1 }, theirs)).status).toBe(404);
+    const { DELETE } = await card();
+    expect((await DELETE(req(`/${theirs}/rewards`, "DELETE"), ctx(theirs))).status).toBe(404);
+
+    const bank = await Account.create({ user: userId, name: "Bank", type: "bank", balance: 0, currency: "INR" });
+    expect((await getCard(bank._id.toString())).status).toBe(400);
+
+    await Account.updateOne({ _id: cardId }, { isArchived: true });
+    expect((await getCard()).status).toBe(404);
+
+    expect((await getCard("not-an-id")).status).toBe(400);
+    expect((await getCard(cardId, "?cycles=0")).status).toBe(400);
+    expect((await getCard(cardId, "?cycles=13")).status).toBe(400);
+  });
+
+  it("answers 401 without an API key", async () => {
+    const { GET } = await card();
+    const res = await GET(new NextRequest("http://localhost/x"), ctx(cardId));
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("browser card rewards routes", () => {
+  let userId: string;
+  let cardId: string;
+
+  beforeEach(async () => {
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const user = await User.create({ name: "Browser", email: `br${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    userId = user._id.toString();
+    sessionUser.current = { id: userId, name: "Browser", email: user.email, role: "user" };
+    const card = await Account.create({
+      user: user._id,
+      name: "Card",
+      type: "credit_card",
+      balance: 0,
+      currency: "INR",
+      creditMeta: { billingCycleDay: 5, paymentDueDay: 25, creditLimit: 100_000 },
+    });
+    cardId = card._id.toString();
+  });
+  afterEach(() => {
+    sessionUser.current = null;
+  });
+
+  const ctx = () => ({ params: Promise.resolve({ accountId: cardId }) });
+  const json = (method: string, body?: unknown) =>
+    new NextRequest("http://localhost/api/credit-cards/x/rewards", {
+      method,
+      headers: { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
+  it("sets, reads and clears a rule for the signed-in user", async () => {
+    const { GET, PUT, DELETE } = await import("@/app/api/credit-cards/[accountId]/rewards/route");
+    expect((await PUT(json("PUT", { kind: "cashback", baseRate: 2 }), ctx())).status).toBe(200);
+    expect((await (await GET(json("GET"), ctx())).json()).rule).toMatchObject({ kind: "cashback", baseRate: 2 });
+    expect((await PUT(json("PUT", { kind: "cashback", baseRate: 500 }), ctx())).status).toBe(400);
+    expect((await DELETE(json("DELETE"), ctx())).status).toBe(200);
+    expect((await (await GET(json("GET"), ctx())).json()).rule).toBeNull();
+  });
+
+  it("lists every card in the overview, and signed-out gets 401", async () => {
+    const { GET } = await import("@/app/api/credit-cards/rewards/route");
+    const data = await (await GET()).json();
+    expect(data.cards).toHaveLength(1);
+    sessionUser.current = null;
+    expect((await GET()).status).toBe(401);
+  });
+});
+
+
+describe("net worth", () => {
+  const KEY = "test-net-worth-api-key";
+  let userId: string;
+  let otherUserId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "NW User", email: `nw${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "NW Other", email: `nwo${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+  });
+
+  const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+  function req(path: string, method = "GET", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/net-worth${path}`, {
+      method,
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json", "idempotency-key": `nw-key-${n}`, ...headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+  const getReport = async (query = "") => {
+    const { GET } = await import("@/app/api/integrations/net-worth/route");
+    const res = await GET(req(query), {});
+    expect(res.status).toBe(200);
+    return (await res.json()).data as {
+      assets: number; liabilities: number; netWorth: number;
+      breakdown: { assets: { key: string; amount: number; count: number }[]; liabilities: { key: string; amount: number }[] };
+      range: string;
+      history: { date: string; netWorth: number }[];
+      change: { amount: number; percent: number | null; since: string | null };
+    };
+  };
+
+  async function seed(user: string) {
+    const { default: Account } = await import("@/models/Account");
+    const { default: Loan } = await import("@/models/Loan");
+    const { default: ManualAsset } = await import("@/models/ManualAsset");
+    await Account.create([
+      { user, name: "Bank", type: "bank", balance: 100000 },
+      { user, name: "Savings", type: "savings", balance: 50000 },
+      { user, name: "Cash", type: "cash", balance: 20000 },
+      { user, name: "Card", type: "credit_card", balance: -30000 },
+      { user, name: "Overdrawn", type: "bank", balance: -5000 },
+      { user, name: "Old", type: "bank", balance: 999999, isArchived: true },
+    ]);
+    const base = { user, startDate: new Date(), principalAmount: 100000 };
+    await Loan.create([
+      { ...base, direction: "given", counterparty: "Friend", remainingAmount: 40000 },
+      { ...base, direction: "received", counterparty: "Bank loan", remainingAmount: 25000 },
+      { ...base, direction: "received", counterparty: "Paid off", remainingAmount: 0, isSettled: true },
+      { ...base, direction: "given", counterparty: "Removed", remainingAmount: 77777, isDeleted: true },
+    ]);
+    await ManualAsset.create([
+      { user, name: "Gold", kind: "gold", value: 70000 },
+      { user, name: "Sold car", kind: "vehicle", value: 500000, isArchived: true },
+    ]);
+  }
+
+  it("needs an API key", async () => {
+    const { GET } = await import("@/app/api/integrations/net-worth/route");
+    const res = await GET(new NextRequest("http://localhost/api/integrations/net-worth"), {});
+    expect(res.status).toBe(401);
+  });
+
+  it("is zero with nothing to count, and still returns today's point", async () => {
+    const r = await getReport();
+    expect(r).toMatchObject({ assets: 0, liabilities: 0, netWorth: 0, range: "90d" });
+    expect(r.breakdown).toEqual({ assets: [], liabilities: [] });
+    expect(r.history).toHaveLength(1);
+    expect(r.change).toEqual({ amount: 0, percent: null, since: null });
+  });
+
+  it("adds up accounts, loans both ways, cards as debt and manual assets, skipping archived, settled and deleted", async () => {
+    await seed(userId);
+    await seed(otherUserId); // someone else's money never counts
+    const r = await getReport();
+    expect(r.assets).toBe(100000 + 50000 + 20000 + 40000 + 70000);
+    expect(r.liabilities).toBe(30000 + 5000 + 25000);
+    expect(r.netWorth).toBe(280000 - 60000);
+    expect(r.breakdown.assets.map((b) => [b.key, b.amount])).toEqual([
+      ["bank", 100000],
+      ["savings", 50000],
+      ["cash", 20000],
+      ["loansGiven", 40000],
+      ["manual", 70000],
+    ]);
+    expect(r.breakdown.liabilities.map((b) => [b.key, b.amount])).toEqual([
+      ["cards", 30000],
+      ["overdrafts", 5000],
+      ["loansReceived", 25000],
+    ]);
+  });
+
+  it("a card with a credit balance counts as an asset", async () => {
+    const { default: Account } = await import("@/models/Account");
+    await Account.create({ user: userId, name: "Card", type: "credit_card", balance: 1200 });
+    const r = await getReport();
+    expect(r.breakdown.assets).toEqual([{ key: "cardCredit", label: "Card credit balances", amount: 1200, count: 1 }]);
+    expect(r.liabilities).toBe(0);
+  });
+
+  it("returns the trend oldest first, filtered by range, with the change since the first point", async () => {
+    await seed(userId);
+    const { default: NetWorthSnapshot } = await import("@/models/NetWorthSnapshot");
+    const { localDayKey } = await import("@/lib/net-worth");
+    const day = (ago: number) => localDayKey(new Date(Date.now() - ago * 86400000), "Asia/Kolkata");
+    await NetWorthSnapshot.create([
+      { user: userId, day: day(200), assets: 1, liabilities: 0, netWorth: 1 },
+      { user: userId, day: day(20), assets: 200000, liabilities: 60000, netWorth: 140000 },
+      { user: userId, day: day(5), assets: 250000, liabilities: 60000, netWorth: 190000 },
+      { user: otherUserId, day: day(5), assets: 9, liabilities: 0, netWorth: 9 },
+    ]);
+
+    const r30 = await getReport("?range=30d");
+    expect(r30.range).toBe("30d");
+    expect(r30.history.map((p) => p.netWorth)).toEqual([140000, 190000, 220000]);
+    expect(r30.history.map((p) => p.date)).toEqual([day(20), day(5), day(0)]);
+    expect(r30.change).toEqual({ amount: 80000, percent: 57.1, since: day(20) });
+
+    const all = await getReport("?range=all");
+    expect(all.history).toHaveLength(4);
+    expect(all.history[0].netWorth).toBe(1);
+
+    const odd = await getReport("?range=nonsense");
+    expect(odd.range).toBe("90d");
+    expect(odd.history).toHaveLength(3);
+  });
+
+  it("reading twice in a day keeps one point for the day", async () => {
+    await seed(userId);
+    await getReport();
+    await getReport();
+    const { default: NetWorthSnapshot } = await import("@/models/NetWorthSnapshot");
+    expect(await NetWorthSnapshot.countDocuments({ user: userId })).toBe(1);
+  });
+
+  it("the day follows the user's time zone", async () => {
+    const { localDayKey } = await import("@/lib/net-worth");
+    const instant = new Date("2026-03-01T20:00:00Z"); // 01:30 on 2 March in Kolkata, still 1 March in UTC and New York
+    expect(localDayKey(instant, "Asia/Kolkata")).toBe("2026-03-02");
+    expect(localDayKey(instant, "UTC")).toBe("2026-03-01");
+    expect(localDayKey(instant, "America/New_York")).toBe("2026-03-01");
+    expect(localDayKey(instant, "Not/AZone")).toBe("2026-03-02");
+    expect(localDayKey(instant, undefined)).toBe("2026-03-02");
+  });
+
+  describe("manual assets", () => {
+    const list = async () => {
+      const { GET } = await import("@/app/api/integrations/net-worth/assets/route");
+      return (await (await GET(req("/assets"), {})).json()).data as { id: string; name: string; value: number; kind: string; note: string | null }[];
+    };
+    const create = async (body: unknown, headers: Record<string, string> = {}) => {
+      const { POST } = await import("@/app/api/integrations/net-worth/assets/route");
+      return POST(req("/assets", "POST", body, headers), {});
+    };
+
+    it("creates with an Idempotency-Key and replays the same answer", async () => {
+      const first = await create({ name: "Flat", kind: "property", value: 5000000, note: "Pune" }, { "idempotency-key": "asset-1" });
+      expect(first.status).toBe(201);
+      const asset = (await first.json()).data;
+      expect(asset).toMatchObject({ name: "Flat", kind: "property", value: 5000000, note: "Pune" });
+      const replay = await create({ name: "Flat", kind: "property", value: 5000000, note: "Pune" }, { "idempotency-key": "asset-1" });
+      expect((await replay.json()).data.id).toBe(asset.id);
+      expect(await list()).toHaveLength(1);
+      expect((await getReport()).netWorth).toBe(5000000);
+      const clash = await create({ name: "Other", value: 1 }, { "idempotency-key": "asset-1" });
+      expect(clash.status).toBe(409);
+    });
+
+    it("rejects a missing key and bad data", async () => {
+      expect((await create({ name: "Flat", value: 1 }, { "idempotency-key": "" })).status).toBe(400);
+      expect((await create({ name: "", value: 1 })).status).toBe(400);
+      expect((await create({ name: "Flat", value: -5 })).status).toBe(400);
+      expect((await create({ name: "Flat", value: 1.5 })).status).toBe(400);
+      expect((await create({ name: "Flat", value: 1, kind: "boat" })).status).toBe(400);
+    });
+
+    it("edits, clears the note, and archives so it stops counting", async () => {
+      const { PATCH, DELETE } = await import("@/app/api/integrations/net-worth/assets/[id]/route");
+      const made = (await (await create({ name: "Gold", kind: "gold", value: 100000, note: "coins" })).json()).data;
+
+      const edited = await PATCH(req(`/assets/${made.id}`, "PATCH", { value: 150000, note: null }), ctx(made.id));
+      expect(edited.status).toBe(200);
+      expect((await edited.json()).data).toMatchObject({ value: 150000, note: null, name: "Gold" });
+      expect((await getReport()).assets).toBe(150000);
+
+      expect((await PATCH(req(`/assets/${made.id}`, "PATCH", {}), ctx(made.id))).status).toBe(400);
+      expect((await PATCH(req(`/assets/${made.id}`, "PATCH", { value: -1 }), ctx(made.id))).status).toBe(400);
+      expect((await PATCH(req(`/assets/nope`, "PATCH", { value: 1 }), ctx("nope"))).status).toBe(400);
+
+      const gone = await DELETE(req(`/assets/${made.id}`, "DELETE"), ctx(made.id));
+      expect(gone.status).toBe(200);
+      expect((await gone.json()).data).toEqual({ id: made.id, deleted: true });
+      expect(await list()).toEqual([]);
+      expect((await getReport()).assets).toBe(0);
+      expect((await DELETE(req(`/assets/${made.id}`, "DELETE"), ctx(made.id))).status).toBe(404);
+    });
+
+    it("never touches or lists another user's assets", async () => {
+      const { default: ManualAsset } = await import("@/models/ManualAsset");
+      const theirs = await ManualAsset.create({ user: otherUserId, name: "Theirs", value: 10 });
+      const id = theirs._id.toString();
+      const { PATCH, DELETE } = await import("@/app/api/integrations/net-worth/assets/[id]/route");
+      expect((await PATCH(req(`/assets/${id}`, "PATCH", { value: 5 }), ctx(id))).status).toBe(404);
+      expect((await DELETE(req(`/assets/${id}`, "DELETE"), ctx(id))).status).toBe(404);
+      expect(await list()).toEqual([]);
+      expect((await ManualAsset.findById(id).lean<{ value: number; isArchived: boolean }>())).toMatchObject({ value: 10, isArchived: false });
+    });
+  });
+
+  describe("snapshots for everyone and the cron route", () => {
+    it("records a point for each active user that has something, and skips the rest", async () => {
+      await seed(userId);
+      const { default: User } = await import("@/models/User");
+      await User.create({ name: "Inactive", email: `nwi${Date.now()}@x.com`, password: "hash", isActive: false });
+      const { default: Account } = await import("@/models/Account");
+      const inactive = await User.findOne({ name: "Inactive" });
+      await Account.create({ user: inactive!._id, name: "Bank", type: "bank", balance: 5 });
+      const { recordSnapshotsForAllUsers } = await import("@/lib/net-worth");
+      const out = await recordSnapshotsForAllUsers();
+      expect(out).toEqual({ checked: 2, recorded: 1 }); // the key's second user (otherUser) has nothing; the inactive one is skipped
+      const { default: NetWorthSnapshot } = await import("@/models/NetWorthSnapshot");
+      const rows = await NetWorthSnapshot.find({}).lean<{ user: { toString(): string }; netWorth: number }[]>();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].user.toString()).toBe(userId);
+      expect(rows[0].netWorth).toBe(220000);
+    });
+
+    it("a user who cleared everything gets a zero point, so the trend does not keep an old value", async () => {
+      const { default: Account } = await import("@/models/Account");
+      const { default: NetWorthSnapshot } = await import("@/models/NetWorthSnapshot");
+      const { recordSnapshotsForAllUsers } = await import("@/lib/net-worth");
+      const bank = await Account.create({ user: userId, name: "Bank", type: "bank", balance: 5000 });
+      await getReport(); // stores today's point at 5000
+      await Account.updateOne({ _id: bank._id }, { $set: { balance: 0 } });
+      const out = await recordSnapshotsForAllUsers();
+      expect(out).toEqual({ checked: 2, recorded: 1 }); // the other user never had a point and has nothing
+      const rows = await NetWorthSnapshot.find({ user: userId }).lean<{ netWorth: number }[]>();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].netWorth).toBe(0);
+    });
+
+    it("an overlapping run does nothing instead of running twice", async () => {
+      const { recordSnapshotsForAllUsers } = await import("@/lib/net-worth");
+      const [first, second] = await Promise.all([recordSnapshotsForAllUsers(), recordSnapshotsForAllUsers()]);
+      expect([first.skipped, second.skipped].filter(Boolean)).toHaveLength(1);
+      expect((await recordSnapshotsForAllUsers()).skipped).toBeUndefined(); // the guard is released afterwards
+    });
+
+    it("a hung pass stops blocking new ones after ten minutes", async () => {
+      const { default: User } = await import("@/models/User");
+      const { recordSnapshotsForAllUsers } = await import("@/lib/net-worth");
+      const hang = vi.spyOn(User, "find").mockImplementationOnce((() => ({
+        select: () => ({ lean: () => ({ cursor: () => ({ [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }) }) }) }),
+      })) as never);
+      void recordSnapshotsForAllUsers(); // hangs on its first read of the cursor, and never finishes
+      await new Promise((r) => setTimeout(r, 25));
+      expect((await recordSnapshotsForAllUsers()).skipped).toBe(true); // still within the deadline
+      hang.mockRestore();
+      const later = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 11 * 60 * 1000);
+      try {
+        const out = await recordSnapshotsForAllUsers();
+        expect(out.skipped).toBeUndefined(); // treated as stale: a new pass runs
+        expect(out.checked).toBeGreaterThan(0);
+      } finally {
+        later.mockRestore();
+      }
+    });
+
+    it("an account saved before the archived flag existed still counts", async () => {
+      const { default: Account } = await import("@/models/Account");
+      const old = await Account.create({ user: userId, name: "Legacy", type: "bank", balance: 7000 });
+      await Account.collection.updateOne({ _id: old._id }, { $unset: { isArchived: "" } });
+      expect((await getReport()).assets).toBe(7000);
+    });
+
+    it("a point written at the same moment by another request does not fail the read", async () => {
+      const { default: NetWorthSnapshot } = await import("@/models/NetWorthSnapshot");
+      const { Types } = await import("mongoose");
+      const { recordSnapshot } = await import("@/lib/net-worth");
+      await NetWorthSnapshot.init(); // the unique (user, day) index must exist for a real duplicate
+      const first = await recordSnapshot(userId); // today's row now exists
+      const real = NetWorthSnapshot.updateOne.bind(NetWorthSnapshot);
+      let calls = 0;
+      const spy = vi.spyOn(NetWorthSnapshot, "updateOne").mockImplementation(((...args: Parameters<typeof real>) => {
+        calls += 1;
+        if (calls > 1) return real(...args);
+        // A genuine duplicate-key error from MongoDB: insert the same (user, day) a second time.
+        return NetWorthSnapshot.collection.insertOne({ user: new Types.ObjectId(userId), day: first.date }) as never;
+      }) as never);
+      try {
+        const again = await recordSnapshot(userId);
+        expect(calls).toBe(2); // the duplicate was hit, then the write was retried once
+        expect(again.date).toBe(first.date);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(await NetWorthSnapshot.countDocuments({ user: userId })).toBe(1);
+    });
+
+    it("an error that is not a duplicate key is not retried and reaches the caller", async () => {
+      const { default: NetWorthSnapshot } = await import("@/models/NetWorthSnapshot");
+      const { recordSnapshot } = await import("@/lib/net-worth");
+      for (const code of [undefined, 11001, 12345]) {
+        let calls = 0;
+        const boom = Object.assign(new Error("write failed"), code === undefined ? {} : { code });
+        const spy = vi.spyOn(NetWorthSnapshot, "updateOne").mockImplementation((() => {
+          calls += 1;
+          return Promise.reject(boom) as never;
+        }) as never);
+        try {
+          await expect(recordSnapshot(userId)).rejects.toBe(boom);
+          expect(calls).toBe(1); // no second attempt
+        } finally {
+          spy.mockRestore();
+        }
+      }
+    });
+
+    it("a second duplicate-key error is not swallowed either", async () => {
+      const { default: NetWorthSnapshot } = await import("@/models/NetWorthSnapshot");
+      const { recordSnapshot } = await import("@/lib/net-worth");
+      const dup = Object.assign(new Error("E11000 duplicate key"), { code: 11000 });
+      let calls = 0;
+      const spy = vi.spyOn(NetWorthSnapshot, "updateOne").mockImplementation((() => {
+        calls += 1;
+        return Promise.reject(dup) as never;
+      }) as never);
+      try {
+        await expect(recordSnapshot(userId)).rejects.toBe(dup);
+        expect(calls).toBe(2); // one retry, then it gives up
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("the cron route needs the secret", async () => {
+      process.env.CRON_SECRET = "cron-secret-for-tests";
+      const { GET } = await import("@/app/api/cron/net-worth-snapshot/route");
+      const call = (headers: Record<string, string> = {}) =>
+        GET(new NextRequest("http://localhost/api/cron/net-worth-snapshot", { headers }));
+      expect((await call()).status).toBe(401);
+      expect((await call({ authorization: "Bearer wrong" })).status).toBe(401);
+      const ok = await call({ authorization: "Bearer cron-secret-for-tests" });
+      expect(ok.status).toBe(200);
+      expect(await ok.json()).toEqual({ ok: true, checked: 2, recorded: 0 });
+    });
+  });
+
+  describe("browser routes", () => {
+    afterEach(() => {
+      sessionUser.current = null;
+    });
+
+    it("GET /api/net-worth is the same report; the asset routes work on the session user", async () => {
+      sessionUser.current = { id: userId, name: "NW", email: "nw@x.com", role: "user" };
+      await seed(userId);
+      const { GET } = await import("@/app/api/net-worth/route");
+      const res = await GET(new NextRequest("http://localhost/api/net-worth?range=30d"));
+      const body = (await res.json()).data;
+      expect(body).toMatchObject({ netWorth: 220000, range: "30d" });
+
+      const assets = await import("@/app/api/net-worth/assets/route");
+      const made = await assets.POST(
+        new NextRequest("http://localhost/api/net-worth/assets", { method: "POST", body: JSON.stringify({ name: "Car", kind: "vehicle", value: 30000 }) })
+      );
+      expect(made.status).toBe(201);
+      const id = (await made.json()).data.id;
+      expect((await (await assets.GET()).json()).data.map((a: { name: string }) => a.name).sort()).toEqual(["Car", "Gold"]);
+
+      const one = await import("@/app/api/net-worth/assets/[id]/route");
+      const patched = await one.PATCH(
+        new NextRequest(`http://localhost/api/net-worth/assets/${id}`, { method: "PATCH", body: JSON.stringify({ value: 40000 }) }),
+        ctx(id)
+      );
+      expect((await patched.json()).data.value).toBe(40000);
+      expect((await one.DELETE(new NextRequest(`http://localhost/api/net-worth/assets/${id}`, { method: "DELETE" }), ctx(id))).status).toBe(200);
+      expect((await one.DELETE(new NextRequest(`http://localhost/api/net-worth/assets/nope`, { method: "DELETE" }), ctx("nope"))).status).toBe(404);
+    });
+
+    it("needs a signed-in user", async () => {
+      sessionUser.current = null;
+      const { GET } = await import("@/app/api/net-worth/route");
+      expect((await GET(new NextRequest("http://localhost/api/net-worth"))).status).toBe(401);
+    });
+  });
+});
+
+
+describe("weekly review", () => {
+  const KEY = "test-weekly-review-api-key";
+  // Monday 5 Jan to Sunday 11 Jan 2026 on the Kolkata clock (the default zone).
+  const WEEK = "2026-01-07";
+  const at = (day: number, hour = 12, month = "01") =>
+    new Date(`2026-${month}-${String(day).padStart(2, "0")}T${String(hour).padStart(2, "0")}:00:00+05:30`);
+  let userId: string;
+  let otherUserId: string;
+  let accountId: string;
+  let otherAccountId: string;
+  let n = 0;
+  // Integration handlers take the route context as a second argument; none of these routes use one.
+  const run = (handler: (r: NextRequest, ctx: never) => Promise<Response>, r: NextRequest) => handler(r, undefined as never);
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Review User", email: `wr${Date.now()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `wro${Date.now()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    const account = await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 1000000, currency: "INR" });
+    const otherAccount = await Account.create({ user: other._id, name: "Bank", type: "bank", balance: 1000000, currency: "INR" });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+    accountId = account._id.toString();
+    otherAccountId = otherAccount._id.toString();
+  });
+
+  function req(path: string, method: "GET" | "PATCH" = "GET", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/weekly-review${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${KEY}`,
+        "content-type": "application/json",
+        ...(method === "GET" ? {} : { "idempotency-key": `wr-key-${n}` }),
+        ...headers,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+
+  async function txn(over: Record<string, unknown> = {}, owner = userId, account = accountId) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    return Transaction.create({ user: owner, account, type: "expense", amount: 10000, category: "Food", date: at(6), ...over });
+  }
+
+  it("needs an API key", async () => {
+    const { GET } = await import("@/app/api/integrations/weekly-review/route");
+    const res = await run(GET, new NextRequest(`http://localhost/api/integrations/weekly-review?week=${WEEK}`));
+    expect(res.status).toBe(401);
+  });
+
+  it("returns the week with totals, change, categories, days and highlights, for this user only", async () => {
+    const { GET } = await import("@/app/api/integrations/weekly-review/route");
+    await txn({ amount: 120000, category: "Food", description: "Swiggy", date: at(6) });
+    await txn({ amount: 250000, category: "Shopping", description: "Amazon", date: at(7) });
+    await txn({ amount: 900000, type: "income", category: "Salary", date: at(8) });
+    await txn({ amount: 300000, category: "Food", date: at(1) }); // the week before (29 Dec to 4 Jan)
+    await txn({ amount: 777777, category: "Food", date: at(6) }, otherUserId, otherAccountId); // someone else's
+
+    const res = await run(GET, req(`?week=${WEEK}`));
+    expect(res.status).toBe(200);
+    const { data } = await res.json();
+    expect(data.week).toMatchObject({ startDate: "2026-01-05", endDate: "2026-01-11", timeZone: "Asia/Kolkata", isComplete: true });
+    expect(data.totals).toMatchObject({ spent: 370000, income: 900000, net: 530000, previousSpent: 300000 });
+    expect(data.totals.change).toEqual({ amount: 70000, percent: 23 });
+    expect(data.topCategories.map((c: { category: string }) => c.category)).toEqual(["Shopping", "Food"]);
+    expect(data.topMerchants[0]).toMatchObject({ merchant: "Amazon", total: 250000 });
+    expect(data.biggestExpense).toMatchObject({ amount: 250000, category: "Shopping" });
+    expect(data.days).toHaveLength(7);
+    expect(data.days[1]).toEqual({ date: "2026-01-06", spent: 120000 });
+    expect(data.noSpendDays).toBe(5);
+    expect(data.highlights[0]).toBe("You spent ₹700.00 more than the week before (up 23%).");
+    expect(data.settings).toEqual({ enabled: false, day: 1 });
+    expect(data.spendLimit).toBeNull();
+    expect(data.budgets).toBeNull();
+  });
+
+  it("an empty week is zeros with a plain highlight", async () => {
+    const { GET } = await import("@/app/api/integrations/weekly-review/route");
+    const { data } = await (await run(GET, req(`?week=${WEEK}`))).json();
+    expect(data.totals).toMatchObject({ spent: 0, income: 0, previousSpent: 0 });
+    expect(data.biggestExpense).toBeNull();
+    expect(data.noSpendDays).toBe(7);
+    expect(data.highlights).toEqual(["No spending recorded this week."]);
+  });
+
+  it("defaults to the last completed week, a Monday to Sunday that has ended", async () => {
+    const { GET } = await import("@/app/api/integrations/weekly-review/route");
+    const { data } = await (await run(GET, req(""))).json();
+    expect(data.week.isComplete).toBe(true);
+    const start = new Date(data.week.start);
+    const end = new Date(data.week.end);
+    expect(end.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(end.getTime() - start.getTime()).toBeGreaterThanOrEqual(7 * 23 * 3600_000);
+    expect(new Date(`${data.week.startDate}T12:00:00Z`).getUTCDay()).toBe(1);
+  });
+
+  it("refuses a bad or future week", async () => {
+    const { GET } = await import("@/app/api/integrations/weekly-review/route");
+    for (const bad of ["nope", "2026-13-01", "2026-02-30", "2099-01-05"]) {
+      const res = await run(GET, req(`?week=${bad}`));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.code).toBe("VALIDATION_ERROR");
+    }
+  });
+
+  it("brings the budgets, the spend limit result and the review queue with it", async () => {
+    const { GET } = await import("@/app/api/integrations/weekly-review/route");
+    const { default: Budget } = await import("@/models/Budget");
+    const { default: SpendLimit } = await import("@/models/SpendLimit");
+    await Budget.create({ user: userId, category: "Food", month: 1, year: 2026, limitAmount: 100000, alertAt: 80 });
+    await Budget.create({ user: userId, category: "Shopping", month: 1, year: 2026, limitAmount: 1000000, alertAt: 80 });
+    await SpendLimit.create({ user: userId, dailyAmount: 100000, alertAt: 80, excludeCategories: [], rollover: false });
+    await txn({ amount: 150000, category: "Food", date: at(6) }); // over its budget and the day's limit
+    await txn({ amount: 50000, category: "Shopping", date: at(7) });
+    await txn({ amount: 20000, category: "Food", date: at(30, 12, "01"), reviewStatus: "unreviewed", source: "sms" }); // unreviewed, in a later week
+    const { data } = await (await run(GET, req(`?week=${WEEK}`))).json();
+
+    expect(data.budgets).toMatchObject({ month: 1, year: 2026, total: 2, over: 1, near: 0 });
+    expect(data.budgets.items[0]).toMatchObject({ category: "Food", spent: 170000, limit: 100000, percent: 170 });
+    expect(data.spendLimit).toEqual({ dailyAmount: 100000, daysWithin: 6, daysOver: 1, daysTracked: 7 });
+    expect(data.unreviewed).toBe(1);
+  });
+
+  it("judges past days against the limit that was in force then", async () => {
+    const { getWeeklyReview } = await import("@/lib/weekly-review");
+    const { updateSpendLimit } = await import("@/lib/spend-limit");
+    // 80,000 on Monday 5 Jan and on Friday 9 Jan; the limit goes 70,000 to 100,000 from Thursday 8 Jan.
+    await txn({ amount: 80000, date: at(5) });
+    await txn({ amount: 80000, date: at(9) });
+    await updateSpendLimit(userId, { dailyAmount: 70000 }, at(1));
+    await updateSpendLimit(userId, { dailyAmount: 100000 }, at(8, 9));
+    const review = await getWeeklyReview(userId, { week: WEEK, now: at(14) });
+    expect(review.spendLimit).toEqual({ dailyAmount: 100000, daysWithin: 6, daysOver: 1, daysTracked: 7 });
+  });
+
+  describe("settings", () => {
+    it("starts off, on Monday", async () => {
+      const { GET } = await import("@/app/api/integrations/weekly-review/settings/route");
+      const res = await run(GET, req("/settings"));
+      expect((await res.json()).data).toEqual({ enabled: false, day: 1 });
+    });
+
+    it("saves only what is sent, validates, and replays an idempotency key", async () => {
+      const { PATCH } = await import("@/app/api/integrations/weekly-review/settings/route");
+      const on = await run(PATCH, req("/settings", "PATCH", { enabled: true }));
+      expect(on.status).toBe(200);
+      expect((await on.json()).data).toEqual({ enabled: true, day: 1 });
+      const sunday = await run(PATCH, req("/settings", "PATCH", { day: 0 }));
+      expect((await sunday.json()).data).toEqual({ enabled: true, day: 0 });
+
+      for (const bad of [{}, { day: 7 }, { day: -1 }, { day: 1.5 }, { enabled: "yes" }, { other: 1 }]) {
+        expect((await run(PATCH, req("/settings", "PATCH", bad))).status).toBe(400);
+      }
+      expect((await run(PATCH, req("/settings", "PATCH", { day: 2 }, { "idempotency-key": "" }))).status).toBe(400);
+
+      const first = await run(PATCH, req("/settings", "PATCH", { day: 3 }, { "idempotency-key": "same-key" }));
+      const replay = await run(PATCH, req("/settings", "PATCH", { day: 3 }, { "idempotency-key": "same-key" }));
+      expect((await first.json()).data).toEqual((await replay.json()).data);
+      const conflict = await run(PATCH, req("/settings", "PATCH", { day: 4 }, { "idempotency-key": "same-key" }));
+      expect(conflict.status).toBe(409);
+    });
+  });
+
+  describe("the notification", () => {
+    // Tuesday 27 Oct 2026, 10:00 in Kolkata; the last completed week is 19 to 25 Oct.
+    const now = new Date("2026-10-27T04:30:00Z");
+    const early = new Date("2026-10-27T02:30:00Z"); // 08:00
+    const tuesday = 2;
+    const notices = async () => {
+      const { default: Notification } = await import("@/models/Notification");
+      return Notification.find({ user: userId, "meta.kind": "weekly_review" }).lean<Array<{ type: string; title: string; body: string }>>();
+    };
+    async function enable(day = tuesday) {
+      const { default: User } = await import("@/models/User");
+      await User.updateOne({ _id: userId }, { $set: { "preferences.weeklyReview": { enabled: true, day } } });
+    }
+
+    it("sends once, on the chosen weekday from 09:00, with the week's spend and a highlight", async () => {
+      const { sendWeeklyReviews } = await import("@/lib/weekly-review");
+      await enable();
+      await txn({ amount: 100000, category: "Food", date: at(20, 12, "10") });
+      await txn({ amount: 150000, category: "Food", date: at(14, 12, "10") }); // the week before
+
+      expect(await sendWeeklyReviews(early)).toEqual({ checked: 1, sent: 0 });
+      expect(await sendWeeklyReviews(now)).toEqual({ checked: 1, sent: 1 });
+      expect(await sendWeeklyReviews(new Date(now.getTime() + 30 * 60_000))).toEqual({ checked: 1, sent: 0 });
+      const sent = await notices();
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({ type: "system", title: "Your week in review" });
+      expect(sent[0].body).toBe("You spent ₹1,000.00 last week. You spent ₹500.00 less than the week before (down 33%).");
+
+      // The next Tuesday is a new week with nothing in it: nothing is sent.
+      expect((await sendWeeklyReviews(new Date(now.getTime() + 7 * 86_400_000))).sent).toBe(0);
+    });
+
+    it("two sends at the same moment create one notification", async () => {
+      const { sendWeeklyReviewForUser } = await import("@/lib/weekly-review");
+      const { default: Notification } = await import("@/models/Notification");
+      await Notification.init(); // build the unique index the claim relies on
+      await enable();
+      await txn({ amount: 100000, category: "Food", date: at(20, 12, "10") });
+      const settings = { enabled: true, day: tuesday };
+      const sent = await Promise.all([sendWeeklyReviewForUser(userId, settings, now), sendWeeklyReviewForUser(userId, settings, now)]);
+      expect(sent.reduce((a, b) => a + b, 0)).toBe(1);
+      expect(await notices()).toHaveLength(1);
+    });
+
+    it("an overlapping timer and cron run does nothing instead of running twice", async () => {
+      const { sendWeeklyReviews } = await import("@/lib/weekly-review");
+      await enable();
+      await txn({ amount: 100000, category: "Food", date: at(20, 12, "10") });
+      const [a, b] = await Promise.all([sendWeeklyReviews(now), sendWeeklyReviews(now)]);
+      expect([a.skipped, b.skipped].filter(Boolean)).toHaveLength(1);
+      expect(a.sent + b.sent).toBe(1);
+      expect((await sendWeeklyReviews(new Date(now.getTime() + 30 * 60_000))).skipped).toBeUndefined();
+    });
+
+    it("a hung run stops blocking new ones after ten minutes", async () => {
+      const { default: User } = await import("@/models/User");
+      const { sendWeeklyReviews } = await import("@/lib/weekly-review");
+      const hang = vi.spyOn(User, "find").mockImplementationOnce((() => ({
+        select: () => ({ lean: () => new Promise(() => {}) }),
+      })) as never);
+      void sendWeeklyReviews(now); // hangs on its user query and never finishes
+      await new Promise((r) => setTimeout(r, 25));
+      expect((await sendWeeklyReviews(now)).skipped).toBe(true); // still within the deadline
+      hang.mockRestore();
+      await enable();
+      const later = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 11 * 60 * 1000);
+      try {
+        const out = await sendWeeklyReviews(now);
+        expect(out.skipped).toBeUndefined(); // treated as stale: a new run goes ahead
+        expect(out.checked).toBe(1);
+      } finally {
+        later.mockRestore();
+      }
+    });
+
+    it("waits for the chosen weekday and skips an empty week", async () => {
+      const { sendWeeklyReviews } = await import("@/lib/weekly-review");
+      await enable(5); // Friday
+      await txn({ amount: 100000, date: at(20, 12, "10") });
+      expect((await sendWeeklyReviews(now)).sent).toBe(0); // Tuesday
+      await enable(tuesday);
+      const { default: Transaction } = await import("@/models/Transaction");
+      await Transaction.deleteMany({ user: userId });
+      expect((await sendWeeklyReviews(now)).sent).toBe(0); // nothing happened that week
+    });
+
+    it("only checks users who turned it on", async () => {
+      const { sendWeeklyReviews } = await import("@/lib/weekly-review");
+      await txn({ amount: 100000, date: at(20, 12, "10") });
+      expect(await sendWeeklyReviews(now)).toEqual({ checked: 0, sent: 0 });
+      expect(await notices()).toHaveLength(0);
+    });
+
+    it("uses each user's time zone for the weekday and 09:00", async () => {
+      const { sendWeeklyReviews } = await import("@/lib/weekly-review");
+      const { default: User } = await import("@/models/User");
+      await enable();
+      await User.updateOne({ _id: userId }, { $set: { "preferences.timezone": "America/New_York" } });
+      await txn({ amount: 100000, date: new Date("2026-10-20T16:00:00Z") });
+      // 10:00 Kolkata Tuesday is 00:30 Tuesday in New York: before 09:00.
+      expect((await sendWeeklyReviews(now)).sent).toBe(0);
+      // 14:00Z is 10:00 Tuesday in New York.
+      expect((await sendWeeklyReviews(new Date("2026-10-27T14:00:00Z"))).sent).toBe(1);
+    });
+
+    it("the cron route needs the secret and reports what it did", async () => {
+      process.env.CRON_SECRET = "cron-secret-for-tests";
+      const { GET } = await import("@/app/api/cron/weekly-review/route");
+      const call = (headers: Record<string, string> = {}) => GET(new NextRequest("http://localhost/api/cron/weekly-review", { headers }));
+      expect((await call()).status).toBe(401);
+      expect((await call({ authorization: "Bearer wrong" })).status).toBe(401);
+      const ok = await call({ authorization: "Bearer cron-secret-for-tests" });
+      expect(ok.status).toBe(200);
+      expect(await ok.json()).toEqual({ ok: true, checked: 0, sent: 0 });
+    });
+  });
+
+  it("the browser route returns the same review for the signed-in user", async () => {
+    const { GET } = await import("@/app/api/weekly-review/route");
+    sessionUser.current = null;
+    expect((await GET(new NextRequest(`http://localhost/api/weekly-review?week=${WEEK}`))).status).toBe(401);
+    sessionUser.current = { id: userId, name: "Review User", email: "wr@x.com", role: "user" };
+    await txn({ amount: 50000, category: "Food", date: at(6) });
+    const res = await GET(new NextRequest(`http://localhost/api/weekly-review?week=${WEEK}`));
+    expect(res.status).toBe(200);
+    expect((await res.json()).data.totals.spent).toBe(50000);
+    expect((await GET(new NextRequest("http://localhost/api/weekly-review?week=bad"))).status).toBe(400);
+    sessionUser.current = null;
+  });
+});

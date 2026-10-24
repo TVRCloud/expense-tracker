@@ -22,6 +22,8 @@ All monetary fields are stored as **integers (cents)** — divide by 100 for dis
 | `preferences.currency` | String | ISO 4217 |
 | `preferences.billReminders.enabled` | Boolean | default false; turns on bill due reminders |
 | `preferences.billReminders.leadDays` | Number | 1 to 14, default 3; how many days ahead to remind |
+| `preferences.weeklyReview.enabled` | Boolean | default false; turns on the weekly review notification |
+| `preferences.weeklyReview.day` | Number | 0 (Sunday) to 6, default 1 (Monday); the weekday it arrives, from 09:00 on the user's clock |
 | `passwordResetToken` | String | hashed, single-use |
 | `passwordResetExpires` | Date | 1hr window |
 
@@ -51,6 +53,7 @@ All monetary fields are stored as **integers (cents)** — divide by 100 for dis
 | `lowBalanceAt` | Number | cents; cash accounts only: at or under this the app shows low cash (unset = Rs 500 default) |
 | `deletedAt` / `deletedBy` | Date / ObjectId | set with `isArchived` |
 | `creditMeta` | Object | credit cards only: `creditLimit`, `billingCycleDay`, `paymentDueDay`, `apr`, `network`, `lastFourDigits`, `cardholderName`, `minPaymentPct` |
+| `rewardRule` | Object | credit cards only: `kind` (`cashback` or `points`), `baseRate`, `categoryRates` `[{category, rate}]`, `cap`, `pointValue`. Cashback: rate is a percent, cap is cents; points: rate is points per 100 rupees, cap is points, `pointValue` is cents per point. Absent when the card has no rule |
 | `smsLastFour` | [String] | 4-digit strings as shown in bank SMS (`A/c XX1234`), for matching captured messages |
 
 Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`, `{user, creditMeta.lastFourDigits}`
@@ -116,6 +119,31 @@ One document per user. Separate from `budgets` so the budgets list is unchanged 
 | `rollover` | Boolean | yesterday's unspent or overspend moves today's limit (one day back) |
 | `pausedUntil` | Date | limit suspended until then |
 | `limitHistory` | `{from, dailyAmount?, weeklyAmount?}[]` | the amounts over time, oldest first. A change to `dailyAmount` or `weeklyAmount` applies from the start of that local day (a second change the same day replaces the entry). The first change writes a baseline entry at the epoch holding what was in force before. Empty for limits set before history existed: the current amounts then count for every earlier day |
+
+## manual_assets
+
+Something the user owns that is not an account (property, a vehicle, gold, shares held elsewhere). Counted in net worth. Archived, never deleted, so realtime sees the change.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | |
+| `name` | String | 1 to 60 characters |
+| `kind` | String | `property`, `vehicle`, `gold`, `investment`, `other` (default) |
+| `value` | Number | cents, 0 or more |
+| `note` | String | up to 200 characters, optional |
+| `isArchived` | Boolean | true once removed |
+
+## net_worth_snapshots
+
+One row per user per local day: what net worth was the last time it was worked out that day. Written when net worth is read and by the snapshot cron. Unique on `{user, day}`.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | |
+| `day` | String | `YYYY-MM-DD` on the user's clock (`preferences.timezone`) |
+| `assets` | Number | cents |
+| `liabilities` | Number | cents, positive |
+| `netWorth` | Number | cents, assets minus liabilities |
 
 ## subscription_decisions
 
@@ -196,6 +224,24 @@ Sparse index: `{user, externalLoanId}`
 | `isCompleted` / `completedAt` | Boolean / Date | |
 | `isDeleted` / `deletedAt` / `deletedBy` | | soft delete |
 
+## sinking_funds
+
+Money set aside for a cost on a due date. Progress (`remaining`, `percent`, `monthsLeft`, `suggestedMonthly`, `status`) is computed on read, never stored.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | |
+| `name` | String | |
+| `targetAmount` / `savedAmount` | Number | cents |
+| `currency` | String | |
+| `dueDate` | Date | required |
+| `monthlyAmount` | Number | the person's plan, cents; absent means use the suggested amount |
+| `icon` | String | |
+| `isCompleted` / `completedAt` | Boolean / Date | `savedAmount >= targetAmount`; kept in step by the service |
+| `isDeleted` / `deletedAt` / `deletedBy` | | soft delete |
+
+Index `{user, isDeleted, dueDate}`.
+
 ## notifications
 
 | Field | Type | Notes |
@@ -207,6 +253,8 @@ Sparse index: `{user, externalLoanId}`
 | `meta` | Mixed | type-specific payload |
 | `isRead` | Boolean | |
 | `createdAt` | Date | TTL 90 days |
+
+Indexes: `(user, isRead, createdAt)`, `(user, type)`, the TTL on `createdAt`, and a unique partial index on `(user, meta.dedupKey)` limited to rows with `meta.kind` `weekly_review`, so the weekly review is created once per user per week even when two runs overlap (the loser gets a duplicate-key error and sends nothing). The index builds on first connect; no existing rows have that kind.
 
 ## ledger_blocks
 

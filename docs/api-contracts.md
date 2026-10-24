@@ -104,6 +104,17 @@ An ATM withdrawal message (`withdrawn ... at ATM`, `cash withdrawal`, `ATM WDL`)
 
 A change to the daily or weekly amount applies from the start of the current day in the user's time zone; earlier days keep the limit they had. Every read (here, `/api/integrations/spend-limit`, and `spendLimit` in home and summary) carries `history`: `[{from, dailyAmount, weeklyAmount}]`, oldest first, newest last (equals the current amounts), `from` the ISO instant of a local midnight, amounts in paise or `null` for no limit. Empty for limits set before history existed (the current amounts then apply to every earlier day). To judge a past day use the last entry whose `from` is at or before that day's start (`limitOn` in `src/lib/spend-limit.ts`).
 
+## Card rewards
+
+Reward rule per credit card (`cashback` percent of spend or `points` per 100 rupees, category rates, optional cap per billing cycle) and the estimate it earns. Same data as `/api/integrations/credit-cards/**/rewards` (see [n8n-integration.md](n8n-integration.md#card-rewards)), session auth, bare JSON.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/credit-cards/rewards` | `{cards, currentValue}`: every active card with its rule and current-cycle estimate |
+| GET | `/api/credit-cards/:accountId/rewards?cycles=3` | `{accountId, name, lastFourDigits, rule, reason, cycles, total}`; 404 unknown or archived card, 400 not a credit card or bad `cycles` |
+| PUT | `/api/credit-cards/:accountId/rewards` | Replaces the rule: `{kind, baseRate, categoryRates?, cap?, pointValue?}`; 400 if invalid |
+| DELETE | `/api/credit-cards/:accountId/rewards` | Removes the rule |
+
 ## Subscriptions
 
 Repeating charges found in expense history (same merchant, similar amount, steady gap; weekly, monthly, quarterly or yearly). Detected on every read; only the confirm and dismiss choices are stored. Recurring series the user already tracks are left out.
@@ -112,6 +123,48 @@ Repeating charges found in expense history (same merchant, similar amount, stead
 |--------|------|-------------|
 | GET | `/api/subscriptions?status&includeLapsed` | `{subscriptions, totals: {count, monthly, yearly}}`. `status` is `detected`, `confirmed`, `dismissed` or `all`; the default hides dismissed. `includeLapsed=true` adds ones whose next charge is long overdue |
 | PATCH | `/api/subscriptions/:id` | `{status: "confirmed" | "dismissed" | "detected"}`; 404 if the id is not a current detection |
+
+## Cash flow forecast
+
+The expected balance of the money in hand (bank, cash, wallet and savings accounts) for the next days, and the lowest point. Read-only, computed on every read.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/forecast?days` | Same forecast as the integration route, returned as `{data}`. `days` is 1 to 60 (default 30); anything else is 400 |
+
+Credit cards are paid when their statement is due; money others owe the user is not counted. See `docs/n8n-integration.md` for the response.
+
+## Sinking funds and savings rate
+
+Money set aside for a cost with a due date, and the share of income saved. Amounts are paise. Progress fields are computed on every read: `remaining`, `percent`, `monthsLeft`, `suggestedMonthly`, `status` (`done`, `overdue`, `on_track`, `behind`).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/sinking-funds` | `{funds, totals: {count, targetAmount, savedAmount, remaining, monthlyNeeded}}`, soonest due first |
+| POST | `/api/sinking-funds` | `{name, targetAmount, dueDate, savedAmount?, monthlyAmount?, icon?}`; 201 with the fund |
+| GET, PATCH, DELETE | `/api/sinking-funds/:id` | Read, edit (`name`, `targetAmount`, `dueDate`, `monthlyAmount` or `null`, `icon`), soft delete; 404 if not yours |
+| POST | `/api/sinking-funds/:id/contribute` | `{amount}` (integer, not 0, at most 1e14 either way): positive saves, negative takes out, never below 0; a deposit that would take the balance past 1e14 is refused with 400 (not capped); returns the fund |
+| GET | `/api/savings-rate?months=6` | `{months: [{year, month, income, expense, saved, rate}], current, average: {income, expense, saved, rate}, trend}`; `months` 1 to 24; `rate` is a fraction or `null` without income; `trend` is `up`, `down`, `flat` or `null` |
+
+n8n and the app use `/api/integrations/sinking-funds` (+ `/:id`, `/:id/contribute`) and `/api/integrations/savings-rate` with the integration envelope; writes need `Idempotency-Key`.
+
+## Net worth
+
+What the user owns minus what they owe. Owned: positive account balances, a card with a credit balance, money lent not yet paid back, manual assets. Owed: a card balance below zero, any other account below zero, money borrowed not yet paid back. Archived or deleted accounts, settled or deleted loans and archived manual assets count for nothing. Amounts are cents.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/net-worth?range=30d\|90d\|1y\|all` | `{assets, liabilities, netWorth, breakdown: {assets: [{key,label,amount,count}], liabilities: [...]}, range, history: [{date,assets,liabilities,netWorth}], change: {amount, percent, since}}`. `range` defaults to `90d`; an unknown value falls back to it. `history` is oldest first and ends with today; `change` compares now with the first point (`since` is null when there is only today, `percent` is null when that point was 0). Reading it stores today's point |
+| GET, POST | `/api/net-worth/assets` | List and add manual assets: `{name (1 to 60), kind?: property\|vehicle\|gold\|investment\|other, value (cents, int, 0 or more), note? (200)}` |
+| PATCH, DELETE | `/api/net-worth/assets/:id` | Edit any of name, kind, value, note (`null` clears it); DELETE archives the asset. 404 for an unknown or other user's id |
+
+## Weekly review
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/api/weekly-review?week=YYYY-MM-DD` | Look back at one week, Monday to Sunday in the user's time zone; default the last completed week. Same body as `/api/integrations/weekly-review` (see [n8n-integration.md](n8n-integration.md#weekly-review)), wrapped as `{data}`. 400 for a bad date or a week that has not started |
+
+Integration only: `GET` and `PATCH /api/integrations/weekly-review/settings` (`{enabled, day}`, notification off by default), and the cron hook `GET /api/cron/weekly-review`.
 
 ## Budgets
 

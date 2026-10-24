@@ -26,6 +26,14 @@ export interface ICreditMeta {
   minPaymentPct?: number;
 }
 
+export interface IRewardRule {
+  kind: "cashback" | "points";
+  baseRate: number;        // cashback: percent of spend; points: points per 100 rupees
+  categoryRates?: { category: string; rate: number }[];
+  cap?: number;            // per billing cycle; cashback: cents, points: points
+  pointValue?: number;     // cents per point (points rules)
+}
+
 export interface UserPreferences {
   theme: "light" | "dark" | "system";
   glassIntensity: "subtle" | "full";
@@ -38,6 +46,8 @@ export interface UserPreferences {
   timezone?: string;
   /** Remind before a bill is due; off until turned on. */
   billReminders?: { enabled: boolean; leadDays: number };
+  /** Weekly review notification; off until turned on. day: 0 Sunday to 6 Saturday. */
+  weeklyReview?: { enabled: boolean; day: number };
 }
 
 export interface IUser {
@@ -67,6 +77,7 @@ export interface IAccount {
   deletedAt?: string;
   deletedBy?: string;
   creditMeta?: ICreditMeta;
+  rewardRule?: IRewardRule;
   createdAt: string;
   updatedAt: string;
 }

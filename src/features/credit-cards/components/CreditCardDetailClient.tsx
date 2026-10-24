@@ -11,6 +11,7 @@ import { useTransactions } from "@/features/transactions/hooks/useTransactions";
 import { TransactionRow } from "@/features/transactions/components/TransactionRow";
 import { CreditCardBanner } from "./CreditCardBanner";
 import { EmiCommitmentCard } from "./EmiCommitmentCard";
+import { CardRewardsCard } from "./CardRewardsCard";
 import { StatementList } from "./StatementList";
 import { CreditCardForm } from "./CreditCardForm";
 import { useRecurringSeriesList } from "@/features/recurring/hooks/useRecurringSeries";
@@ -234,6 +235,7 @@ export function CreditCardDetailClient({ id }: Props) {
         <aside className="rail flex flex-col gap-5">
           {/* EMI commitment summary */}
           <EmiCommitmentCard accountId={id} />
+          <CardRewardsCard accountId={id} />
         </aside>
       </div>
     </div>

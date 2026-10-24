@@ -22,6 +22,7 @@ import {
   Target,
   Landmark,
   Repeat,
+  Scale,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/_ui/Button";
@@ -51,6 +52,7 @@ const NAV_GROUPS = [
       { href: "/goals", label: "Goals", icon: Target },
       { href: "/loans", label: "Loans", icon: Landmark },
       { href: "/subscriptions", label: "Subscriptions", icon: Repeat },
+      { href: "/net-worth", label: "Net worth", icon: Scale },
     ],
   },
   {

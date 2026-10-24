@@ -3,15 +3,19 @@ Purpose: API-key surface for n8n and the Android companion app. Contracts: [docs
 
 ## Files
 - accounts (GET with card details, SMS digits and `isArchived`, `?includeArchived=true`; + POST, `[id]` PATCH, DELETE), summary, home, spend-limit (GET, PUT: daily and weekly limit), transactions (+ `[id]`, recurring list, series get and cancel, installment status), budgets and goals (+ `[id]` PATCH, DELETE): reads and writes over the shared services.
-- credit-cards/summary and credit-cards/[accountId]/statements: read-only card dues and statements.
+- credit-cards/summary and credit-cards/[accountId]/statements: read-only card dues and statements. credit-cards/rewards (GET) and credit-cards/[accountId]/rewards (GET, PUT, DELETE with `Idempotency-Key`): reward rule and the earned estimate per billing cycle.
+- forecast (GET `?days`): cash flow forecast over cash-flow-forecast.ts; read-only. `src/app/api/forecast` is the browser twin.
 - bills (GET list, `[id]/pay` POST, `settings` GET PATCH): upcoming bills and reminder settings over bills.ts.
+- weekly-review (GET one week's look back, `settings` GET PATCH): over weekly-review.ts.
 - loans (+ `[id]`, `[id]/repayments`): loan CRUD and repayments over loan-service.
 - transfers (POST, `[id]` GET PATCH DELETE): money between own accounts over transfer-service. `transactions` GET also takes `includeIncomingTransfers`.
 - rules (+ `[id]`, `test`): categorise rules over rule-service; `test` is a read-only dry run.
 - cash (GET, POST): the cash account and its low-cash view over cash-service; POST makes sure the account exists. ATM withdrawal captures become transfers to it.
 - captures, sms: bank message ingest (phone app, n8n). review/*: phone review inbox, confirm, correct, resolve, discard, history.
 - subscriptions (GET detected repeating charges, `[id]` PATCH confirm or dismiss) over subscription-service.
+- net-worth (GET report with trend, `assets` GET POST, `assets/[id]` PATCH DELETE): net worth and manual assets over net-worth.ts.
 - refunds (GET suggestions, `[id]/confirm` and `[id]/reject` POST): refund and reversal matching over refund-service.
+- sinking-funds (GET, POST, `[id]` GET PATCH DELETE, `[id]/contribute` POST) and savings-rate (GET): money set aside for a cost on a due date, and the share of income saved, over sinking-fund-service and savings-rate.
 - stats (month totals, daily, history) and notifications (list, `[id]` PATCH, read-all POST).
 - events (SSE), changes (`?since=` polling): realtime for the app.
 - app-update, app-update/download: newest Android release and a signed APK URL.
