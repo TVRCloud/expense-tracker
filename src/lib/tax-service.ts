@@ -276,45 +276,33 @@ type Dated = { date?: Date; paidAt?: Date } | null;
 // The single-row reads behind availableYears, not yet run (so a test can
 // explain them). `isDeleted` is matched with equality points ($in false or
 // null), not $ne, so the {user, isDeleted, date} and {user, isDeleted, paidAt}
-// indexes give the order and the read stops at the first row.
+// indexes give the order and each read stops at its first row.
+//
+// The range is the first to the last `date` over all counted rows, widened by
+// the first and last `paidAt` (a paid instalment counts on the day it was
+// paid). A paid instalment whose scheduled date is far from its paid date can
+// stretch the range by a year, so the list never misses a year but may offer
+// one with no counted row.
 export function yearRangeReads(userObjectId: Types.ObjectId) {
   const { isDeleted: _ignored, ...counted } = countedRows(userObjectId);
   void _ignored;
   const live = { ...counted, isDeleted: { $in: [false, null] } };
-  // A paid instalment's activity date is paidAt, so `date` reads skip them and
-  // a scheduled date in the future cannot stretch the range.
-  const byDate = { ...live, installmentStatus: { $ne: "paid" } };
-  const paid = { ...live, installmentStatus: "paid", paidAt: { $exists: true } };
-  // Paid with no paidAt (older rows): the activity date falls back to `date`.
-  // isRecurring equality lets the {user, isDeleted, isRecurring, installmentStatus,
-  // date} index serve the order; only recurring rows are ever paid.
-  const paidNoStamp = { ...live, isRecurring: true, installmentStatus: "paid", paidAt: { $exists: false } };
+  const paid = { ...live, installmentStatus: "paid", paidAt: { $gte: new Date(0) } };
   return {
-    firstUnstamped: Transaction.findOne(paidNoStamp).sort({ date: 1 }).select("date").lean<Dated>(),
-    lastUnstamped: Transaction.findOne(paidNoStamp).sort({ date: -1 }).select("date").lean<Dated>(),
-    firstDate: Transaction.findOne(byDate).sort({ date: 1 }).select("date").lean<Dated>(),
-    lastDate: Transaction.findOne(byDate).sort({ date: -1 }).select("date").lean<Dated>(),
+    firstDate: Transaction.findOne(live).sort({ date: 1 }).select("date").lean<Dated>(),
+    lastDate: Transaction.findOne(live).sort({ date: -1 }).select("date").lean<Dated>(),
     firstPaid: Transaction.findOne(paid).sort({ paidAt: 1 }).select("paidAt").lean<Dated>(),
     lastPaid: Transaction.findOne(paid).sort({ paidAt: -1 }).select("paidAt").lean<Dated>(),
   };
 }
 
-// Financial years from the user's first to last counted row, newest first,
-// always including the year asked for. Cost does not grow with the number of
+// Financial years from the first to the last counted row, newest first, always
+// including the year asked for. Cost does not grow with the number of
 // transactions. Years in between with no rows are listed too.
 async function availableYears(userObjectId: Types.ObjectId, timeZone: string, fy: number): Promise<number[]> {
   const reads = yearRangeReads(userObjectId);
-  const [firstDate, lastDate, firstPaid, lastPaid, firstUnstamped, lastUnstamped] = await Promise.all([
-    reads.firstDate,
-    reads.lastDate,
-    reads.firstPaid,
-    reads.lastPaid,
-    reads.firstUnstamped,
-    reads.lastUnstamped,
-  ]);
-  const stamps = [firstDate?.date, lastDate?.date, firstPaid?.paidAt, lastPaid?.paidAt, firstUnstamped?.date, lastUnstamped?.date].filter(
-    (d): d is Date => !!d
-  );
+  const [firstDate, lastDate, firstPaid, lastPaid] = await Promise.all([reads.firstDate, reads.lastDate, reads.firstPaid, reads.lastPaid]);
+  const stamps = [firstDate?.date, lastDate?.date, firstPaid?.paidAt, lastPaid?.paidAt].filter((d): d is Date => !!d);
   if (stamps.length === 0) return [fy];
   const years = stamps.map((d) => currentFy(d, timeZone));
   const low = Math.min(...years);

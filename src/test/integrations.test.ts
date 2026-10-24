@@ -6788,8 +6788,23 @@ describe("tax helper", () => {
       isDeleted: i % 5 === 0 ? undefined : false,
     }));
     await Transaction.insertMany(rows);
-    // paid instalments with far-future scheduled dates must not stretch the date range
-    await add("expense", 100, "2031-01-01T06:00:00Z", { recurringId: rid, installmentStatus: "paid", paidAt: new Date("2023-02-01T06:00:00Z") });
+    // many paid recurring rows with a stamp: the paidAt reads must stop at the first, not walk them all
+    await Transaction.insertMany(
+      Array.from({ length: 40 }, (_, i) => ({
+        user: userId,
+        account: accountId,
+        type: "expense",
+        amount: 100,
+        currency: "INR",
+        category: "Food",
+        isRecurring: true,
+        recurringId: rid,
+        installmentStatus: "paid",
+        isDeleted: false,
+        date: new Date(Date.UTC(2023, 1, 1 + (i % 20), 6)),
+        paidAt: new Date(Date.UTC(2023, 1, 1 + (i % 20), 8)),
+      }))
+    );
     await Transaction.collection.insertOne({
       user: new mongoose.Types.ObjectId(userId),
       account: new mongoose.Types.ObjectId(accountId),
@@ -6808,7 +6823,7 @@ describe("tax helper", () => {
       expect(plan.executionStats.totalDocsExamined).toBeLessThanOrEqual(5);
     }
     const { data } = await (await summary("?fy=2022")).json();
-    // January 2023 is in 2022-23; the paid instalment is by paidAt (also 2022-23), its 2031 date is ignored
+    // every row falls in 2022-23 (January to March 2023)
     expect(data.availableYears).toEqual([2022]);
   });
 
