@@ -1299,6 +1299,66 @@ describe("encrypted backup and restore", () => {
       expect(data.warnings.join(" ")).toContain("1 receipt is not included");
     });
 
+    describe("a base that is not two decimal", () => {
+      const account = () => ({ accounts: [{ id: oidHex(), name: "Yen", type: "bank", balance: 5 }] });
+
+      it("a legacy JPY base cannot take a restore that writes rows, dry run included", async () => {
+        const { default: Account } = await import("@/models/Account");
+        const jpy = await newUser("jpy-key-for-backup-test-1", "JPY");
+        const file = await craftFile({ baseCurrency: "JPY" }, account());
+        for (const dryRun of [true, false]) {
+          const res = await restore({ passphrase: PASS, backup: file, dryRun }, { key: "jpy-key-for-backup-test-1", idem: dryRun ? null : "jpy-1" });
+          expect(res.status).toBe(400);
+          const { error } = await res.json();
+          expect(error.code).toBe("BASE_CURRENCY_ONLY_TWO_DECIMALS");
+          expect(error.message).toContain("two decimals");
+        }
+        expect(await Account.countDocuments({ user: jpy })).toBe(0);
+      });
+
+      it("a restore that writes nothing is still allowed into a legacy base", async () => {
+        await newUser("jpy-key-for-backup-test-2", "JPY");
+        const file = await craftFile({ baseCurrency: "JPY", tax: { deductibleCategories: ["health"] } }, {});
+        const res = await restore({ passphrase: PASS, backup: file }, { key: "jpy-key-for-backup-test-2" });
+        expect(res.status).toBe(200);
+      });
+
+      it("a file in such a currency is refused for an empty INR account, the same in a dry run and a real run", async () => {
+        const { default: Account } = await import("@/models/Account");
+        const { default: User } = await import("@/models/User");
+        const fresh = await newUser("fresh-key-for-backup-test-10");
+        const file = await craftFile({ baseCurrency: "JPY" }, account());
+        for (const dryRun of [true, false]) {
+          const res = await restore({ passphrase: PASS, backup: file, dryRun }, { key: "fresh-key-for-backup-test-10", idem: dryRun ? null : "jpy-2" });
+          expect(res.status).toBe(400);
+          expect((await res.json()).error.code).toBe("BASE_CURRENCY_ONLY_TWO_DECIMALS");
+        }
+        expect(await Account.countDocuments({ user: fresh })).toBe(0);
+        const user = (await User.findById(fresh).lean<{ preferences?: { currency?: string }; baseLocked?: boolean }>())!;
+        expect(user.preferences?.currency).toBe("INR");
+        expect(user.baseLocked).not.toBe(true);
+      });
+
+      it("when setting the base fails, the answer carries the real reason, not the 'amounts stored' text", async () => {
+        const base = await import("@/lib/base-currency");
+        const usd = await craftFile({ baseCurrency: "USD" }, account());
+        await newUser("fresh-key-for-backup-test-11");
+
+        const unsupported = vi
+          .spyOn(base, "setBaseCurrency")
+          .mockRejectedValueOnce(new base.BaseCurrencyError("UNSUPPORTED_BASE_CURRENCY", "custom two decimal message"));
+        const res = await restore({ passphrase: PASS, backup: usd }, { key: "fresh-key-for-backup-test-11", idem: "set-1" });
+        unsupported.mockRestore();
+        expect(res.status).toBe(400);
+        expect((await res.json()).error).toMatchObject({ code: "BASE_CURRENCY_ONLY_TWO_DECIMALS", message: "custom two decimal message" });
+
+        const stored = vi.spyOn(base, "setBaseCurrency").mockRejectedValueOnce(new base.BaseCurrencyError("HAS_MONEY_DATA", "x"));
+        const res2 = await restore({ passphrase: PASS, backup: usd }, { key: "fresh-key-for-backup-test-11", idem: "set-2" });
+        stored.mockRestore();
+        expect((await res2.json()).error).toMatchObject({ code: "BASE_CURRENCY_MISMATCH" });
+      });
+    });
+
     it("an older file with link-style attachments still restores, without them", async () => {
       const acct = oidHex();
       const file = await craftFile(

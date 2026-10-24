@@ -16,7 +16,7 @@ import Transaction from "@/models/Transaction";
 import { BackupError, MAX_PLAIN_BYTES } from "@/lib/backup-crypto";
 import { deriveSubkey } from "@/lib/crypto";
 import { BaseCurrencyError, getBaseState, hasMoneyData, lockBaseCurrency, setBaseCurrency } from "@/lib/base-currency";
-import { isSupportedCurrency, MAX_RATE, MAX_MINOR_AMOUNT, MIN_RATE, minorExponent } from "@/lib/currency";
+import { BASE_CURRENCY_ONLY_TWO_DECIMALS, isSupportedAsBase, isSupportedCurrency, MAX_RATE, MAX_MINOR_AMOUNT, MIN_RATE, minorExponent } from "@/lib/currency";
 import { MAX_CATEGORY_LENGTH, MAX_DEDUCTIBLE_CATEGORIES, getTaxSettings, normaliseCategories } from "@/lib/tax-settings";
 import { userTagsOnly } from "@/lib/tags";
 import User from "@/models/User";
@@ -526,6 +526,7 @@ export type RestoreReport = {
 };
 
 const mismatch = (message: string) => new BackupError("base_currency_mismatch", message);
+const twoDecimals = (message: string) => new BackupError("base_currency_only_two_decimals", message);
 
 // Reads only. A file in another currency than the person's base is refused once
 // they have money data (or the base is locked), because every stored amount is in
@@ -542,6 +543,13 @@ async function checkBaseCurrency(userId: string, fileBase: string | undefined) {
       );
     }
     return { current: state.base, willSet: false, unknown: true };
+  }
+  // The base is only ever a two decimal currency (the rest of the server reads base
+  // amounts as hundredths). A file in another kind would have to set one, so it is
+  // refused here, dry run included. The same code as the person's own base is a
+  // legacy account: that is refused below, only if something would be written.
+  if (!isSupportedAsBase(fileBase) && fileBase !== state.base) {
+    throw twoDecimals(`This backup is in ${fileBase}. ${BASE_CURRENCY_ONLY_TWO_DECIMALS}`);
   }
   if (state.base === fileBase) return { current: state.base, willSet: false, unknown: false };
   if (state.locked || (await hasMoneyData(userId))) {
@@ -865,6 +873,10 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
   };
   // Setting and locking the base only matters when something is written.
   const insertsAnything = Object.values(counts).some((c) => c.toCreate > 0);
+  // A legacy base that is not two decimal (JPY, KWD) cannot take rows that createTransaction and the import refuse; the dry run says so too.
+  if (insertsAnything && !isSupportedAsBase(rowBase)) {
+    throw twoDecimals(`Your base currency is ${rowBase}. ${BASE_CURRENCY_ONLY_TWO_DECIMALS} A backup cannot be restored into it.`);
+  }
   const willSet = baseCheck.willSet && insertsAnything;
   if (baseCheck.unknown) {
     warnings.push("This older backup did not record its currency; its amounts are taken as your base currency (INR).");
@@ -888,7 +900,11 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
       try {
         await setBaseCurrency(userId, fileBase!);
       } catch (err) {
-        if (err instanceof BaseCurrencyError) throw mismatch("Your base currency could not be set from the backup because you now have amounts stored.");
+        if (err instanceof BaseCurrencyError) {
+          if (err.code === "HAS_MONEY_DATA") throw mismatch("Your base currency could not be set from the backup because you now have amounts stored.");
+          if (err.code === "UNSUPPORTED_BASE_CURRENCY") throw twoDecimals(err.message);
+          throw new BackupError("invalid", err.message);
+        }
         throw err;
       }
       warnings.push(`Your base currency was set to ${fileBase} from the backup.`);
