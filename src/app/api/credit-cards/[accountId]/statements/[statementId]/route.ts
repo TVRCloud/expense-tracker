@@ -10,7 +10,7 @@ import { Types } from "mongoose";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { getDueDateForStatementClose } from "@/lib/credit-card";
 import { MAX_MINOR_AMOUNT } from "@/lib/currency";
-import { getBaseCurrency } from "@/lib/base-currency";
+import { lockBaseCurrency } from "@/lib/base-currency";
 
 const paySchema = z.object({
   paidAmount: z.number().int().positive().max(MAX_MINOR_AMOUNT),
@@ -164,6 +164,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
         return NextResponse.json({ error: "Source account cannot be a credit card" }, { status: 400 });
       }
 
+      // The payment moves base-unit balances: lock the base before writing.
+      const baseCurrency = await lockBaseCurrency(user.id);
       const sourceBefore = sourceAccount.toObject();
       const cardBefore = cardAccount.toObject();
       sourceAccount.balance -= parsed.data.paidAmount;
@@ -193,7 +195,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
         account: parsed.data.sourceAccountId,
         type: "transfer",
         amount: parsed.data.paidAmount,
-        currency: await getBaseCurrency(user.id),
+        currency: baseCurrency,
         category: "Transfer",
         description: `Payment to ${cardAccount.name}`,
         date: paymentDate,

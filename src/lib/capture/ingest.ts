@@ -316,10 +316,10 @@ async function markSupporting(capture: CaptureDoc, primary: CaptureDoc, transact
 }
 
 /** Values a higher-priority capture would set on a matched transaction. */
-function overrideChanges(parse: MoneyParse, accountId: string | null, inrBase: boolean) {
+function overrideChanges(parse: MoneyParse, accountId: string | null, overwriteAmount: boolean) {
   return {
-    // The parse is in rupees: on another base currency it never overwrites a booked amount.
-    ...(inrBase ? { amount: parse.amountMinor } : {}),
+    // The parse is in rupees: it never overwrites an amount booked in another currency.
+    ...(overwriteAmount ? { amount: parse.amountMinor } : {}),
     type: parse.type,
     ...(accountId ? { accountId } : {}),
     ...(parse.date ? { date: parse.date.toISOString() } : {}),
@@ -399,6 +399,8 @@ async function handleMatch(
         account: Types.ObjectId;
         isDeleted?: boolean;
         reviewStatus?: string | null;
+        originalAmount?: number;
+        originalCurrency?: string;
       }>()
     : null;
 
@@ -415,9 +417,14 @@ async function handleMatch(
   // same event, not a conflict, and a transfer is never rewritten by a capture.
   if (txn.type === "transfer" && parse.atm) return markSupporting(capture, other, txnId);
 
+  // The message is in rupees. A row booked in rupees (an INR base, or an INR
+  // original on another base) can be compared and overwritten; a foreign-currency
+  // row cannot be judged by it and keeps its amount.
   const inrBase = (await getBaseCurrency(user.id)) === "INR";
+  const comparableAmount = txn.originalCurrency === "INR" ? txn.originalAmount : inrBase && !txn.originalCurrency ? txn.amount : undefined;
+  const overwriteAmount = inrBase && !txn.originalCurrency;
   const valuesDiffer =
-    (inrBase && txn.amount !== parse.amountMinor) ||
+    (comparableAmount !== undefined && comparableAmount !== parse.amountMinor) ||
     txn.type !== parse.type ||
     Boolean(accountId && accountId !== txn.account.toString());
 
@@ -435,7 +442,7 @@ async function handleMatch(
       await correctTransaction({
         userId: user.id,
         transactionId: txnId,
-        changes: overrideChanges(parse, accountId, inrBase),
+        changes: overrideChanges(parse, accountId, overwriteAmount),
         reason: "sms_override",
         via: "system",
         actor: user,

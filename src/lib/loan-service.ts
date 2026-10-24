@@ -217,12 +217,12 @@ export type CreateLoanInput = z.infer<typeof loanCreateSchema> & { userId: strin
 export async function createLoan(input: CreateLoanInput) {
   const { userId, actor, accountId, ...loanData } = input;
   await connectDB();
-  await lockBaseCurrency(userId);
 
   if (accountId) {
     const account = await Account.findOne({ _id: accountId, user: userId, isArchived: false });
     if (!account) throw new LoanServiceError("ACCOUNT_NOT_FOUND", "Account not found");
   }
+  await lockBaseCurrency(userId); // after the lookup that can reject the write
 
   const loan = await Loan.create({
     ...loanData,

@@ -143,7 +143,7 @@ export async function getRate(from: string, base: string, override?: number): Pr
     const rate = normalizeRate(override);
     if (providerRate !== null && Math.abs(rate / providerRate - 1) > CLIENT_RATE_BAND) {
       throw new CurrencyError(
-        "INVALID_RATE",
+        "RATE_OUT_OF_BAND",
         `rate is more than ${CLIENT_RATE_BAND * 100}% away from today's rate (${providerRate}); check it`
       );
     }

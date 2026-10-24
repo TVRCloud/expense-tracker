@@ -41,16 +41,30 @@ function baseOf(user: PrefsDoc): CurrencyCode {
 }
 
 export async function getBaseCurrency(userId: string): Promise<CurrencyCode> {
+  return (await getBaseState(userId)).base;
+}
+
+export type BaseState = { base: CurrencyCode; locked: boolean };
+
+/** The base currency and whether it is already locked, in one read. */
+export async function getBaseState(userId: string): Promise<BaseState> {
   await connectDB();
-  const user = await User.findById(userId).select("currency preferences.currency").lean<PrefsDoc>();
-  return baseOf(user);
+  const user = await User.findById(userId)
+    .select("currency preferences.currency baseLocked")
+    .lean<(PrefsDoc & { baseLocked?: boolean }) | null>();
+  return { base: baseOf(user), locked: Boolean(user?.baseLocked) };
 }
 
 /**
- * Locks the base currency for this user (atomic) and returns it. Call before
- * writing any amount in base units; one cheap query that writes only the first time.
+ * Locks the base currency for this user (atomic) and returns the base in force
+ * at that moment. Call it right before writing an amount in base units, after
+ * every check that can reject the write (a rejected write must not lock).
+ * Pass the state you read earlier: once it was locked nothing is written, so a
+ * busy user costs no extra User write. If the returned base differs from the
+ * one you worked with, the base changed in between and the caller redoes its work.
  */
-export async function lockBaseCurrency(userId: string): Promise<CurrencyCode> {
+export async function lockBaseCurrency(userId: string, known?: BaseState): Promise<CurrencyCode> {
+  if (known?.locked) return known.base;
   await connectDB();
   const user = await User.findOneAndUpdate(
     { _id: userId },
@@ -66,6 +80,8 @@ export async function hasMoneyData(userId: string): Promise<boolean> {
   const found = await Promise.all([
     Transaction.exists(mine),
     Account.exists({ ...mine, balance: { $ne: 0 } }),
+    Account.exists({ ...mine, "creditMeta.creditLimit": { $gt: 0 } }),
+    Account.exists({ ...mine, lowBalanceAt: { $ne: null } }),
     Budget.exists(mine),
     Goal.exists(mine),
     Loan.exists(mine),
@@ -77,7 +93,7 @@ export async function hasMoneyData(userId: string): Promise<boolean> {
 }
 
 const REFUSED =
-  "The base currency is fixed once you have transactions, balances, budgets, goals, loans, funds, assets or a spend limit, because every stored amount is in it.";
+  "The base currency is fixed once you have transactions, balances, credit limits, budgets, goals, loans, funds, assets or a spend limit, because every stored amount is in it.";
 
 /** Sets the base currency. Refused once any money row exists or the user is locked, unless it is the same code. */
 export async function setBaseCurrency(userId: string, code: string): Promise<string> {

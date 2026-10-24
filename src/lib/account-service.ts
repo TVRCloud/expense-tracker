@@ -25,8 +25,8 @@ export type CreateAccountInput = z.infer<typeof accountCreateSchema> & { userId:
 export async function createAccount(input: CreateAccountInput) {
   const { userId, actor, ...rest } = input;
   await connectDB();
-  // An opening balance is a base-unit amount; an empty account is not.
-  if (rest.balance !== 0) await lockBaseCurrency(userId);
+  // An opening balance and a credit limit are base-unit amounts; an empty account is not.
+  if (rest.balance !== 0 || (rest.creditMeta?.creditLimit ?? 0) > 0) await lockBaseCurrency(userId);
   const account = await Account.create({ ...rest, user: userId });
   await appendLedgerBlock({
     userId,
@@ -65,6 +65,10 @@ export async function updateAccount(input: UpdateAccountInput) {
   const filter = { _id: accountId, user: userId };
   const before = await Account.findOne(filter).lean();
   if (!before) throw new AccountServiceError("ACCOUNT_NOT_FOUND", "Account not found");
+  // A low-cash line or a credit limit is a base-unit amount.
+  if (typeof changes.lowBalanceAt === "number" || (changes.creditMeta?.creditLimit ?? 0) > 0) {
+    await lockBaseCurrency(userId);
+  }
   const account = await Account.findOneAndUpdate(filter, { $set: changes }, { new: true }).lean();
   if (!account) throw new AccountServiceError("ACCOUNT_NOT_FOUND", "Account not found");
 

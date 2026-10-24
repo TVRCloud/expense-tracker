@@ -13,7 +13,7 @@ import { computeInstallmentDates, OPEN_ENDED_WINDOW } from "@/lib/recurrence";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { ruleOverridesForTransaction } from "@/lib/rule-service";
 import logger from "@/lib/logger";
-import { lockBaseCurrency } from "@/lib/base-currency";
+import { getBaseState, lockBaseCurrency, type BaseState } from "@/lib/base-currency";
 import { convertMinor, CurrencyError, isSupportedCurrency, MAX_MINOR_AMOUNT, minorExponent } from "@/lib/currency";
 import { getRate, RateUnavailableError } from "@/lib/exchange-rate-service";
 
@@ -161,6 +161,7 @@ export type TransactionServiceErrorCode =
   | "TRANSFER_ACCOUNT_NOT_FOUND"
   | "RATE_UNAVAILABLE"
   | "CONVERSION_FAILED"
+  | "RATE_OUT_OF_BAND"
   | "CURRENCY_MISMATCH"
   | "TRANSACTION_NOT_FOUND"
   | "TRANSACTION_LOCKED"
@@ -245,12 +246,10 @@ type ResolvedAmount = {
 // Works out the base-currency `amount` and the foreign-spend fields to store.
 // Plain base-currency requests pass through untouched.
 async function resolveAmount(
-  userId: string,
+  state: BaseState,
   input: { amount?: number; currency?: string; originalAmount?: number; originalCurrency?: string; rate?: number }
 ): Promise<ResolvedAmount> {
-  // Locks the base currency (atomic) and reads it in the same step, so a
-  // concurrent base change either lands before this row or is refused.
-  const baseCurrency = await lockBaseCurrency(userId);
+  const baseCurrency = state.base;
   if (input.originalAmount === undefined || input.originalCurrency === undefined) {
     if (input.amount === undefined) throw new Error("createTransaction needs amount or originalAmount");
     if (input.currency !== undefined && input.currency !== baseCurrency) {
@@ -282,6 +281,9 @@ async function resolveAmount(
     };
   } catch (err) {
     if (err instanceof RateUnavailableError) throw new TransactionServiceError("RATE_UNAVAILABLE", err.message);
+    if (err instanceof CurrencyError && err.code === "RATE_OUT_OF_BAND") {
+      throw new TransactionServiceError("RATE_OUT_OF_BAND", err.message);
+    }
     if (err instanceof CurrencyError) throw new TransactionServiceError("CONVERSION_FAILED", err.message);
     throw err;
   }
@@ -303,7 +305,16 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     }
   }
 
-  const foreignFields = await resolveAmount(userId, restIn);
+  // Read the base, run every check and the conversion, and only then lock the
+  // base (right before anything is written): a rejected request must not pin
+  // an empty user's base currency. If the base changed between the read and
+  // the lock, redo the work against the base now in force.
+  const baseState = await getBaseState(userId);
+  let foreignFields = await resolveAmount(baseState, restIn);
+  const lockedBase = await lockBaseCurrency(userId, baseState);
+  if (lockedBase !== baseState.base) {
+    foreignFields = await resolveAmount({ base: lockedBase, locked: true }, restIn);
+  }
   // `currency` is the base currency's code and `amount` is paise of it; the
   // schema guarantees an amount exists once resolveAmount has run.
   const { currency: _ignoredCurrency, originalAmount: _a, originalCurrency: _c, rate: _r, ...restBase } = restIn;

@@ -139,7 +139,9 @@ export const POST = withIntegrationRoute("transactions", async ({ req, user, req
         } catch (err) {
           // A missing rate can pass in minutes, so it is not stored against the
           // Idempotency-Key: a retry with the same key must try again.
-          if (err instanceof TransactionServiceError && err.code === "RATE_UNAVAILABLE") throw err;
+          // The same for a client rate outside the band: it is judged against a
+          // provider rate that moves daily. Only deterministic errors are stored.
+          if (err instanceof TransactionServiceError && (err.code === "RATE_UNAVAILABLE" || err.code === "RATE_OUT_OF_BAND")) throw err;
           if (err instanceof TransactionServiceError) {
             return { status: err.code === "CONVERSION_FAILED" || err.code === "CURRENCY_MISMATCH" ? 400 : 404, body: { errorCode: err.code, message: err.message } };
           }
@@ -148,7 +150,7 @@ export const POST = withIntegrationRoute("transactions", async ({ req, user, req
       },
     });
   } catch (err) {
-    if (err instanceof TransactionServiceError && err.code === "RATE_UNAVAILABLE") {
+    if (err instanceof TransactionServiceError && (err.code === "RATE_UNAVAILABLE" || err.code === "RATE_OUT_OF_BAND")) {
       return integrationError("VALIDATION_ERROR", err.message, requestId, { details: { errorCode: err.code } });
     }
     throw err;

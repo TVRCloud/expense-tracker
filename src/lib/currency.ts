@@ -46,7 +46,7 @@ export function currencyName(code: string): string {
 }
 
 export class CurrencyError extends Error {
-  code: "INVALID_RATE" | "AMOUNT_OUT_OF_RANGE";
+  code: "INVALID_RATE" | "AMOUNT_OUT_OF_RANGE" | "RATE_OUT_OF_BAND";
   constructor(code: CurrencyError["code"], message: string) {
     super(message);
     this.code = code;

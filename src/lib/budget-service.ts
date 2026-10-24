@@ -134,7 +134,6 @@ export class BudgetServiceError extends Error {
 export async function createBudget(input: CreateBudgetInput) {
   const { userId, actor, ...rest } = input;
   await connectDB();
-  await lockBaseCurrency(userId);
 
   const existing = await Budget.findOne({
     user: userId,
@@ -145,6 +144,7 @@ export async function createBudget(input: CreateBudgetInput) {
   if (existing && existing.isDeleted !== true) {
     throw new BudgetServiceError("BUDGET_EXISTS", "Budget already exists for this category and period");
   }
+  await lockBaseCurrency(userId); // after the checks that can reject the write
 
   if (existing?.isDeleted === true) {
     const before = existing.toObject();

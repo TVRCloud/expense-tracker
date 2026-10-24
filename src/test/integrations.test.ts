@@ -8171,6 +8171,14 @@ describe("multi-currency", () => {
         const { default: Account } = await import("@/models/Account");
         await Account.collection.insertOne({ user, name: "Bank", type: "bank", balance: 100, currency: "INR" });
       },
+      "an account with a credit limit": async (user) => {
+        const { default: Account } = await import("@/models/Account");
+        await Account.collection.insertOne({ user, name: "Card", type: "credit_card", balance: 0, currency: "INR", creditMeta: { creditLimit: 500000 } });
+      },
+      "an account with a low-cash line": async (user) => {
+        const { default: Account } = await import("@/models/Account");
+        await Account.collection.insertOne({ user, name: "Cash", type: "cash", balance: 0, currency: "INR", lowBalanceAt: 50000 });
+      },
       "a transaction": async (user) => {
         const { default: Transaction } = await import("@/models/Transaction");
         await Transaction.collection.insertOne({ user, amount: 100, type: "expense", category: "x", date: new Date() });
@@ -8404,6 +8412,263 @@ describe("multi-currency", () => {
     expect(ok.status).toBe(201);
     expect((await ok.json()).data.currency).toBe("USD");
     expect((await POST(req("accounts", "POST", { name: "Bad", type: "bank", currency: "ZZZ" }), {})).status).toBe(400);
+  });
+
+
+  describe("review fixes", () => {
+    const actorOf = (u: { _id: { toString(): string }; name: string; email: string }) => ({ id: u._id.toString(), name: u.name, email: u.email, role: "user" });
+    const lockedOf = async (id: unknown) => {
+      const { default: User } = await import("@/models/User");
+      return Boolean((await User.findById(id).lean<{ baseLocked?: boolean }>())!.baseLocked);
+    };
+
+    it("credit limits and low-cash lines are base-unit amounts: setting one locks the base", async () => {
+      const { createAccount, updateAccount } = await import("@/lib/account-service");
+      let u = await makeUser();
+      await createAccount({ userId: String(u._id), actor: actorOf(u), name: "Card", type: "credit_card", balance: 0, currency: "INR", creditMeta: { creditLimit: 100000 } } as never);
+      expect(await lockedOf(u._id)).toBe(true);
+
+      u = await makeUser();
+      const empty = await createAccount({ userId: String(u._id), actor: actorOf(u), name: "Empty", type: "cash", balance: 0, currency: "INR" });
+      expect(await lockedOf(u._id)).toBe(false);
+      await updateAccount({ userId: String(u._id), accountId: String(empty._id), actor: actorOf(u), name: "Renamed" });
+      expect(await lockedOf(u._id)).toBe(false);
+      await updateAccount({ userId: String(u._id), accountId: String(empty._id), actor: actorOf(u), lowBalanceAt: null });
+      expect(await lockedOf(u._id)).toBe(false);
+      await updateAccount({ userId: String(u._id), accountId: String(empty._id), actor: actorOf(u), lowBalanceAt: 50000 });
+      expect(await lockedOf(u._id)).toBe(true);
+
+      u = await makeUser();
+      const card = await createAccount({ userId: String(u._id), actor: actorOf(u), name: "Card", type: "credit_card", balance: 0, currency: "INR" });
+      await updateAccount({ userId: String(u._id), accountId: String(card._id), actor: actorOf(u), creditMeta: { creditLimit: 90000 } });
+      expect(await lockedOf(u._id)).toBe(true);
+    });
+
+    it("a rejected write does not lock an empty user's base", async () => {
+      const { setBaseCurrency } = await import("@/lib/base-currency");
+      const { createLoan } = await import("@/lib/loan-service");
+      const { createBudget } = await import("@/lib/budget-service");
+      const missing = new mongoose.Types.ObjectId().toString();
+
+      expect((await post({ amount: 100, currency: "USD" })).status).toBe(400); // wrong currency
+      providerCalls.mode = "down";
+      expect((await post({ originalAmount: 100, originalCurrency: "USD" })).status).toBe(400); // no rate
+      expect((await post({ originalAmount: 1, originalCurrency: "JPY", rate: 0.001 })).status).toBe(400); // rounds to nothing
+      expect((await post({ amount: 100, accountId: missing })).status).toBe(404); // no such account
+      expect(await lockedOf(userId)).toBe(false);
+
+      const { default: User } = await import("@/models/User");
+      const u = await User.findById(userId);
+      await expect(
+        createLoan({ userId, actor: actorOf(u!), direction: "given", counterparty: "Sam", principalAmount: 1000, startDate: new Date().toISOString(), accountId: missing } as never)
+      ).rejects.toThrow();
+      expect(await lockedOf(userId)).toBe(false);
+
+      await createBudget({ userId, actor: actorOf(u!), category: "Food", month: 10, year: 2026, limitAmount: 1000 } as never);
+      expect(await lockedOf(userId)).toBe(true); // a real write locks
+      await expect(setBaseCurrency(userId, "USD")).rejects.toThrow(/fixed once/);
+    });
+
+    it("a rejected write leaves the base changeable", async () => {
+      const { setBaseCurrency } = await import("@/lib/base-currency");
+      expect((await post({ amount: 100, currency: "USD" })).status).toBe(400);
+      expect(await setBaseCurrency(userId, "USD")).toBe("USD");
+    });
+
+    it("once the base is locked a transaction writes nothing to the user", async () => {
+      const { default: User } = await import("@/models/User");
+      await post({ amount: 100 });
+      expect(await lockedOf(userId)).toBe(true);
+      const spy = vi.spyOn(User, "findOneAndUpdate");
+      await post({ amount: 200 });
+      await post({ originalAmount: 100, originalCurrency: "USD" });
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it("the base changing between the read and the lock redoes the conversion against the new base", async () => {
+      const { default: User } = await import("@/models/User");
+      const { createTransaction } = await import("@/lib/transaction-service");
+      const u = await User.findById(userId);
+      // After createTransaction has read the base (INR) but before it locks, switch it to USD.
+      const realFind = User.findOneAndUpdate.bind(User);
+      let switched = false;
+      vi.spyOn(User, "findOneAndUpdate").mockImplementation(((filter: unknown, update: unknown, opts: unknown) => {
+        if (!switched) {
+          switched = true;
+          return {
+            lean: () =>
+              User.updateOne({ _id: userId }, { $set: { "preferences.currency": "USD" } }).then(() =>
+                realFind(filter as never, update as never, opts as never).lean()
+              ),
+          };
+        }
+        return realFind(filter as never, update as never, opts as never);
+      }) as never);
+      const result = await createTransaction({
+        userId, actor: actorOf(u!), accountId, type: "expense", category: "Travel", tags: [], isRecurring: false,
+        date: new Date().toISOString(), originalAmount: 100000, originalCurrency: "INR",
+      });
+      // Converted to USD (1000.00 INR is 12.00 USD), not booked as INR.
+      expect(result.transaction).toMatchObject({ currency: "USD", amount: 1200, originalCurrency: "INR" });
+    });
+
+    it("a transfer in another currency is a 400 with advice, not a 404", async () => {
+      const { default: Account } = await import("@/models/Account");
+      const other = await Account.create({ user: userId, name: "Savings", type: "savings", balance: 0, currency: "INR" });
+      const { POST } = await import("@/app/api/integrations/transfers/route");
+      const call = (body: Record<string, unknown>) =>
+        POST(req("transfers", "POST", { fromAccountId: accountId, toAccountId: String(other._id), amount: 1000, ...body }), {});
+      const bad = await call({ currency: "USD" });
+      expect(bad.status).toBe(400);
+      expect((await bad.json()).error.message).toMatch(/originalAmount and originalCurrency/);
+      expect((await call({ currency: "INR" })).status).toBe(201);
+      expect((await call({})).status).toBe(201);
+      const missing = await call({ toAccountId: new mongoose.Types.ObjectId().toString() });
+      expect(missing.status).toBe(404);
+    });
+
+    it("a client rate outside the band is not stored under the Idempotency-Key, but a deterministic error is", async () => {
+      const far = await post({ originalAmount: 1000, originalCurrency: "JPY", rate: 0.9 }, { "idempotency-key": "fx-band" });
+      expect(far.status).toBe(400);
+      // Same key, different body: if the 400 had been stored this would be a 409.
+      const retry = await post({ originalAmount: 1000, originalCurrency: "JPY", rate: 0.55 }, { "idempotency-key": "fx-band" });
+      expect(retry.status).toBe(201);
+
+      const { default: ExchangeRate } = await import("@/models/ExchangeRate");
+      await ExchangeRate.deleteMany({});
+      providerCalls.mode = "down";
+      const tiny = await post({ originalAmount: 1, originalCurrency: "JPY", rate: 0.001 }, { "idempotency-key": "fx-tiny" });
+      expect(tiny.status).toBe(400);
+      const again = await post({ originalAmount: 1000, originalCurrency: "JPY", rate: 0.55 }, { "idempotency-key": "fx-tiny" });
+      expect(again.status).toBe(409);
+    });
+
+    it("the amount of a foreign row cannot be corrected on its own", async () => {
+      const { correctTransaction, ReconcileError } = await import("@/lib/reconcile/correct");
+      const { default: User } = await import("@/models/User");
+      const u = await User.findById(userId);
+      const created = await (await post({ originalAmount: 1234, originalCurrency: "USD" })).json();
+      const attempt = (changes: Record<string, unknown>) =>
+        correctTransaction({ userId, transactionId: created.data.id, changes, reason: "wrong_amount", via: "mobile", actor: actorOf(u!) } as never);
+      await expect(attempt({ amount: 5000 })).rejects.toBeInstanceOf(ReconcileError);
+      await expect(attempt({ amount: 5000 })).rejects.toThrow(/fixed/);
+      // Other fields still correct; the amount stays.
+      await attempt({ category: "Hotels" });
+      const { default: Transaction } = await import("@/models/Transaction");
+      expect(await Transaction.findById(created.data.id).lean()).toMatchObject({ category: "Hotels", amount: 102833, originalAmount: 1234 });
+    });
+
+    describe("bank messages on a USD base", () => {
+      // No bank reference in these, so a later copy can only be matched on amount, account and day.
+      const NOTIF = "₹250 paid to Swiggy from A/c XX1234";
+      const SMS = "Rs.250.00 debited from A/c XX1234 on 26-09-26 to VPA swiggy@icici. Not you? Call 18002586161";
+      const T0 = new Date("2026-09-26T06:30:00Z");
+
+      async function setup() {
+        const { default: Account } = await import("@/models/Account");
+        const user = await makeUser({ preferences: { currency: "USD" } });
+        const bank = await Account.create({ user: user._id, name: "HDFC", type: "bank", balance: 0, currency: "INR", smsLastFour: ["1234"] });
+        return { user, bank, actor: actorOf(user) };
+      }
+      async function ingest(actor: ReturnType<typeof actorOf>, channel: "sms" | "notification" | "n8n", text: string, at: Date) {
+        const { ingestCapture } = await import("@/lib/capture/ingest");
+        return ingestCapture({ user: actor, channel, text, receivedAt: at, sender: channel === "sms" ? "VM-HDFCBK" : undefined });
+      }
+      async function live(userId: string) {
+        const { default: Transaction } = await import("@/models/Transaction");
+        return Transaction.find({ user: userId, isDeleted: { $ne: true } }).lean<Record<string, unknown>[]>();
+      }
+
+      it("after a correction, another copy of the same payment is still matched, not booked again", async () => {
+        const { actor } = await setup();
+        const first = await ingest(actor, "sms", SMS, T0);
+        expect(first.body.status).toBe("created");
+        const [row] = await live(actor.id);
+        expect(row).toMatchObject({ amount: 300, currency: "USD", originalAmount: 25000, originalCurrency: "INR" });
+
+        // A correction rewrites the capture's eventKey; it must stay in rupees (the message's own unit).
+        const { correctTransaction } = await import("@/lib/reconcile/correct");
+        await correctTransaction({
+          userId: actor.id, transactionId: String(row._id), changes: { category: "Food" }, reason: "wrong_category", via: "mobile", actor,
+        } as never);
+        const { default: CapturedMessage } = await import("@/models/CapturedMessage");
+        const key = (await CapturedMessage.findOne({ user: actor.id }).lean<{ eventKey: { amount: number } }>())!.eventKey;
+        expect(key.amount).toBe(25000);
+
+        // Another channel, same payment, no bank reference: matched on amount, account and day.
+        const copy = await ingest(actor, "n8n", `VM-HDFCBK: ${SMS}`, new Date(T0.getTime() + 5 * 60_000));
+        expect(copy.body.status).toBe("duplicate");
+        expect(await live(actor.id)).toHaveLength(1);
+      });
+
+      it("a later SMS over a notification's row keeps rupees in the eventKey too", async () => {
+        const { actor } = await setup();
+        await ingest(actor, "notification", NOTIF, T0);
+        const { promoteStalePendingSms } = await import("@/lib/capture/ingest");
+        await promoteStalePendingSms({ now: new Date(Date.now() + 16 * 60_000) });
+        const sms = await ingest(actor, "sms", SMS, new Date(T0.getTime() + 120 * 60_000));
+        expect(sms.body.status).toBe("updated");
+        const [row] = await live(actor.id);
+        expect(row).toMatchObject({ amount: 300, originalAmount: 25000, source: "sms" });
+        const { default: CapturedMessage } = await import("@/models/CapturedMessage");
+        const smsCapture = await CapturedMessage.findOne({ user: actor.id, channel: "sms" }).lean<{ eventKey: { amount: number } }>();
+        expect(smsCapture!.eventKey.amount).toBe(25000);
+      });
+
+      it("a confirmed row the SMS disagrees with is still a source conflict, and nothing is overwritten", async () => {
+        const { actor } = await setup();
+        const REF = ". UPI Ref 426912345678";
+        await ingest(actor, "notification", NOTIF + REF, T0);
+        const { promoteStalePendingSms } = await import("@/lib/capture/ingest");
+        await promoteStalePendingSms({ now: new Date(Date.now() + 16 * 60_000) });
+        const { default: Transaction } = await import("@/models/Transaction");
+        await Transaction.updateMany({ user: actor.id }, { $set: { reviewStatus: "confirmed" } });
+
+        const sms = await ingest(actor, "sms", SMS.replace("Rs.250.00", "Rs.260.00").replace("Not you?", `UPI Ref 426912345678. Not you?`), new Date(T0.getTime() + 120 * 60_000));
+        expect(sms.body).toMatchObject({ status: "queued", reason: "source_conflict" });
+        const [row] = await live(actor.id);
+        expect(row).toMatchObject({ amount: 300, originalAmount: 25000 });
+      });
+
+      it("the same amount on a confirmed row is no conflict", async () => {
+        const { actor } = await setup();
+        await ingest(actor, "notification", NOTIF, T0);
+        const { promoteStalePendingSms } = await import("@/lib/capture/ingest");
+        await promoteStalePendingSms({ now: new Date(Date.now() + 16 * 60_000) });
+        const { default: Transaction } = await import("@/models/Transaction");
+        await Transaction.updateMany({ user: actor.id }, { $set: { reviewStatus: "confirmed" } });
+        const sms = await ingest(actor, "sms", SMS, new Date(T0.getTime() + 120 * 60_000));
+        expect(sms.body.status).not.toBe("queued");
+        expect(await live(actor.id)).toHaveLength(1);
+      });
+    });
+
+    it("paying a card statement locks the base and books the payment in it", async () => {
+      const { default: Account } = await import("@/models/Account");
+      const { default: CreditStatement } = await import("@/models/CreditStatement");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const { default: User } = await import("@/models/User");
+      await User.updateOne({ _id: userId }, { $set: { "preferences.currency": "USD" } });
+      const card = await Account.create({
+        user: userId, name: "Card", type: "credit_card", balance: 0, currency: "EUR",
+        creditMeta: { billingCycleDay: 5, paymentDueDay: 20 },
+      });
+      const statement = await CreditStatement.collection.insertOne({
+        user: new mongoose.Types.ObjectId(userId), account: card._id,
+        periodStart: new Date("2026-08-05"), periodEnd: new Date("2026-09-04"), dueDate: new Date("2026-09-20"), isDeleted: false,
+      });
+      expect(await lockedOf(userId)).toBe(false);
+      sessionUser.current = { id: userId, name: "FX", email: "fx@x.com", role: "user" };
+      const { PATCH } = await import("@/app/api/credit-cards/[accountId]/statements/[statementId]/route");
+      const res = await PATCH(
+        new NextRequest("http://localhost/x", { method: "PATCH", body: JSON.stringify({ paidAmount: 5000, sourceAccountId: accountId }) }),
+        { params: Promise.resolve({ accountId: String(card._id), statementId: String(statement.insertedId) }) }
+      );
+      sessionUser.current = null;
+      expect(res.status).toBe(200);
+      expect(await lockedOf(userId)).toBe(true);
+      expect(await Transaction.findOne({ user: userId, type: "transfer" }).lean()).toMatchObject({ currency: "USD", amount: 5000 });
+    });
   });
 
   describe("bank messages (rupees) on a base currency that is not INR", () => {
