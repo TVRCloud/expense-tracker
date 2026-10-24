@@ -7968,13 +7968,62 @@ describe("tax helper", () => {
     expect(res.headers.get("content-disposition")).toContain("tax-summary-2025-26.csv");
     const text = await res.text();
     const lines = text.split("\n");
-    expect(lines[0]).toBe("section,name,amount");
+    expect(lines[0]).toBe("section,name,amount (INR)");
     expect(lines).toContain("Summary,Saved,-53");
     expect(lines).toContain("Summary,Financial year,2025-26");
     expect(text).toContain("Spending by category,'=HYPERLINK(1),50");
     expect(text).not.toContain(",=HYPERLINK");
     const bad = await GET(new NextRequest("http://localhost/api/integrations/tax/export?fy=zzz", { headers: headers() }), {});
     expect(bad.status).toBe(400);
+  });
+
+  describe("base currency", () => {
+    const csvFor = async (fy = 2025) => {
+      const { GET } = await import("@/app/api/integrations/tax/export/route");
+      const res = await GET(new NextRequest(`http://localhost/api/integrations/tax/export?fy=${fy}`, { headers: headers() }), {});
+      return (await res.text()).split("\n");
+    };
+    const setBase = async (code: string) => {
+      const { default: User } = await import("@/models/User");
+      await User.updateOne({ _id: userId }, { $set: { "preferences.currency": code } });
+    };
+
+    // [code, decimals, spent, earned (minor units), spent shown, saved shown]
+    it.each([
+      ["JPY", 0, 5000, 4000, "5000", "-1000"],
+      ["USD", 2, 123456, 122222, "1234.56", "-12.34"],
+      ["KWD", 3, 12345, 11111, "12.345", "-1.234"],
+    ])("%s: the csv amounts and header follow its %i decimals", async (code, exponent, spent, earned, spentShown, savedShown) => {
+      await setBase(code as string);
+      await add("expense", spent as number, "2025-06-01T06:00:00Z");
+      await add("income", earned as number, "2025-06-02T06:00:00Z");
+      const lines = await csvFor();
+      expect(lines[0]).toBe(`section,name,amount (${code})`);
+      expect(lines).toContain(`Spending by category,Food,${spentShown}`);
+      expect(lines).toContain(`Summary,Saved,${savedShown}`);
+      const { data } = await (await summary("?fy=2025")).json();
+      expect(data).toMatchObject({ currency: code, exponent, expense: spent });
+    });
+
+    it("sums the base amount and ignores the foreign original", async () => {
+      await setBase("INR");
+      // 100.00 USD booked at 83 INR: 8300.00 INR is 830000 paise; only `amount` (base) counts, not originalAmount
+      await add("expense", 830000, "2025-06-01T06:00:00Z", { originalAmount: 10000, originalCurrency: "USD", rate: 83 });
+      await add("income", 5000, "2025-06-02T06:00:00Z", { originalAmount: 60, originalCurrency: "EUR", rate: 90 });
+      const { data } = await (await summary("?fy=2025")).json();
+      expect(data).toMatchObject({ expense: 830000, income: 5000, saved: -825000, count: 2 });
+      expect(data.expenseByCategory).toEqual([{ category: "Food", total: 830000 }]);
+    });
+
+    it("counts each split line once", async () => {
+      await setCategories(["health"]);
+      const group = new mongoose.Types.ObjectId();
+      await add("expense", 6000, "2025-09-01T06:00:00Z", { category: "Health", splitGroupId: group });
+      await add("expense", 4000, "2025-09-01T06:00:00Z", { category: "Food", splitGroupId: group });
+      const { data } = await (await summary("?fy=2025")).json();
+      expect(data).toMatchObject({ expense: 10000, count: 2 });
+      expect(data.deductible.total).toBe(6000);
+    });
   });
 
   it("browser routes answer the same summary, settings and csv", async () => {

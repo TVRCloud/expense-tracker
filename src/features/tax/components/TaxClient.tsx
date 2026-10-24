@@ -3,7 +3,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { Download, Printer, Receipt } from "lucide-react";
 import { toast } from "sonner";
-import { useCurrency } from "@/hooks/useCurrency";
+import { formatMinor, formatMinorCompact } from "@/lib/money-format";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
@@ -25,8 +25,8 @@ function Figure({ label, value, tone }: { label: string; value: string; tone?: s
 
 // Twelve bars, April to March: spending in the ink colour, the deductible part
 // laid over it in green, so the gap is what is not claimable.
-function MonthBars({ months }: { months: TaxMonth[] }) {
-  const { formatCurrencyCompact } = useCurrency();
+function MonthBars({ months, currency }: { months: TaxMonth[]; currency: string }) {
+  const formatCurrencyCompact = (n: number) => formatMinorCompact(n, currency);
   const top = Math.max(1, ...months.map((m) => m.expense));
   return (
     <div className="grid grid-cols-12 gap-1.5 items-end h-28" role="img" aria-label="Spending and deductible spending by month">
@@ -46,8 +46,8 @@ function MonthBars({ months }: { months: TaxMonth[] }) {
   );
 }
 
-function Rows({ rows }: { rows: TaxRow[] }) {
-  const { formatCurrency } = useCurrency();
+function Rows({ rows, currency }: { rows: TaxRow[]; currency: string }) {
+  const formatCurrency = (n: number) => formatMinor(n, currency);
   return (
     <div className="inset-group" style={{ "--inset": "16px" } as CSSProperties}>
       {rows.map((r) => (
@@ -62,7 +62,6 @@ function Rows({ rows }: { rows: TaxRow[] }) {
 
 export function TaxClient() {
   const [fy, setFy] = useState<number | undefined>(undefined);
-  const { formatCurrency } = useCurrency();
   const { data, isLoading } = useTaxSummary(fy);
   const setCategories = useChangeDeductibleCategories();
   const [saving, setSaving] = useState<Set<string>>(new Set());
@@ -87,6 +86,7 @@ export function TaxClient() {
 
   const marked = new Set(data.deductibleCategories);
   const nothing = data.count === 0;
+  const formatCurrency = (n: number) => formatMinor(n, data.currency);
 
   // Every category with spend this year, plus any saved one with none, so a
   // saved category can always be switched off.
@@ -162,13 +162,13 @@ export function TaxClient() {
               <Figure label="Spending" value={formatCurrency(data.expense)} />
               <Figure label="Saved" value={formatCurrency(data.saved)} tone={data.saved < 0 ? "var(--red)" : undefined} />
             </div>
-            <MonthBars months={data.byMonth} />
+            <MonthBars months={data.byMonth} currency={data.currency} />
           </div>
 
           <section className="space-y-2">
             <h2 style={{ font: "var(--text-h2)", color: "var(--ink)" }}>Deductible by category</h2>
             {data.deductible.byCategory.length > 0 ? (
-              <Rows rows={data.deductible.byCategory} />
+              <Rows rows={data.deductible.byCategory} currency={data.currency} />
             ) : (
               <p style={{ font: "var(--text-label)", color: "var(--ink-3)" }}>Switch a category on below to count it as deductible.</p>
             )}
@@ -177,7 +177,7 @@ export function TaxClient() {
           {data.incomeByCategory.length > 0 && (
             <section className="space-y-2">
               <h2 style={{ font: "var(--text-h2)", color: "var(--ink)" }}>Income by category</h2>
-              <Rows rows={data.incomeByCategory} />
+              <Rows rows={data.incomeByCategory} currency={data.currency} />
             </section>
           )}
 
