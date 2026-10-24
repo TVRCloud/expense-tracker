@@ -29,7 +29,7 @@ export const PASSPHRASE_MAX = 256;
 export const MAX_BACKUP_BYTES = 24 * 1024 * 1024;
 export const MAX_PLAIN_BYTES = 48 * 1024 * 1024;
 
-export type BackupFailure = "unreadable" | "invalid" | "too_large" | "busy";
+export type BackupFailure = "unreadable" | "invalid" | "too_large" | "too_large_for_response" | "busy";
 
 export class BackupError extends Error {
   constructor(
@@ -88,9 +88,14 @@ function aad(e: { v: number; createdAt: string; kdf: { N: number; r: number; p: 
 // scrypt holds 128 MiB while it runs: at most two run at once, a short queue
 // waits, and anything past that is turned away instead of piling up memory.
 const MAX_ACTIVE = 2;
-const MAX_QUEUE = 16;
+const MAX_QUEUE = 4;
 let active = 0;
 const waiting: Array<() => void> = [];
+/** True if a derivation could start or queue now. Routes ask before reading a body, so a flood cannot pile up bodies behind a full gate. */
+export function keyGateOpen() {
+  return active < MAX_ACTIVE || waiting.length < MAX_QUEUE;
+}
+
 async function withKeySlot<T>(work: () => Promise<T>): Promise<T> {
   if (active >= MAX_ACTIVE) {
     if (waiting.length >= MAX_QUEUE) throw new BackupError("busy", "The server is busy opening backups; try again in a moment");
@@ -159,15 +164,27 @@ export async function sealPacked(
   } as BackupEnvelope;
 }
 
+/** JSON then gzip. Its length is (to within the 16 byte tag) the length of the ciphertext. */
+export async function packBackup(payload: unknown): Promise<Buffer> {
+  const plain = Buffer.from(JSON.stringify(payload), "utf8");
+  if (plain.length > MAX_PLAIN_BYTES) throw new BackupError("too_large", "Backup is too large");
+  return gzipAsync(plain);
+}
+
 export async function encryptBackup(
   payload: unknown,
   passphrase: string,
   opts: { createdAt?: string; version?: FileVersion } = {}
 ): Promise<BackupEnvelope> {
-  const plain = Buffer.from(JSON.stringify(payload), "utf8");
-  if (plain.length > MAX_PLAIN_BYTES) throw new BackupError("too_large", "Backup is too large");
-  return sealPacked(await gzipAsync(plain), passphrase, opts);
+  return sealPacked(await packBackup(payload), passphrase, opts);
 }
+
+// Vercel Functions allow at most 4.5 MB in a response body, so POST /backup stops
+// short of that. The envelope around the base64 ciphertext and the counts fit in
+// the 8 KiB reserved here.
+export const MAX_RESPONSE_BYTES = 4_000_000;
+export const RESPONSE_OVERHEAD_BYTES = 8 * 1024;
+export const estimatedResponseBytes = (packedLength: number) => Math.ceil((packedLength + 16) / 3) * 4 + RESPONSE_OVERHEAD_BYTES;
 
 // A wrong passphrase and a changed file give the same answer on purpose.
 const UNREADABLE = "Could not open the backup. Check the passphrase and that the file is unchanged.";

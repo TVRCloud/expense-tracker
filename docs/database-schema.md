@@ -91,7 +91,7 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `deletedAt` | Date | |
 | `deletedBy` | ObjectId | ref: User |
 
-Indexes: `{user, isDeleted, date}` plus `{user, isDeleted, <account\|transferTo\|type\|category\|splitGroupId\|reviewStatus\|refundStatus>, date}`, sparse `{user, refundOf}`, recurring-series indexes, `{user, tags}`, full-text on `{description, note}`
+Indexes: `{user, isDeleted, date}` plus `{user, isDeleted, <account\|transferTo\|type\|category\|splitGroupId\|reviewStatus\|refundStatus>, date}`, sparse `{user, refundOf}`, sparse `{recurringId}` and `{splitGroupId}` (restore checks whether other people's rows use an id), recurring-series indexes, `{user, tags}`, full-text on `{description, note}`
 
 ## budgets
 

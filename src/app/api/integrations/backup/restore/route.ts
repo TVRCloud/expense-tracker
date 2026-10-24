@@ -3,7 +3,7 @@ import { withIntegrationRoute } from "@/lib/integrations/handler";
 import { integrationOk, integrationError } from "@/lib/integrations/response";
 import { withIdempotency } from "@/lib/integrations/idempotency";
 import { conflictMessage, idempotencyKeyOf } from "@/lib/integrations/write-helpers";
-import { backupFailure, backupRateLimited, readBackupBody } from "@/lib/integrations/backup-http";
+import { backupBusy, backupFailure, backupRateLimited, readBackupBody } from "@/lib/integrations/backup-http";
 import { backupEnvelopeSchema, decryptBackup, envelopeDigest, passphraseSchema } from "@/lib/backup-crypto";
 import { parsePayload, restoreBackup } from "@/lib/backup-service";
 
@@ -24,6 +24,8 @@ export const POST = withIntegrationRoute("backup-restore", async ({ req, user, r
   try {
     const early = await backupRateLimited(user.id, "request", requestId);
     if (early) return early;
+    const busy = backupBusy(requestId);
+    if (busy) return busy;
     const read = await readBackupBody(req, requestId);
     if (!read.ok) return read.res;
     const parsed = bodySchema.safeParse(read.body);

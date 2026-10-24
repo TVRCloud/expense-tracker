@@ -665,6 +665,87 @@ describe("encrypted backup and restore", () => {
     });
   });
 
+  it("turns a request away before reading its body when the key gate is full", async () => {
+    const { encryptBackup, decryptBackup } = await import("@/lib/backup-crypto");
+    const env = await encryptBackup({ ok: true }, PASS);
+    // two running and four queued fill the gate; anything past that is refused at once
+    const crowd = Array.from({ length: 10 }, () => decryptBackup(env, PASS));
+    const { POST } = await import("@/app/api/integrations/backup/restore/route");
+    const res = await POST(
+      new NextRequest("http://localhost/api/integrations/backup/restore", {
+        method: "POST",
+        headers: { authorization: `Bearer ${KEY_A}`, "content-type": "application/json" },
+        body: "not json (a busy server must answer before it looks at this)",
+      }),
+      {}
+    );
+    expect(res.status).toBe(429);
+    expect((await res.json()).error.reason).toBe("busy");
+    await Promise.allSettled(crowd);
+  });
+
+  it("refuses to build a backup whose answer would be over the response limit, before encrypting", async () => {
+    const { randomBytes } = await import("crypto");
+    const { default: Account } = await import("@/models/Account");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const crypto = await import("@/lib/backup-crypto");
+    const acct = await Account.create({ user: a, name: "Big", type: "bank" });
+    // random text does not compress, so ~2,000 rows of it pass 4 MB once packed and encoded
+    const rows = Array.from({ length: 2000 }, () => ({
+      user: a, account: acct._id, type: "expense", amount: 1, category: "Bulk", date: new Date(), note: randomBytes(3000).toString("base64"),
+    }));
+    for (let i = 0; i < rows.length; i += 500) await Transaction.insertMany(rows.slice(i, i + 500));
+    const seal = vi.spyOn(crypto, "sealPacked");
+    const res = await exportBackup();
+    expect(res.status).toBe(413);
+    const body = await res.json();
+    expect(body.error).toMatchObject({ code: "TOO_LARGE_FOR_RESPONSE", reason: "too_large_for_response" });
+    expect(body.error.message).toContain("CSV");
+    expect(seal).not.toHaveBeenCalled();
+    seal.mockRestore();
+  });
+
+  it("never lets the top-up grow rows that have no series id, and restore clears that flag", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { default: Account } = await import("@/models/Account");
+    const { topUpRecurringSeries } = await import("@/lib/recurring-topup");
+    const { encryptBackup } = await import("@/lib/backup-crypto");
+    const loose = async (user: string) => {
+      const acct = await Account.create({ user, name: "L", type: "bank" });
+      await Transaction.create({
+        user, account: acct._id, type: "expense", amount: 1, category: "Loose", date: new Date(), isRecurring: true,
+        recurrenceFrequency: "monthly", recurrenceIsOpenEnded: true, installmentIndex: 1, installmentStatus: "upcoming",
+      });
+    };
+    await loose(a);
+    await loose(b);
+    await topUpRecurringSeries();
+    expect(await Transaction.countDocuments({ category: "Loose" })).toBe(2);
+
+    const acct = new mongoose.Types.ObjectId().toHexString();
+    const backup = await encryptBackup(
+      {
+        app: "expense-tracker", version: 1, createdAt: new Date().toISOString(),
+        data: {
+          accounts: [{ id: acct, name: "R", type: "bank", balance: 0 }],
+          transactions: [{ id: new mongoose.Types.ObjectId().toHexString(), account: acct, type: "expense", amount: 1, category: "Restored", date: new Date().toISOString(), isRecurring: true, recurrenceIsOpenEnded: true }],
+        },
+      },
+      PASS
+    );
+    expect((await restore({ passphrase: PASS, backup }, { key: KEY_B })).status).toBe(200);
+    const row = (await Transaction.findOne({ user: b, category: "Restored" }).lean())!;
+    expect(row.recurrenceIsOpenEnded).not.toBe(true);
+  });
+
+  it("has indexes for the series and split id lookups", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    await Transaction.init();
+    const indexes = await Transaction.collection.indexes();
+    expect(indexes.find((i) => i.name === "recurringId_1")).toMatchObject({ sparse: true });
+    expect(indexes.find((i) => i.name === "splitGroupId_1")).toMatchObject({ sparse: true });
+  });
+
   it("a dry run does not use up the real restore quota", async () => {
     await seed(a);
     const { data } = await (await exportBackup()).json();
@@ -769,6 +850,21 @@ describe("security rate limit", () => {
     expect(results.filter((r) => r.allowed)).toHaveLength(5);
     const denied = results.find((r) => !r.allowed) as { retryAfterSeconds: number };
     expect(denied.retryAfterSeconds).toBeGreaterThan(0);
+  });
+
+  it("answers a short wait, not the whole window, when it keeps losing races", async () => {
+    const { checkSecurityRateLimit } = await import("@/lib/security-rate-limit");
+    const { default: SecurityRateLimit } = await import("@/models/SecurityRateLimit");
+    const dup = Object.assign(new Error("E11000 duplicate key"), { code: 11000 });
+    const update = vi.spyOn(SecurityRateLimit, "findOneAndUpdate").mockResolvedValue(null as never);
+    const find = vi.spyOn(SecurityRateLimit, "findOne").mockResolvedValue(null as never);
+    const create = vi.spyOn(SecurityRateLimit, "create").mockRejectedValue(dup as never);
+    const out = (await checkSecurityRateLimit({ key: "hot", limit: 3, windowMs: 3600_000 })) as { allowed: boolean; retryAfterSeconds: number };
+    update.mockRestore();
+    find.mockRestore();
+    create.mockRestore();
+    expect(out.allowed).toBe(false);
+    expect(out.retryAfterSeconds).toBeLessThanOrEqual(5);
   });
 
   it("starts a new window once the old one has expired", async () => {

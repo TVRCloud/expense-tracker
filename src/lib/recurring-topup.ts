@@ -23,6 +23,7 @@ export async function topUpRecurringSeries(): Promise<void> {
         $match: {
           isRecurring: true,
           recurrenceIsOpenEnded: true,
+          recurringId: { $exists: true, $ne: null },
           isDeleted: { $ne: true },
           recurrenceCancelled: { $ne: true },
         },
@@ -46,7 +47,7 @@ export async function topUpRecurringSeries(): Promise<void> {
 
       const last = await Transaction.findOne({
         user: series._id.user,
-        recurringId: series._id.recurringId,
+        recurringId: { $eq: series._id.recurringId, $exists: true, $ne: null },
         isDeleted: { $ne: true },
       })
         .sort({ installmentIndex: -1 })

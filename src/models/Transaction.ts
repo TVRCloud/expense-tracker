@@ -94,5 +94,8 @@ TransactionSchema.index({ user: 1, refundOf: 1 }, { sparse: true });
 // transaction-activity.ts): lets the monthly stats and the recent list read
 // them by paidAt from an index instead of scanning every row.
 TransactionSchema.index({ user: 1, isDeleted: 1, paidAt: -1 });
+// Restore asks whether another person's rows already carry a series or split id.
+TransactionSchema.index({ recurringId: 1 }, { sparse: true });
+TransactionSchema.index({ splitGroupId: 1 }, { sparse: true });
 
 export default models.Transaction || model("Transaction", TransactionSchema, "transactions");

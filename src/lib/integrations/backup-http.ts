@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { BackupError, MAX_BACKUP_BYTES } from "@/lib/backup-crypto";
+import { BackupError, MAX_BACKUP_BYTES, keyGateOpen } from "@/lib/backup-crypto";
 import logger from "@/lib/logger";
 import { checkSecurityRateLimit } from "@/lib/security-rate-limit";
 import { integrationError } from "@/lib/integrations/response";
@@ -47,6 +47,16 @@ export async function readBackupBody(req: NextRequest, requestId: string): Promi
   }
 }
 
+// Asked before the body is read: if the key derivation gate is full there is no
+// point holding another body in memory behind it.
+export function backupBusy(requestId: string): Response | null {
+  if (keyGateOpen()) return null;
+  return integrationError("RATE_LIMITED", "The server is busy opening backups; try again in a moment", requestId, {
+    retryAfterSeconds: 5,
+    reason: "busy",
+  });
+}
+
 // What a bucket counts. The first check runs before the body is read; the
 // second, once the route knows what the call is. A dry run has its own, wider
 // bucket so checking a file never uses up the real restores.
@@ -68,6 +78,9 @@ export async function backupRateLimited(userId: string, bucket: keyof typeof BUC
 // Never logs the error object: a failed bulk insert can carry backup documents.
 export function backupFailure(err: unknown, requestId: string, route: string): Response {
   if (err instanceof BackupError) {
+    if (err.reason === "too_large_for_response") {
+      return integrationError("TOO_LARGE_FOR_RESPONSE", err.message, requestId, { reason: "too_large_for_response" });
+    }
     if (err.reason === "busy") return integrationError("RATE_LIMITED", err.message, requestId, { retryAfterSeconds: 5, reason: "busy" });
     return integrationError("VALIDATION_ERROR", err.message, requestId, { reason: err.reason });
   }

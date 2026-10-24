@@ -7,6 +7,8 @@ type RateLimitInput = {
   windowMs: number;
 };
 
+const CONTENTION_RETRY_SECONDS = 2;
+
 function isDuplicateKey(err: unknown) {
   return typeof err === "object" && err !== null && (err as { code?: number }).code === 11000;
 }
@@ -46,6 +48,8 @@ export async function checkSecurityRateLimit({ key, limit, windowMs }: RateLimit
       if (!isDuplicateKey(err)) throw err;
     }
   }
-  // Could not settle after several races: fail closed.
-  return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil(windowMs / 1000)) };
+  // Could not settle after several races. Fail closed, but only for a moment:
+  // this is contention, not a used-up window, so do not tell people to wait the
+  // whole window (an hour for some callers).
+  return { allowed: false, retryAfterSeconds: CONTENTION_RETRY_SECONDS };
 }

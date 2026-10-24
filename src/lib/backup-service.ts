@@ -329,7 +329,7 @@ async function readAll<S extends z.ZodType>(
       omitted[label] = (omitted[label] ?? 0) + 1;
       continue;
     }
-    budget.bytes += JSON.stringify(parsed.data).length;
+    budget.bytes += Buffer.byteLength(JSON.stringify(parsed.data), "utf8");
     if (budget.bytes > MAX_PLAIN_BYTES || out.length >= cap) throw tooBig();
     out.push(parsed.data);
   }
@@ -749,6 +749,8 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
         refundOf: fin(txs, t.refundOf),
         recurringId: group(t.recurringId),
         splitGroupId: group(t.splitGroupId),
+        // an open-ended series is grown by its series id; without one it would be a loose row the top-up must not touch
+        recurrenceIsOpenEnded: t.recurringId ? t.recurrenceIsOpenEnded : undefined,
       })
     )
   );
