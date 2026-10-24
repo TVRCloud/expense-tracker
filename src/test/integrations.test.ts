@@ -4940,6 +4940,24 @@ describe("cash flow forecast", () => {
     expect(f.inputs.dailyAverageSpend).toBe(0); // the one charge in the last 30 days is the subscription
   });
 
+  it("ignores voided rows, in the daily average and in the upcoming recurring payments", async () => {
+    await spend(300_000, 10);
+    await spend(300_000, 12, "Groceries", { reviewStatus: "voided" }); // a duplicate that was voided
+    await installment("Phantom rent", at(2), { reviewStatus: "voided", amount: 900_000 });
+    const f = await forecast(5);
+    expect(f.inputs.dailyAverageSpend).toBe(10_000);
+    expect(f.events.map((e) => e.label)).not.toContain("Phantom rent");
+  });
+
+  it("takes a confirmed refund off the daily average", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    await spend(600_000, 10, "Amazon");
+    await Transaction.create({ user: userId, account: bankId, type: "income", amount: 300_000, category: "Shopping", description: "Amazon", date: at(-8), refundStatus: "confirmed" });
+    await Transaction.create({ user: userId, account: bankId, type: "income", amount: 500_000, category: "Salary", description: "Pay", date: at(-7) }); // ordinary income is not a refund
+    const f = await forecast(5);
+    expect(f.inputs.dailyAverageSpend).toBe(10_000); // (6,000 - 3,000) / 30 days
+  });
+
   it("takes the daily average from ordinary spending of the last 30 days, from tomorrow on", async () => {
     await spend(300_000, 10);
     await spend(600_000, 40); // older than 30 days
@@ -5287,6 +5305,59 @@ describe("integration sinking funds", () => {
     expect((await SinkingFund.findById(id).lean<{ completedAt?: Date }>())!.completedAt).toBeUndefined();
   });
 
+  it("two contributions that both cross the target send one alert", async () => {
+    const { default: Notification } = await import("@/models/Notification");
+    const { data } = await (await create({ targetAmount: 100000, savedAmount: 90000 })).json();
+    const id = data.id as string;
+    const [a, b] = await Promise.all([contribute(id, 10000), contribute(id, 10000)]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    expect(await Notification.countDocuments({ user: userId, "meta.sinkingFundId": id })).toBe(1);
+  });
+
+  it("two edits that both complete the fund send one alert", async () => {
+    const { default: Notification } = await import("@/models/Notification");
+    const { PATCH } = await import("@/app/api/integrations/sinking-funds/[id]/route");
+    const { data } = await (await create({ targetAmount: 120000, savedAmount: 100000 })).json();
+    const id = data.id as string;
+    const edit = () => PATCH(req(`sinking-funds/${id}`, "PATCH", { targetAmount: 100000 }), ctx(id));
+    const [a, b] = await Promise.all([edit(), edit()]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    expect(await Notification.countDocuments({ user: userId, "meta.sinkingFundId": id })).toBe(1);
+  });
+
+  it("refuses absurd amounts and never lets the balance pass the cap", async () => {
+    expect((await create({ targetAmount: 1e15 })).status).toBe(400);
+    expect((await create({ savedAmount: 1e15 })).status).toBe(400);
+    expect((await create({ monthlyAmount: 1e15 })).status).toBe(400);
+    const { data } = await (await create({ targetAmount: 1e14 })).json();
+    const id = data.id as string;
+    expect((await contribute(id, 1e15)).status).toBe(400);
+    expect((await contribute(id, -1e15)).status).toBe(400);
+    await contribute(id, 1e14);
+    const second = await contribute(id, 1e14);
+    expect((await second.json()).data.savedAmount).toBe(1e14); // capped, not 2e14
+  });
+
+  it("an edit and a contribution move updatedAt forward", async () => {
+    const { PATCH } = await import("@/app/api/integrations/sinking-funds/[id]/route");
+    const { data } = await (await create({ savedAmount: 5000 })).json();
+    const id = data.id as string;
+    await new Promise((r) => setTimeout(r, 15));
+    const edited = (await (await PATCH(req(`sinking-funds/${id}`, "PATCH", { name: "Renamed" }), ctx(id))).json()).data;
+    expect(Date.parse(edited.updatedAt)).toBeGreaterThan(Date.parse(data.updatedAt));
+    await new Promise((r) => setTimeout(r, 15));
+    const saved = (await (await contribute(id, 100)).json()).data;
+    expect(Date.parse(saved.updatedAt)).toBeGreaterThan(Date.parse(edited.updatedAt));
+  });
+
+  it("a name that starts with a dollar sign is stored as text, not read as a field", async () => {
+    const { PATCH } = await import("@/app/api/integrations/sinking-funds/[id]/route");
+    const { data } = await (await create({ savedAmount: 5000 })).json();
+    const id = data.id as string;
+    const res = await PATCH(req(`sinking-funds/${id}`, "PATCH", { name: "$savedAmount" }), ctx(id));
+    expect((await res.json()).data).toMatchObject({ name: "$savedAmount", savedAmount: 5000 });
+  });
+
   it("DELETE soft-deletes, replays, and the fund leaves the list", async () => {
     const { DELETE } = await import("@/app/api/integrations/sinking-funds/[id]/route");
     const { GET } = await import("@/app/api/integrations/sinking-funds/route");
@@ -5554,6 +5625,14 @@ describe("integration card rewards", () => {
     expect(current.byCategory.map((c: { category: string; earned: number }) => [c.category, c.earned])).toEqual([["fuel", 5_000], ["food", 1_000]]);
     expect(data.cycles[1]).toMatchObject({ isCurrent: false, earned: 0 });
     expect(data.total).toEqual({ earned: 5_500, value: 5_500 });
+  });
+
+  it("a voided row (a duplicate or not a transaction) earns nothing", async () => {
+    await putRule({ kind: "cashback", baseRate: 10 });
+    await spendOn(cardId, 20_000, "food");
+    await spendOn(cardId, 80_000, "food", { reviewStatus: "voided" });
+    const cycle = (await (await getCard(cardId, "?cycles=1")).json()).data.cycles[0];
+    expect(cycle).toMatchObject({ spend: 20_000, earned: 2_000 });
   });
 
   it("points rules count points and value them", async () => {
@@ -5915,6 +5994,53 @@ describe("net worth", () => {
       expect(rows[0].netWorth).toBe(220000);
     });
 
+    it("a user who cleared everything gets a zero point, so the trend does not keep an old value", async () => {
+      const { default: Account } = await import("@/models/Account");
+      const { default: NetWorthSnapshot } = await import("@/models/NetWorthSnapshot");
+      const { recordSnapshotsForAllUsers } = await import("@/lib/net-worth");
+      const bank = await Account.create({ user: userId, name: "Bank", type: "bank", balance: 5000 });
+      await getReport(); // stores today's point at 5000
+      await Account.updateOne({ _id: bank._id }, { $set: { balance: 0 } });
+      const out = await recordSnapshotsForAllUsers();
+      expect(out).toEqual({ checked: 2, recorded: 1 }); // the other user never had a point and has nothing
+      const rows = await NetWorthSnapshot.find({ user: userId }).lean<{ netWorth: number }[]>();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].netWorth).toBe(0);
+    });
+
+    it("an overlapping run does nothing instead of running twice", async () => {
+      const { recordSnapshotsForAllUsers } = await import("@/lib/net-worth");
+      const [first, second] = await Promise.all([recordSnapshotsForAllUsers(), recordSnapshotsForAllUsers()]);
+      expect([first.skipped, second.skipped].filter(Boolean)).toHaveLength(1);
+      expect((await recordSnapshotsForAllUsers()).skipped).toBeUndefined(); // the guard is released afterwards
+    });
+
+    it("an account saved before the archived flag existed still counts", async () => {
+      const { default: Account } = await import("@/models/Account");
+      const old = await Account.create({ user: userId, name: "Legacy", type: "bank", balance: 7000 });
+      await Account.collection.updateOne({ _id: old._id }, { $unset: { isArchived: "" } });
+      expect((await getReport()).assets).toBe(7000);
+    });
+
+    it("a point written at the same moment by another request does not fail the read", async () => {
+      const { default: NetWorthSnapshot } = await import("@/models/NetWorthSnapshot");
+      const real = NetWorthSnapshot.updateOne.bind(NetWorthSnapshot);
+      let calls = 0;
+      const spy = vi.spyOn(NetWorthSnapshot, "updateOne").mockImplementation(((...args: Parameters<typeof real>) => {
+        calls += 1;
+        if (calls === 1) return Promise.reject(Object.assign(new Error("E11000 duplicate key"), { code: 11000 })) as never;
+        return real(...args);
+      }) as never);
+      try {
+        const { recordSnapshot } = await import("@/lib/net-worth");
+        const point = await recordSnapshot(userId);
+        expect(calls).toBe(2);
+        expect(point.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
     it("the cron route needs the secret", async () => {
       process.env.CRON_SECRET = "cron-secret-for-tests";
       const { GET } = await import("@/app/api/cron/net-worth-snapshot/route");
@@ -6167,6 +6293,28 @@ describe("weekly review", () => {
 
       // The next Tuesday is a new week with nothing in it: nothing is sent.
       expect((await sendWeeklyReviews(new Date(now.getTime() + 7 * 86_400_000))).sent).toBe(0);
+    });
+
+    it("two sends at the same moment create one notification", async () => {
+      const { sendWeeklyReviewForUser } = await import("@/lib/weekly-review");
+      const { default: Notification } = await import("@/models/Notification");
+      await Notification.init(); // build the unique index the claim relies on
+      await enable();
+      await txn({ amount: 100000, category: "Food", date: at(20, 12, "10") });
+      const settings = { enabled: true, day: tuesday };
+      const sent = await Promise.all([sendWeeklyReviewForUser(userId, settings, now), sendWeeklyReviewForUser(userId, settings, now)]);
+      expect(sent.reduce((a, b) => a + b, 0)).toBe(1);
+      expect(await notices()).toHaveLength(1);
+    });
+
+    it("an overlapping timer and cron run does nothing instead of running twice", async () => {
+      const { sendWeeklyReviews } = await import("@/lib/weekly-review");
+      await enable();
+      await txn({ amount: 100000, category: "Food", date: at(20, 12, "10") });
+      const [a, b] = await Promise.all([sendWeeklyReviews(now), sendWeeklyReviews(now)]);
+      expect([a.skipped, b.skipped].filter(Boolean)).toHaveLength(1);
+      expect(a.sent + b.sent).toBe(1);
+      expect((await sendWeeklyReviews(new Date(now.getTime() + 30 * 60_000))).skipped).toBeUndefined();
     });
 
     it("waits for the chosen weekday and skips an empty week", async () => {

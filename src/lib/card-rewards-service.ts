@@ -100,6 +100,7 @@ async function rewardsForCycles(
       user: new Types.ObjectId(userId),
       account: new Types.ObjectId(accountId),
       isDeleted: { $ne: true },
+      reviewStatus: { $ne: "voided" },
       type: { $in: ["expense", "income"] },
       date: { $gte: earliest, $lte: latest },
     },

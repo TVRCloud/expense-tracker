@@ -385,8 +385,13 @@ export function reviewKey(startDate: string) {
  * 09:00 has passed on their clock, for the last completed week, once. A week
  * with no spending and no income sends nothing. Returns how many were created.
  */
-export async function sendWeeklyReviewForUser(userId: string, settings: WeeklyReviewSettings, now = new Date()): Promise<number> {
-  const timeZone = await userClock(userId);
+export async function sendWeeklyReviewForUser(
+  userId: string,
+  settings: WeeklyReviewSettings,
+  now = new Date(),
+  knownTimeZone?: string
+): Promise<number> {
+  const timeZone = knownTimeZone ?? (await userClock(userId));
   if (localDate(now, timeZone).dayOfWeek !== settings.day) return 0;
   if (localHour(now, timeZone) < REVIEW_FROM_HOUR) return 0;
 
@@ -398,36 +403,56 @@ export async function sendWeeklyReviewForUser(userId: string, settings: WeeklyRe
 
   const title = "Your week in review";
   const body = [`You spent ${formatCurrency(review.totals.spent)} last week.`, review.highlights[0]].filter(Boolean).join(" ");
-  // Created before the push, so a retry after a crash cannot send it twice.
-  await Notification.create({
-    user: userId,
-    type: "system",
-    title,
-    body,
-    meta: { dedupKey: key, kind: "weekly_review", weekStart: review.week.startDate },
-  });
+  // Created before the push, so a retry after a crash cannot send it twice. A unique index on (user, dedupKey)
+  // for weekly review rows (see the Notification model) makes the claim atomic: two runs at the same moment
+  // (the timer and the cron route) cannot both create it, and the loser stops here.
+  try {
+    await Notification.create({
+      user: userId,
+      type: "system",
+      title,
+      body,
+      meta: { dedupKey: key, kind: "weekly_review", weekStart: review.week.startDate },
+    });
+  } catch (err) {
+    if ((err as { code?: number }).code === 11000) return 0;
+    throw err;
+  }
   void sendPushToUser(userId, { title, body, url: "/dashboard" }).catch((err) =>
     logger.error({ err }, "weekly review push failed")
   );
   return 1;
 }
 
-export async function sendWeeklyReviews(now = new Date()): Promise<{ checked: number; sent: number }> {
-  await connectDB();
-  const users = await User.find({ "preferences.weeklyReview.enabled": true, isActive: { $ne: false } })
-    .select("preferences.weeklyReview")
-    .lean<Array<{ _id: { toString(): string }; preferences?: { weeklyReview?: { day?: number } } }>>();
-  let sent = 0;
-  for (const u of users) {
-    try {
-      sent += await sendWeeklyReviewForUser(
-        u._id.toString(),
-        { enabled: true, day: u.preferences?.weeklyReview?.day ?? DEFAULT_WEEKLY_REVIEW_SETTINGS.day },
-        now
-      );
-    } catch (err) {
-      logger.error({ err, userId: u._id.toString() }, "weekly review failed for user");
+let reviewsRunning = false;
+
+/**
+ * Timer and cron entry. One run at a time per process (the timer and the cron route can overlap). The user
+ * query carries the time zone, and the weekday and hour are checked in memory, so a user whose time is not
+ * up costs no further query.
+ */
+export async function sendWeeklyReviews(now = new Date()): Promise<{ checked: number; sent: number; skipped?: true }> {
+  if (reviewsRunning) return { checked: 0, sent: 0, skipped: true };
+  reviewsRunning = true;
+  try {
+    await connectDB();
+    const users = await User.find({ "preferences.weeklyReview.enabled": true, isActive: { $ne: false } })
+      .select("preferences.weeklyReview preferences.timezone")
+      .lean<Array<{ _id: { toString(): string }; preferences?: { weeklyReview?: { day?: number }; timezone?: string } }>>();
+    let sent = 0;
+    for (const u of users) {
+      try {
+        const day = u.preferences?.weeklyReview?.day ?? DEFAULT_WEEKLY_REVIEW_SETTINGS.day;
+        const tz = u.preferences?.timezone;
+        const timeZone = tz && isValidTimeZone(tz) ? tz : DEFAULT_TIME_ZONE;
+        if (localDate(now, timeZone).dayOfWeek !== day || localHour(now, timeZone) < REVIEW_FROM_HOUR) continue;
+        sent += await sendWeeklyReviewForUser(u._id.toString(), { enabled: true, day }, now, timeZone);
+      } catch (err) {
+        logger.error({ err, userId: u._id.toString() }, "weekly review failed for user");
+      }
     }
+    return { checked: users.length, sent };
+  } finally {
+    reviewsRunning = false;
   }
-  return { checked: users.length, sent };
 }

@@ -88,6 +88,7 @@ export async function getCashFlowForecast(
       ? Transaction.find({
           user: userObjectId,
           isDeleted: { $ne: true },
+          reviewStatus: { $ne: "voided" },
           isRecurring: true,
           installmentStatus: { $in: ["upcoming", "overdue"] },
           type: { $in: ["income", "expense"] },
@@ -104,14 +105,16 @@ export async function getCashFlowForecast(
       ? Transaction.find({
           user: userObjectId,
           isDeleted: { $ne: true },
-          type: "expense",
+          reviewStatus: { $ne: "voided" },
+          // Spending, and a confirmed refund which comes off it (as in the weekly review).
+          $or: [{ type: "expense" }, { type: "income", refundStatus: "confirmed" }],
           recurringId: { $exists: false },
           account: { $in: liquidIds },
           date: { $gte: lookbackFrom, $lte: now },
         })
-          .select("amount description")
+          .select("amount description type")
           .limit(5000)
-          .lean<Array<{ amount: number; description?: string }>>()
+          .lean<Array<{ amount: number; description?: string; type: string }>>()
       : Promise.resolve([]),
   ]);
 
@@ -142,7 +145,7 @@ export async function getCashFlowForecast(
 
   // Everyday spending that the subscriptions above do not already explain.
   const subKeys = new Set(activeSubs.map((s) => merchantKey(s.merchant)));
-  const variable = recentSpend.filter((t) => !subKeys.has(merchantKey(t.description))).reduce((sum, t) => sum + t.amount, 0);
+  const variable = recentSpend.filter((t) => !subKeys.has(merchantKey(t.description))).reduce((sum, t) => sum + (t.type === "income" ? -t.amount : t.amount), 0);
   const dailyAverageSpend = Math.round(variable / SPEND_LOOKBACK_DAYS);
 
   const forecast = buildForecast({ startingBalance, now, days, timeZone, events, dailySpend: dailyAverageSpend });

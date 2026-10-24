@@ -143,7 +143,7 @@ Money set aside for a cost with a due date, and the share of income saved. Amoun
 | GET | `/api/sinking-funds` | `{funds, totals: {count, targetAmount, savedAmount, remaining, monthlyNeeded}}`, soonest due first |
 | POST | `/api/sinking-funds` | `{name, targetAmount, dueDate, savedAmount?, monthlyAmount?, icon?}`; 201 with the fund |
 | GET, PATCH, DELETE | `/api/sinking-funds/:id` | Read, edit (`name`, `targetAmount`, `dueDate`, `monthlyAmount` or `null`, `icon`), soft delete; 404 if not yours |
-| POST | `/api/sinking-funds/:id/contribute` | `{amount}` (integer, not 0): positive saves, negative takes out, never below 0; returns the fund |
+| POST | `/api/sinking-funds/:id/contribute` | `{amount}` (integer, not 0, at most 1e14 either way): positive saves, negative takes out, never below 0 or above 1e14; returns the fund |
 | GET | `/api/savings-rate?months=6` | `{months: [{year, month, income, expense, saved, rate}], current, average: {income, expense, saved, rate}, trend}`; `months` 1 to 24; `rate` is a fraction or `null` without income; `trend` is `up`, `down`, `flat` or `null` |
 
 n8n and the app use `/api/integrations/sinking-funds` (+ `/:id`, `/:id/contribute`) and `/api/integrations/savings-rate` with the integration envelope; writes need `Idempotency-Key`.

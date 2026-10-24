@@ -112,7 +112,7 @@ function ordered(map: Map<string, BreakdownRow>, labels: Record<string, string>)
 export async function computeNetWorth(userId: string): Promise<NetWorthNow> {
   await connectDB();
   const [accounts, loans, manual] = await Promise.all([
-    Account.find({ user: userId, isArchived: false, deletedAt: null })
+    Account.find({ user: userId, isArchived: { $ne: true }, deletedAt: null })
       .select("type balance")
       .lean<Array<{ type: string; balance: number }>>(),
     Loan.find({ user: userId, isDeleted: { $ne: true }, isSettled: { $ne: true } })
@@ -174,11 +174,20 @@ export async function recordSnapshot(userId: string, now = new Date(), current?:
   await connectDB();
   const nw = current ?? (await computeNetWorth(userId));
   const day = localDayKey(now, await userTimeZone(userId));
-  await NetWorthSnapshot.updateOne(
-    { user: userId, day },
-    { $set: { assets: nw.assets, liabilities: nw.liabilities, netWorth: nw.netWorth } },
-    { upsert: true }
-  );
+  const write = () =>
+    NetWorthSnapshot.updateOne(
+      { user: userId, day },
+      { $set: { assets: nw.assets, liabilities: nw.liabilities, netWorth: nw.netWorth } },
+      { upsert: true }
+    );
+  try {
+    await write();
+  } catch (err) {
+    // Two writers (a read, the cron) upserting the same user and day can both try to insert: the loser of the
+    // race gets a duplicate-key error. The row exists by now, so one more attempt updates it.
+    if ((err as { code?: number }).code !== 11000) throw err;
+    await write();
+  }
   return { date: day, assets: nw.assets, liabilities: nw.liabilities, netWorth: nw.netWorth };
 }
 
@@ -217,23 +226,38 @@ export async function getNetWorth(userId: string, range: NetWorthRange = "90d", 
   };
 }
 
-/** Cron: record today's point for every active user that has anything to count. */
-export async function recordSnapshotsForAllUsers(now = new Date()) {
-  await connectDB();
-  const users = await User.find({ isActive: true }).select("_id").lean<Array<{ _id: unknown }>>();
-  let recorded = 0;
-  for (const u of users) {
-    try {
-      const id = String(u._id);
-      const nw = await computeNetWorth(id);
-      if (nw.assets === 0 && nw.liabilities === 0) continue;
-      await recordSnapshot(id, now, nw);
-      recorded += 1;
-    } catch (err) {
-      logger.error({ err, userId: String(u._id) }, "Net worth snapshot failed");
+let snapshotsRunning = false;
+
+/**
+ * Cron: record today's point for every active user that has something to count. A user who had a point
+ * before but now has nothing still gets today's zero, so the trend does not keep a stale value. Only one
+ * run at a time per process (the server.ts timer and the cron route can overlap); users are read through a
+ * cursor and handled one by one.
+ */
+export async function recordSnapshotsForAllUsers(now = new Date()): Promise<{ checked: number; recorded: number; skipped?: true }> {
+  if (snapshotsRunning) return { checked: 0, recorded: 0, skipped: true };
+  snapshotsRunning = true;
+  try {
+    await connectDB();
+    let checked = 0;
+    let recorded = 0;
+    const cursor = User.find({ isActive: { $ne: false } }).select("_id").lean<{ _id: unknown }>().cursor();
+    for await (const u of cursor) {
+      checked += 1;
+      try {
+        const id = String(u._id);
+        const nw = await computeNetWorth(id);
+        if (nw.assets === 0 && nw.liabilities === 0 && !(await NetWorthSnapshot.exists({ user: id }))) continue;
+        await recordSnapshot(id, now, nw);
+        recorded += 1;
+      } catch (err) {
+        logger.error({ err, userId: String(u._id) }, "Net worth snapshot failed");
+      }
     }
+    return { checked, recorded };
+  } finally {
+    snapshotsRunning = false;
   }
-  return { checked: users.length, recorded };
 }
 
 // ---------------------------------------------------------------------------

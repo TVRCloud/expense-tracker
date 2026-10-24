@@ -8,26 +8,29 @@ import Notification from "@/models/Notification";
 // routes (/api/integrations/sinking-funds). Reads add computed fields (see
 // describeFund) so clients show the same numbers without redoing the maths.
 
+// Far past any real figure, and keeps the arithmetic below safely inside what a double can hold.
+export const MAX_FUND_AMOUNT = 100_000_000_000_000; // 1e14 paise
+
 const dateString = z
   .string()
   .refine((v) => !Number.isNaN(new Date(v).getTime()), "Enter a valid date");
 
 export const sinkingFundCreateSchema = z.object({
   name: z.string().min(1, "Name your fund").max(100),
-  targetAmount: z.number().int().positive("Enter a target greater than 0"),
-  savedAmount: z.number().int().min(0).default(0),
+  targetAmount: z.number().int().positive("Enter a target greater than 0").max(MAX_FUND_AMOUNT),
+  savedAmount: z.number().int().min(0).max(MAX_FUND_AMOUNT).default(0),
   dueDate: dateString,
-  monthlyAmount: z.number().int().positive().optional(),
+  monthlyAmount: z.number().int().positive().max(MAX_FUND_AMOUNT).optional(),
   icon: z.string().max(16).optional(),
 });
 
 export const sinkingFundUpdateSchema = z
   .object({
     name: z.string().min(1).max(100).optional(),
-    targetAmount: z.number().int().positive().optional(),
+    targetAmount: z.number().int().positive().max(MAX_FUND_AMOUNT).optional(),
     dueDate: dateString.optional(),
     // null clears the plan so the suggested amount applies again.
-    monthlyAmount: z.number().int().positive().nullable().optional(),
+    monthlyAmount: z.number().int().positive().max(MAX_FUND_AMOUNT).nullable().optional(),
     icon: z.string().max(16).optional(),
   })
   .refine((v) => Object.keys(v).length > 0, "Nothing to update");
@@ -38,6 +41,8 @@ export const sinkingFundContributeSchema = z.object({
   amount: z
     .number()
     .int()
+    .min(-MAX_FUND_AMOUNT)
+    .max(MAX_FUND_AMOUNT)
     .refine((v) => v !== 0, "Amount cannot be 0"),
 });
 
@@ -202,41 +207,50 @@ export async function createSinkingFund(input: CreateSinkingFundInput, now: Date
 
 export type UpdateSinkingFundInput = z.infer<typeof sinkingFundUpdateSchema> & { userId: string; fundId: string };
 
+// completedAt follows isCompleted inside the same update: kept if the fund was already complete, stamped now when
+// it becomes complete, removed when it is not complete any more.
+// A pipeline update skips Mongoose's timestamps, so updatedAt is set here.
+const completionStages = (now: Date) => [
+  { $set: { updatedAt: now } },
+  { $set: { isCompleted: { $gte: ["$savedAmount", "$targetAmount"] } } },
+  { $set: { completedAt: { $cond: ["$isCompleted", { $ifNull: ["$completedAt", now] }, "$$REMOVE"] } } },
+];
+
 export async function updateSinkingFund(input: UpdateSinkingFundInput, now: Date = new Date()) {
   const { userId, fundId, ...changes } = input;
   await connectDB();
   const filter = { _id: fundId, user: userId, ...notDeleted };
-  const before = await SinkingFund.findOne(filter).lean<FundRecord>();
-  if (!before) throw new SinkingFundError();
 
+  // Strings go in as $literal so a name that starts with "$" is not read as a field path.
   const set: Record<string, unknown> = {};
-  const unset: Record<string, 1> = {};
-  if (changes.name !== undefined) set.name = changes.name;
+  if (changes.name !== undefined) set.name = { $literal: changes.name };
   if (changes.targetAmount !== undefined) set.targetAmount = changes.targetAmount;
   if (changes.dueDate !== undefined) set.dueDate = new Date(changes.dueDate);
-  if (changes.icon !== undefined) set.icon = changes.icon;
-  if (changes.monthlyAmount === null) unset.monthlyAmount = 1;
-  else if (changes.monthlyAmount !== undefined) set.monthlyAmount = changes.monthlyAmount;
+  if (changes.icon !== undefined) set.icon = { $literal: changes.icon };
+  if (changes.monthlyAmount !== undefined && changes.monthlyAmount !== null) set.monthlyAmount = changes.monthlyAmount;
+  const stages: Record<string, unknown>[] = [];
+  if (Object.keys(set).length > 0) stages.push({ $set: set });
+  if (changes.monthlyAmount === null) stages.push({ $unset: "monthlyAmount" });
+  stages.push(...completionStages(now));
 
-  // A new target can reach or reopen the fund.
+  // The update returns the document as it was just before it ran, so "did this change complete the fund" is
+  // decided by the same atomic step that completed it: two writers cannot both see "not complete yet".
+  const before = await SinkingFund.findOneAndUpdate(filter, stages, { returnDocument: "before", updatePipeline: true }).lean<FundRecord>();
+  if (!before) throw new SinkingFundError();
   const target = changes.targetAmount ?? before.targetAmount;
-  const reached = before.savedAmount >= target;
-  set.isCompleted = reached;
-  if (reached && !before.isCompleted) set.completedAt = now;
+  const completedNow = !before.isCompleted && before.savedAmount >= target;
 
-  const update: Record<string, unknown> = { $set: set };
-  if (Object.keys(unset).length > 0) update.$unset = unset;
-  if (!reached && before.isCompleted) update.$unset = { ...(update.$unset as object), completedAt: 1 };
-
-  const doc = await SinkingFund.findOneAndUpdate(filter, update, { new: true }).lean<FundRecord>();
+  const doc = await SinkingFund.findOne(filter).lean<FundRecord>();
   if (!doc) throw new SinkingFundError();
-  if (reached && !before.isCompleted) await notifyReached(userId, doc);
+  if (completedNow) await notifyReached(userId, doc);
   return describeFund(doc, now);
 }
 
 // Adds to (or takes from) the balance atomically, so two phones saving at once
-// both count. The balance is floored at 0 with a pipeline update, not a read
-// then write.
+// both count. The balance is floored at 0 and capped at MAX_FUND_AMOUNT in a
+// pipeline update, not a read then write, and the update hands back the
+// document as it was, so the alert for reaching the target is sent by exactly
+// the contribution that crossed it.
 export async function contributeToSinkingFund(
   input: { userId: string; fundId: string; amount: number },
   now: Date = new Date()
@@ -244,29 +258,23 @@ export async function contributeToSinkingFund(
   const { userId, fundId, amount } = input;
   await connectDB();
   const filter = { _id: fundId, user: userId, ...notDeleted };
-  const before = await SinkingFund.findOne(filter).lean<FundRecord>();
-  if (!before) throw new SinkingFundError();
-
-  const doc = await SinkingFund.findOneAndUpdate(
+  const before = await SinkingFund.findOneAndUpdate(
     filter,
     [
-      { $set: { savedAmount: { $max: [0, { $add: ["$savedAmount", amount] }] } } },
-      { $set: { isCompleted: { $gte: ["$savedAmount", "$targetAmount"] } } },
+      { $set: { savedAmount: { $min: [MAX_FUND_AMOUNT, { $max: [0, { $add: ["$savedAmount", amount] }] }] } } },
+      ...completionStages(now),
     ],
-    { new: true, updatePipeline: true }
+    { returnDocument: "before", updatePipeline: true }
   ).lean<FundRecord>();
-  if (!doc) throw new SinkingFundError();
+  if (!before) throw new SinkingFundError();
 
-  // Stamp or clear the completion time to match the new state.
-  const reached = doc.savedAmount >= doc.targetAmount;
-  let final = doc;
-  if (reached && !before.isCompleted) {
-    final = (await SinkingFund.findOneAndUpdate(filter, { $set: { completedAt: now } }, { new: true }).lean<FundRecord>()) ?? doc;
-    await notifyReached(userId, final);
-  } else if (!reached && before.isCompleted) {
-    final = (await SinkingFund.findOneAndUpdate(filter, { $unset: { completedAt: 1 } }, { new: true }).lean<FundRecord>()) ?? doc;
-  }
-  return describeFund(final, now);
+  const doc = await SinkingFund.findOne(filter).lean<FundRecord>();
+  if (!doc) throw new SinkingFundError();
+  // Worked out from the document the update saw, not from a later read another writer may have changed.
+  const savedAfter = Math.min(MAX_FUND_AMOUNT, Math.max(0, before.savedAmount + amount));
+  const completedNow = !before.isCompleted && savedAfter >= before.targetAmount;
+  if (completedNow) await notifyReached(userId, doc);
+  return describeFund(doc, now);
 }
 
 export async function deleteSinkingFund(userId: string, fundId: string) {

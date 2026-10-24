@@ -254,6 +254,8 @@ Index `{user, isDeleted, dueDate}`.
 | `isRead` | Boolean | |
 | `createdAt` | Date | TTL 90 days |
 
+Indexes: `(user, isRead, createdAt)`, `(user, type)`, the TTL on `createdAt`, and a unique partial index on `(user, meta.dedupKey)` limited to rows with `meta.kind` `weekly_review`, so the weekly review is created once per user per week even when two runs overlap (the loser gets a duplicate-key error and sends nothing). The index builds on first connect; no existing rows have that kind.
+
 ## ledger_blocks
 
 Append-only hash-linked log for finance data.
