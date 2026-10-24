@@ -113,6 +113,16 @@ Repeating charges found in expense history (same merchant, similar amount, stead
 | GET | `/api/subscriptions?status&includeLapsed` | `{subscriptions, totals: {count, monthly, yearly}}`. `status` is `detected`, `confirmed`, `dismissed` or `all`; the default hides dismissed. `includeLapsed=true` adds ones whose next charge is long overdue |
 | PATCH | `/api/subscriptions/:id` | `{status: "confirmed" | "dismissed" | "detected"}`; 404 if the id is not a current detection |
 
+## Cash flow forecast
+
+The expected balance of the money in hand (bank, cash, wallet and savings accounts) for the next days, and the lowest point. Read-only, computed on every read.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/forecast?days` | Same forecast as the integration route, returned as `{data}`. `days` is 1 to 60 (default 30); anything else is 400 |
+
+Credit cards are paid when their statement is due; money others owe the user is not counted. See `docs/n8n-integration.md` for the response.
+
 ## Budgets
 
 | Method | Path | Description |

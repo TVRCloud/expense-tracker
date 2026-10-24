@@ -4772,3 +4772,258 @@ describe("integration cash account", () => {
     expect(list.find((a) => a.type === "bank")?.lowBalanceAt).toBeUndefined();
   });
 });
+
+// ── cash flow forecast ────────────────────────────────────────────────────
+
+describe("cash flow forecast", () => {
+  const KEY = "test-forecast-api-key";
+  const DAY = 86_400_000;
+  // Real clock on purpose: subscription detection and card cycles read "now" themselves. Whole-day offsets
+  // keep the local time of day, so the day an event lands on never depends on when the suite runs.
+  const now = new Date();
+  const at = (days: number) => new Date(now.getTime() + days * DAY);
+  let userId: string;
+  let otherUserId: string;
+  let bankId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Forecast User", email: `fc${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `fco${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    const bank = await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 1_000_000, currency: "INR" });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+    bankId = bank._id.toString();
+  });
+
+  async function installment(label: string, due: Date, over: Record<string, unknown> = {}, forUser = userId, account = bankId) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { Types } = await import("mongoose");
+    return Transaction.create({
+      user: forUser,
+      account,
+      type: "expense",
+      amount: 200_000,
+      category: "Rent",
+      date: due,
+      isRecurring: true,
+      recurringId: new Types.ObjectId(),
+      recurrenceLabel: label,
+      recurrenceFrequency: "monthly",
+      installmentIndex: 1,
+      installmentStatus: "upcoming",
+      ...over,
+    });
+  }
+  async function spend(amount: number, daysAgo: number, description = "Groceries", over: Record<string, unknown> = {}) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    return Transaction.create({ user: userId, account: bankId, type: "expense", amount, category: "Food", description, date: at(-daysAgo), ...over });
+  }
+  async function forecast(days = 30) {
+    const { getCashFlowForecast } = await import("@/lib/cash-flow-forecast");
+    return getCashFlowForecast(userId, { days, now });
+  }
+
+  it("starts from the money in hand: bank, cash, wallet and savings, not cards, investments or archived accounts", async () => {
+    const { default: Account } = await import("@/models/Account");
+    await Account.create({ user: userId, name: "Cash", type: "cash", balance: 50_000, currency: "INR" });
+    await Account.create({ user: userId, name: "Wallet", type: "wallet", balance: 20_000, currency: "INR" });
+    await Account.create({ user: userId, name: "Savings", type: "savings", balance: 300_000, currency: "INR" });
+    await Account.create({ user: userId, name: "Fund", type: "investment", balance: 9_000_000, currency: "INR" });
+    await Account.create({ user: userId, name: "Axis", type: "credit_card", balance: -400_000, currency: "INR" });
+    await Account.create({ user: userId, name: "Old", type: "bank", balance: 777_000, currency: "INR", isArchived: true });
+    await Account.create({ user: otherUserId, name: "Theirs", type: "bank", balance: 5_000_000, currency: "INR" });
+    const f = await forecast(10);
+    expect(f.startingBalance).toBe(1_370_000);
+    expect(f.inputs.accounts).toBe(4);
+    expect(f.currency).toBe("INR");
+    expect(f.timeZone).toBe("Asia/Kolkata");
+    expect(f.points).toHaveLength(10);
+    expect(f.points[0].balance).toBe(1_370_000);
+    expect(f.inputs.assumptions.length).toBeGreaterThan(2);
+  });
+
+  it("with no accounts it forecasts zero without failing", async () => {
+    const { default: Account } = await import("@/models/Account");
+    await Account.deleteMany({ user: userId });
+    const f = await forecast(5);
+    expect(f).toMatchObject({ startingBalance: 0, endBalance: 0, goesNegative: false, inputs: { accounts: 0 } });
+    expect(f.points).toHaveLength(5);
+  });
+
+  it("lands unpaid recurring payments and income on their days, and leaves out paid ones and other accounts", async () => {
+    const { default: Account } = await import("@/models/Account");
+    const card = await Account.create({ user: userId, name: "Axis", type: "credit_card", balance: 0, currency: "INR" });
+    await installment("Rent", at(3));
+    await installment("Salary", at(8), { type: "income", amount: 5_000_000, category: "Salary" });
+    await installment("Paid already", at(2), { installmentStatus: "paid" });
+    await installment("On the card", at(2), {}, userId, String(card._id));
+    await installment("Someone else's", at(2), {}, otherUserId, bankId);
+    await installment("Far away", at(45));
+    await installment("Gym", at(-2), { amount: 100_000 });
+    const f = await forecast(30);
+    const days = (offset: number) => f.points[offset].date;
+    expect(f.events.map((e) => [e.label, e.kind, e.amount])).toEqual([
+      ["Gym", "recurring", -100_000], // overdue: counts today
+      ["Rent", "recurring", -200_000],
+      ["Salary", "recurring", 5_000_000],
+    ]);
+    expect(f.events[0].date).toBe(days(0));
+    expect(f.events[1].date).toBe(days(3));
+    expect(f.events[2].date).toBe(days(8));
+    expect(f.points[0].balance).toBe(900_000);
+    expect(f.points[3].balance).toBe(700_000);
+    expect(f.points[8].balance).toBe(5_700_000);
+    expect(f.inputs.recurringCount).toBe(3);
+    expect(f.totals).toMatchObject({ inflows: 5_000_000, outflows: 300_000 });
+  });
+
+  it("flags a shortfall: rent due before payday takes the balance below zero", async () => {
+    const { default: Account } = await import("@/models/Account");
+    await Account.updateOne({ _id: bankId }, { $set: { balance: 100_000 } });
+    await installment("Rent", at(3), { amount: 300_000 });
+    await installment("Salary", at(10), { type: "income", amount: 500_000 });
+    const f = await forecast(14);
+    expect(f.goesNegative).toBe(true);
+    expect(f.firstNegativeDate).toBe(f.points[3].date);
+    expect(f.lowest).toEqual({ date: f.points[3].date, balance: -200_000 });
+    expect(f.points[10].balance).toBe(300_000);
+    expect(f.endBalance).toBe(300_000);
+  });
+
+  it("counts loans the user owes, not money others owe", async () => {
+    const { default: Loan } = await import("@/models/Loan");
+    const base = { user: userId, principalAmount: 500_000, remainingAmount: 500_000, startDate: at(-30) };
+    await Loan.create({ ...base, direction: "received", counterparty: "Asha", dueDate: at(4) });
+    await Loan.create({ ...base, direction: "given", counterparty: "Ravi", dueDate: at(4) });
+    await Loan.create({ ...base, direction: "received", counterparty: "Settled", dueDate: at(4), isSettled: true });
+    const f = await forecast(30);
+    expect(f.events.map((e) => [e.label, e.kind, e.amount])).toEqual([["Loan from Asha", "loan", -500_000]]);
+    expect(f.inputs.billCount).toBe(1);
+    expect(f.points[4].balance).toBe(500_000);
+  });
+
+  it("counts the next unpaid statement of a credit card on its due date", async () => {
+    const { default: Account } = await import("@/models/Account");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const closeDay = Math.min(new Date(now.getTime() - 10 * DAY).getDate(), 28);
+    const card = await Account.create({
+      user: userId,
+      name: "Axis",
+      type: "credit_card",
+      balance: 0,
+      currency: "INR",
+      creditMeta: { billingCycleDay: closeDay, paymentDueDay: 28, creditLimit: 5_000_000, minPaymentPct: 5 },
+    });
+    await Transaction.create({ user: userId, account: card._id, type: "expense", amount: 123_400, category: "shopping", date: at(-15) });
+    const f = await forecast(60);
+    const cardEvent = f.events.find((e) => e.kind === "card");
+    expect(cardEvent).toMatchObject({ label: "Axis payment", amount: -123_400 });
+    // card purchases do not hit the balance until the statement is paid
+    expect(f.points[0].balance).toBe(1_000_000);
+    expect(f.inputs.dailyAverageSpend).toBe(0);
+  });
+
+  it("repeats a detected subscription on its cadence and keeps it out of the daily average", async () => {
+    for (const daysAgo of [85, 55, 25]) await spend(64_900, daysAgo, "Netflix", { category: "Entertainment" });
+    const f = await forecast(40);
+    const subs = f.events.filter((e) => e.kind === "subscription");
+    expect(subs).toHaveLength(2); // in about 5 days and again a month later
+    expect(subs.every((e) => e.amount === -64_900 && e.label.toLowerCase().includes("netflix"))).toBe(true);
+    expect(f.inputs.subscriptionCount).toBe(1);
+    expect(f.inputs.dailyAverageSpend).toBe(0); // the one charge in the last 30 days is the subscription
+  });
+
+  it("takes the daily average from ordinary spending of the last 30 days, from tomorrow on", async () => {
+    await spend(300_000, 10);
+    await spend(600_000, 40); // older than 30 days
+    await installment("Rent paid", at(-5), { installmentStatus: "paid", amount: 900_000 }); // recurring rows are not everyday spend
+    const f = await forecast(5);
+    expect(f.inputs.dailyAverageSpend).toBe(10_000);
+    expect(f.inputs.lookbackDays).toBe(30);
+    expect(f.points.map((p) => p.balance)).toEqual([1_000_000, 990_000, 980_000, 970_000, 960_000]);
+    expect(f.totals.dailySpendTotal).toBe(40_000);
+  });
+
+  it("uses the user's time zone for the days", async () => {
+    const { default: User } = await import("@/models/User");
+    const { localDateKey } = await import("@/lib/forecast-math");
+    await User.updateOne({ _id: userId }, { $set: { "preferences.timezone": "America/New_York" } });
+    const f = await forecast(3);
+    expect(f.timeZone).toBe("America/New_York");
+    expect(f.points[0].date).toBe(localDateKey(now, "America/New_York"));
+  });
+
+  describe("routes", () => {
+    function req(path = "", headers: Record<string, string> = { authorization: `Bearer ${KEY}` }) {
+      n += 1;
+      return new NextRequest(`http://localhost/api/integrations/forecast${path}`, { method: "GET", headers: { ...headers, "x-request-id": `fc-${n}` } });
+    }
+    const get = async (path = "", headers?: Record<string, string>) => {
+      const { GET } = await import("@/app/api/integrations/forecast/route");
+      return GET(req(path, headers), {});
+    };
+
+    it("GET answers the 30 day forecast in the integration envelope", async () => {
+      await installment("Rent", at(3));
+      const res = await get();
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.success).toBe(true);
+      expect(body.data).toMatchObject({ days: 30, startingBalance: 1_000_000, goesNegative: false, currency: "INR" });
+      expect(body.data.points).toHaveLength(30);
+      expect(body.data.events).toHaveLength(1);
+      expect(Object.keys(body.data.inputs)).toEqual(
+        expect.arrayContaining(["accounts", "lookbackDays", "dailyAverageSpend", "recurringCount", "billCount", "subscriptionCount", "assumptions"])
+      );
+    });
+
+    it("GET ?days sets the window from 1 to 60 and rejects anything else", async () => {
+      expect((await (await get("?days=7")).json()).data.points).toHaveLength(7);
+      expect((await (await get("?days=60")).json()).data.points).toHaveLength(60);
+      for (const bad of ["0", "61", "-3", "abc", "1.5", ""]) {
+        const res = await get(`?days=${bad}`);
+        expect(res.status, `days=${bad}`).toBe(400);
+        expect((await res.json()).error.code).toBe("VALIDATION_ERROR");
+      }
+    });
+
+    it("GET only sees the caller's own data", async () => {
+      const { default: Account } = await import("@/models/Account");
+      await Account.create({ user: otherUserId, name: "Theirs", type: "bank", balance: 9_000_000, currency: "INR" });
+      await installment("Theirs", at(2), {}, otherUserId, bankId);
+      const f = (await (await get()).json()).data;
+      expect(f.startingBalance).toBe(1_000_000);
+      expect(f.events).toEqual([]);
+    });
+
+    it("GET needs a valid API key", async () => {
+      expect((await get("", {})).status).toBe(401);
+      expect((await get("", { authorization: "Bearer wrong-key" })).status).toBe(401);
+    });
+
+    it("the browser route answers the same forecast for the signed-in user, and 401 when signed out", async () => {
+      const { GET } = await import("@/app/api/forecast/route");
+      const call = (path = "") => GET(new NextRequest(`http://localhost/api/forecast${path}`));
+      sessionUser.current = null;
+      expect((await call()).status).toBe(401);
+      sessionUser.current = { id: userId, name: "Forecast User", email: "fc@x.com", role: "user" };
+      try {
+        const res = await call("?days=5");
+        expect(res.status).toBe(200);
+        const { data } = await res.json();
+        expect(data).toMatchObject({ days: 5, startingBalance: 1_000_000 });
+        expect(data.points).toHaveLength(5);
+        expect((await call("?days=99")).status).toBe(400);
+      } finally {
+        sessionUser.current = null;
+      }
+    });
+  });
+});
