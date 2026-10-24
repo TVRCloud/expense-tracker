@@ -4446,6 +4446,37 @@ describe("ATM captures become transfers to cash", () => {
     await ingest(actor, "sms", "Rs.800.00 debited from A/c XX1234 on 26-09-26 to VPA atmcafe@icici. UPI Ref 426912345678", T0);
     expect((await liveTxns(actor.id))[0].type).toBe("expense");
   });
+
+  it("an ATM withdrawal stays a transfer to cash even when a rule matches it, and a refund credit still gets its suggestion", async () => {
+    const { actor, bank, cash } = await setup();
+    const { createRule } = await import("@/lib/rule-service");
+    // Matches both the ATM message and the Swiggy messages below.
+    await createRule({ userId: actor.id, field: "text", op: "contains", value: "ATM", category: "food", merchantName: "Rule cafe", tags: ["ruled"], priority: 0, isActive: true });
+    await createRule({ userId: actor.id, field: "text", op: "contains", value: "swiggy", category: "food", tags: [], priority: 1, isActive: true });
+
+    const atm = await ingest(actor, "sms", ATM_SMS, T0);
+    expect(atm.body.status).toBe("created");
+    const [transfer] = await liveTxns(actor.id);
+    expect(transfer).toMatchObject({ type: "transfer", description: "ATM withdrawal", category: "Transfer" });
+    expect(String(transfer.transferTo)).toBe(String(cash!._id));
+    expect(await balanceOf(bank._id)).toBe(100000 - 500000);
+    expect(await balanceOf(cash!._id)).toBe(2000 + 500000);
+
+    // An ordinary UPI debit next to it is spending and still gets the rule's defaults.
+    const spend = await ingest(actor, "sms", "Rs.250.00 debited from A/c XX1234 on 26-09-26 to VPA swiggy@icici. UPI Ref 426912345678", minutes(10));
+    expect(spend.body.status).toBe("created");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const expense = await Transaction.findOne({ user: actor.id, type: "expense" }).lean<{ _id: unknown; category: string }>();
+    expect(expense?.category).toBe("food");
+    await Transaction.updateOne({ _id: expense!._id }, { $set: { description: "Swiggy", date: new Date("2026-09-24T06:30:00Z") } });
+
+    // Its refund credit is still matched back to it, with the cash transfer ignored.
+    const back = await ingest(actor, "sms", "Rs.250.00 credited to A/c XX1234 on 26-09-26 by Swiggy refund. UPI Ref 426999999999.", minutes(20));
+    expect(back.body.status).toBe("created");
+    const credit = await Transaction.findOne({ user: actor.id, type: "income" }).lean<{ refundStatus?: string; refundOf?: { toString(): string } }>();
+    expect(credit?.refundStatus).toBe("suggested");
+    expect(credit?.refundOf?.toString()).toBe(String(expense!._id));
+  });
 });
 
 describe("integration cash account", () => {
