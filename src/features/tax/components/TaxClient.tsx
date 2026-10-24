@@ -94,6 +94,9 @@ export function TaxClient() {
     if (!switches.has(name)) switches.set(name, { category: name, total: 0 });
   }
 
+  const change = setCategories.variables;
+  const pendingName = change ? (change.add?.[0] ?? change.remove?.[0]) : undefined;
+
   function toggle(category: string, on: boolean) {
     const name = category.toLowerCase();
     setCategories.mutate(on ? { add: [name] } : { remove: [name] }, { onError: () => toast.error("Could not save this change") });
@@ -178,6 +181,7 @@ export function TaxClient() {
                   <Switch
                     checked={marked.has(r.category.toLowerCase())}
                     onCheckedChange={(on) => toggle(r.category, on)}
+                    disabled={setCategories.isPending && pendingName === r.category.toLowerCase()}
                     aria-label={`${r.category} is deductible`}
                   />
                 </label>

@@ -44,19 +44,26 @@ export const PATCH = withIntegrationRoute("tax", async ({ req, user, requestId }
     return integrationError("VALIDATION_ERROR", "Send add or remove as lists of names", requestId, { details: parsed.error.flatten() });
   }
 
-  const outcome = await withIdempotency({
-    userId: user.id,
-    endpoint: "integrations:tax-settings:PATCH",
-    key: idempotencyKey,
-    body: parsed.data,
-    execute: async () => {
-      const result = await changeTaxCategories(user.id, parsed.data);
-      return result
-        ? { status: 200, body: result as unknown as Record<string, unknown> }
-        : { status: 400, body: { errorCode: "VALIDATION_ERROR", message: "At most 50 categories" } };
-    },
-  });
+  // The cap is thrown out of execute so the idempotency record is dropped:
+  // a retry with the same key after freeing a slot runs again, not replays 400.
+  class OverTheCap extends Error {}
+  let outcome;
+  try {
+    outcome = await withIdempotency({
+      userId: user.id,
+      endpoint: "integrations:tax-settings:PATCH",
+      key: idempotencyKey,
+      body: parsed.data,
+      execute: async () => {
+        const result = await changeTaxCategories(user.id, parsed.data);
+        if (!result) throw new OverTheCap();
+        return { status: 200, body: result as unknown as Record<string, unknown> };
+      },
+    });
+  } catch (err) {
+    if (err instanceof OverTheCap) return integrationError("VALIDATION_ERROR", "At most 50 categories", requestId);
+    throw err;
+  }
   if (outcome.kind === "conflict") return integrationError("IDEMPOTENCY_CONFLICT", conflictMessage(outcome.reason), requestId);
-  if (outcome.status === 400) return integrationError("VALIDATION_ERROR", "At most 50 categories", requestId);
   return integrationOk(outcome.body, requestId, { status: outcome.status });
 });

@@ -151,6 +151,24 @@ function countedRows(userObjectId: Types.ObjectId) {
   };
 }
 
+const MAX_REFUND_GROUPS = 20000;
+const ID_CHUNK = 1000;
+
+type Refunded = { _id: Types.ObjectId; category?: string; deductible?: boolean; isDeleted?: boolean; reviewStatus?: string | null };
+
+// The expenses refunds point at, this user's only, read in chunks.
+async function refundedExpenses(userObjectId: Types.ObjectId, ids: Array<Types.ObjectId | null>) {
+  const unique = [...new Map(ids.filter((i): i is Types.ObjectId => !!i).map((i) => [i.toString(), i])).values()];
+  const found = new Map<string, Refunded>();
+  for (let i = 0; i < unique.length; i += ID_CHUNK) {
+    const chunk = await Transaction.find({ _id: { $in: unique.slice(i, i + ID_CHUNK) }, user: userObjectId })
+      .select("category deductible isDeleted reviewStatus")
+      .lean<Refunded[]>();
+    for (const doc of chunk) found.set(doc._id.toString(), doc);
+  }
+  return found;
+}
+
 export async function getTaxSummary(userId: string, fyArg?: number, now: Date = new Date()): Promise<TaxSummary> {
   await connectDB();
   const { timeZone, categories } = await readUser(userId);
@@ -159,11 +177,8 @@ export async function getTaxSummary(userId: string, fyArg?: number, now: Date = 
   const userObjectId = new Types.ObjectId(userId);
   const inRange = { $gte: start, $lt: end };
 
-  const aggregated = await Transaction.aggregate<{
-    _id: { kind: Kind; month: string; category: string; ruleCategory: string; override: boolean | null };
-    total: number;
-    count: number;
-  }>([
+  // Rows of the year with their kind and month; refunds are told apart from income.
+  const inYear = [
     { $match: { ...countedRows(userObjectId), $or: [{ date: inRange }, { paidAt: inRange }] } },
     { $addFields: activityDateAddFields() },
     { $match: { activityDate: inRange } },
@@ -179,37 +194,70 @@ export async function getTaxSummary(userId: string, fyArg?: number, now: Date = 
         month: { $dateToString: { format: "%Y-%m", date: "$activityDate", timezone: timeZone } },
       },
     },
-    // A refund reads the expense it refunds: skipped when that is voided or
-    // deleted, and deductible when it is (its flag, else its category).
-    { $addFields: { refundRef: { $cond: [{ $eq: ["$kind", "refund"] }, "$refundOf", null] } } },
-    // localField form so the _id index is used; a null refundRef finds nothing.
-    { $lookup: { from: Transaction.collection.name, localField: "refundRef", foreignField: "_id", as: "original" } },
-    { $addFields: { original: { $first: "$original" } } },
-    { $match: { "original.isDeleted": { $ne: true }, "original.reviewStatus": { $ne: "voided" } } },
-    {
-      $group: {
-        _id: {
-          kind: "$kind",
-          month: "$month",
-          category: "$category",
-          ruleCategory: { $ifNull: ["$original.category", "$category"] },
-          override: { $cond: [{ $eq: ["$kind", "refund"] }, { $ifNull: ["$original.deductible", null] }, { $ifNull: ["$deductible", null] }] },
+  ];
+
+  const [plain, refunds] = await Promise.all([
+    Transaction.aggregate<{
+      _id: { kind: Kind; month: string; category: string; override: boolean | null };
+      total: number;
+      count: number;
+    }>([
+      ...inYear,
+      { $match: { kind: { $ne: "refund" } } },
+      {
+        $group: {
+          _id: { kind: "$kind", month: "$month", category: "$category", override: { $ifNull: ["$deductible", null] } },
+          total: { $sum: "$amount" },
+          count: { $sum: 1 },
         },
-        total: { $sum: "$amount" },
-        count: { $sum: 1 },
       },
-    },
+    ]),
+    // One group per refunded expense, month and category: as many as the
+    // year's refunds, capped.
+    Transaction.aggregate<{
+      _id: { refundOf: Types.ObjectId | null; month: string; category: string };
+      total: number;
+      count: number;
+    }>([
+      ...inYear,
+      { $match: { kind: "refund" } },
+      {
+        $group: {
+          _id: { refundOf: { $ifNull: ["$refundOf", null] }, month: "$month", category: "$category" },
+          total: { $sum: "$amount" },
+          count: { $sum: 1 },
+        },
+      },
+      { $limit: MAX_REFUND_GROUPS },
+    ]),
   ]);
 
-  const groups: TaxGroup[] = aggregated.map((a) => ({
+  const originals = await refundedExpenses(userObjectId, refunds.map((r) => r._id.refundOf));
+
+  const groups: TaxGroup[] = plain.map((a) => ({
     kind: a._id.kind,
     month: a._id.month,
     category: a._id.category,
-    ruleCategory: a._id.ruleCategory,
+    ruleCategory: a._id.category,
     override: a._id.override,
     total: a.total,
     count: a.count,
   }));
+  for (const r of refunds) {
+    const original = r._id.refundOf ? originals.get(r._id.refundOf.toString()) : undefined;
+    // Skipped when the expense it refunds is voided or deleted; deductible as
+    // that expense is (its flag, else its category). Unlinked: its own category.
+    if (original && (original.isDeleted || original.reviewStatus === "voided")) continue;
+    groups.push({
+      kind: "refund",
+      month: r._id.month,
+      category: r._id.category,
+      ruleCategory: original?.category ?? r._id.category,
+      override: original?.deductible ?? null,
+      total: r.total,
+      count: r.count,
+    });
+  }
 
   return {
     fy,
@@ -225,21 +273,34 @@ export async function getTaxSummary(userId: string, fyArg?: number, now: Date = 
 
 const MAX_YEARS = 100;
 
+type Dated = { date?: Date; paidAt?: Date } | null;
+
+// The four single-row reads behind availableYears, not yet run (so a test can
+// explain them). `isDeleted` is matched with equality points ($in false or
+// null), not $ne, so the {user, isDeleted, date} and {user, isDeleted, paidAt}
+// indexes give the order and the read stops at the first row.
+export function yearRangeReads(userObjectId: Types.ObjectId) {
+  const { isDeleted: _ignored, ...counted } = countedRows(userObjectId);
+  void _ignored;
+  const live = { ...counted, isDeleted: { $in: [false, null] } };
+  // A paid instalment's activity date is paidAt, so `date` reads skip them and
+  // a scheduled date in the future cannot stretch the range.
+  const byDate = { ...live, installmentStatus: { $ne: "paid" } };
+  const paid = { ...live, installmentStatus: "paid", paidAt: { $exists: true } };
+  return {
+    firstDate: Transaction.findOne(byDate).sort({ date: 1 }).select("date").lean<Dated>(),
+    lastDate: Transaction.findOne(byDate).sort({ date: -1 }).select("date").lean<Dated>(),
+    firstPaid: Transaction.findOne(paid).sort({ paidAt: 1 }).select("paidAt").lean<Dated>(),
+    lastPaid: Transaction.findOne(paid).sort({ paidAt: -1 }).select("paidAt").lean<Dated>(),
+  };
+}
+
 // Financial years from the user's first to last counted row, newest first,
-// always including the year asked for. Four single-row reads on the date
-// indexes (the first and last `date`, and the first and last `paidAt` for paid
-// instalments, whose activity date is paidAt), so cost does not grow with the
-// number of transactions. Years in between with no rows are listed too.
+// always including the year asked for. Cost does not grow with the number of
+// transactions. Years in between with no rows are listed too.
 async function availableYears(userObjectId: Types.ObjectId, timeZone: string, fy: number): Promise<number[]> {
-  const base = countedRows(userObjectId);
-  const paid = { ...base, installmentStatus: "paid", paidAt: { $exists: true } };
-  type Dated = { date?: Date; paidAt?: Date } | null;
-  const [firstDate, lastDate, firstPaid, lastPaid] = await Promise.all([
-    Transaction.findOne(base).sort({ date: 1 }).select("date").lean<Dated>(),
-    Transaction.findOne(base).sort({ date: -1 }).select("date").lean<Dated>(),
-    Transaction.findOne(paid).sort({ paidAt: 1 }).select("paidAt").lean<Dated>(),
-    Transaction.findOne(paid).sort({ paidAt: -1 }).select("paidAt").lean<Dated>(),
-  ]);
+  const reads = yearRangeReads(userObjectId);
+  const [firstDate, lastDate, firstPaid, lastPaid] = await Promise.all([reads.firstDate, reads.lastDate, reads.firstPaid, reads.lastPaid]);
   const stamps = [firstDate?.date, lastDate?.date, firstPaid?.paidAt, lastPaid?.paidAt].filter((d): d is Date => !!d);
   if (stamps.length === 0) return [fy];
   const years = stamps.map((d) => currentFy(d, timeZone));

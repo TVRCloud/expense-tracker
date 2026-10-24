@@ -6684,6 +6684,75 @@ describe("tax helper", () => {
     });
   });
 
+  describe("more refund cases", () => {
+    const refund = (orig: { _id: unknown }, amount: number, date: string, category = "Food", extra: Record<string, unknown> = {}) =>
+      add("income", amount, date, { category, refundStatus: "confirmed", refundOf: orig._id, ...extra });
+
+    it("a refund in a later year follows its expense's flag, per year", async () => {
+      await setCategories(["food"]);
+      const yes = await add("expense", 10000, "2025-08-01T06:00:00Z", { category: "Gifts", deductible: true });
+      const no = await add("expense", 8000, "2025-08-02T06:00:00Z", { deductible: false });
+      await refund(yes, 2000, "2026-05-01T06:00:00Z", "Gifts");
+      await refund(no, 500, "2026-05-02T06:00:00Z");
+      const first = (await (await summary("?fy=2025")).json()).data;
+      expect(first.deductible.total).toBe(10000);
+      const next = (await (await summary("?fy=2026")).json()).data;
+      expect(next.expense).toBe(-2500);
+      expect(next.deductible.total).toBe(-2000);
+    });
+
+    it("a split refund takes deductibility from the one line it is linked to (known limit)", async () => {
+      await setCategories(["health"]);
+      const group = new mongoose.Types.ObjectId();
+      const medical = await add("expense", 6000, "2025-09-01T06:00:00Z", { category: "Health", splitGroupId: group });
+      await add("expense", 4000, "2025-09-01T06:00:00Z", { category: "Food", splitGroupId: group });
+      await refund(medical, 1000, "2025-09-10T06:00:00Z", "Health");
+      const { data } = await (await summary("?fy=2025")).json();
+      expect(data.deductible.total).toBe(5000);
+      expect(data.expense).toBe(9000);
+    });
+
+    it("a refund pointing at another user's expense does not read it", async () => {
+      await setCategories(["food"]);
+      const theirs = await add("expense", 5000, "2025-09-01T06:00:00Z", { reviewStatus: "voided", deductible: false }, otherUserId);
+      await refund(theirs, 700, "2025-09-05T06:00:00Z");
+      const { data } = await (await summary("?fy=2025")).json();
+      // not skipped as "voided", and the other user's flag does not apply: its own category does
+      expect(data.expense).toBe(-700);
+      expect(data.deductible.total).toBe(-700);
+    });
+  });
+
+  it("the year reads stop at the first row on the indexes", async () => {
+    const { yearRangeReads } = await import("@/lib/tax-service");
+    const { default: Transaction } = await import("@/models/Transaction");
+    await Transaction.syncIndexes();
+    const rid = new mongoose.Types.ObjectId();
+    const rows = Array.from({ length: 300 }, (_, i) => ({
+      user: userId,
+      account: accountId,
+      type: "expense",
+      amount: 100,
+      currency: "INR",
+      category: "Food",
+      date: new Date(Date.UTC(2023, 0, 1 + (i % 28), 6)),
+      isDeleted: i % 5 === 0 ? undefined : false,
+    }));
+    await Transaction.insertMany(rows);
+    // paid instalments with far-future scheduled dates must not stretch the date range
+    await add("expense", 100, "2031-01-01T06:00:00Z", { recurringId: rid, installmentStatus: "paid", paidAt: new Date("2023-02-01T06:00:00Z") });
+    const reads = yearRangeReads(new mongoose.Types.ObjectId(userId));
+    for (const q of Object.values(reads)) {
+      const plan = (await (q as unknown as { explain: (v: string) => Promise<Record<string, unknown>> }).explain("executionStats")) as {
+        executionStats: { totalDocsExamined: number };
+      };
+      expect(plan.executionStats.totalDocsExamined).toBeLessThanOrEqual(5);
+    }
+    const { data } = await (await summary("?fy=2022")).json();
+    // January 2023 is in 2022-23; the paid instalment is by paidAt (also 2022-23), its 2031 date is ignored
+    expect(data.availableYears).toEqual([2022]);
+  });
+
   it("matches category names beyond ASCII, the same way on both sides", async () => {
     const { PUT } = await import("@/app/api/integrations/tax/settings/route");
     await PUT(
@@ -6740,7 +6809,12 @@ describe("tax helper", () => {
     expect((await (await patch({ remove: ["nothing"] })).json()).data.deductibleCategories).toEqual(["health", "travel"]);
     await setCategories(Array.from({ length: 49 }, (_, i) => `c${String(i).padStart(2, "0")}`));
     expect((await (await patch({ add: ["last"] })).json()).data.deductibleCategories).toHaveLength(50);
-    expect((await patch({ add: ["one-too-many"] })).status).toBe(400);
+    expect((await patch({ add: ["one-too-many"] }, "cap-retry")).status).toBe(400);
+    // the 400 is not remembered: free a slot and the same key and body now work
+    await patch({ remove: ["c01"] });
+    const retry = await patch({ add: ["one-too-many"] }, "cap-retry");
+    expect(retry.status).toBe(200);
+    expect((await retry.json()).data.deductibleCategories).toContain("one-too-many");
     expect((await (await patch({ add: ["c00"] })).json()).data.deductibleCategories).toHaveLength(50); // already there
     const { PATCH: browserPatch } = await import("@/app/api/tax/settings/route");
     sessionUser.current = { id: userId, name: "Tax User", email: "t@x.com", role: "user" };
@@ -6879,5 +6953,25 @@ describe("tax helper", () => {
     expect(await csv.text()).toContain("Deductible by category,Health,20");
     sessionUser.current = null;
     expect((await GET(new NextRequest("http://localhost/api/tax"))).status).toBe(401);
+  });
+});
+
+describe("budgets csv", () => {
+  it("remaining stays a number when over budget", async () => {
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const { default: Budget } = await import("@/models/Budget");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const user = await User.create({ name: "B", email: `bc${Date.now()}@x.com`, password: "hash", isActive: true });
+    const account = await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 0, currency: "INR" });
+    const now = new Date();
+    await Budget.create({ user: user._id, category: "Food", month: now.getMonth() + 1, year: now.getFullYear(), limitAmount: 10000 });
+    await Transaction.create({ user: user._id, account: account._id, type: "expense", amount: 25000, currency: "INR", category: "Food", date: new Date(now.getFullYear(), now.getMonth(), 2, 12) });
+    sessionUser.current = { id: user._id.toString(), name: "B", email: "b@x.com", role: "user" };
+    const { GET } = await import("@/app/api/budgets/route");
+    const res = await GET(new NextRequest(`http://localhost/api/budgets?format=csv&month=${now.getMonth() + 1}&year=${now.getFullYear()}`));
+    const row = (await res.text()).split("\n")[1].split(",");
+    expect(row[6]).toBe("-150");
+    sessionUser.current = null;
   });
 });
