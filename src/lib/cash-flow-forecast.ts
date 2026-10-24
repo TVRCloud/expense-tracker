@@ -113,6 +113,8 @@ export async function getCashFlowForecast(
           date: { $gte: lookbackFrom, $lte: now },
         })
           .select("amount description type refundOf")
+          // Newest first, so a cut at the limit drops the oldest rows (an expense and its refund stay together).
+          .sort({ date: -1 })
           .limit(5000)
           .lean<Array<{ _id: Types.ObjectId; amount: number; description?: string; type: string; refundOf?: Types.ObjectId }>>()
       : Promise.resolve([]),

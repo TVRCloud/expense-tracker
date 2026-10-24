@@ -5391,6 +5391,7 @@ describe("integration sinking funds", () => {
       expect((await first.json()).data).toMatchObject({ savedAmount: 100000, isCompleted: true, status: "done" });
       const replay = await contribute(id, 10000, { "idempotency-key": "reach-1" });
       expect((await replay.json()).data.savedAmount).toBe(100000);
+      expect(spy).toHaveBeenCalledTimes(1); // the alert really was attempted, and its failure changed nothing
     } finally {
       spy.mockRestore();
     }
