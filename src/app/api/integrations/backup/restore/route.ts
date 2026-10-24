@@ -17,34 +17,35 @@ const bodySchema = z.object({
 
 // POST /api/integrations/backup/restore — restore a file made by POST /backup.
 // `dryRun: true` reads and checks the file and reports what would be added,
-// writing nothing, with no Idempotency-Key. A real restore needs one.
+// writing nothing, with no Idempotency-Key. A real restore needs one. The file
+// is opened with the passphrase on every call, a replay included, so a wrong
+// passphrase never gets an old answer back.
 export const POST = withIntegrationRoute("backup-restore", async ({ req, user, requestId }) => {
-  const read = await readBackupBody(req, requestId);
-  if (!read.ok) return read.res;
-  const parsed = bodySchema.safeParse(read.body);
-  if (!parsed.success) {
-    const envelopeBad = parsed.error.issues.some((i) => i.path[0] === "backup");
-    return integrationError(
-      "VALIDATION_ERROR",
-      envelopeBad ? "This is not a backup file this server can read" : "A passphrase of 12 to 256 characters is required",
-      requestId,
-      envelopeBad ? { reason: "invalid" } : undefined
-    );
-  }
-  const { passphrase, backup, dryRun = false } = parsed.data;
-
-  const key = idempotencyKeyOf(req);
-  if (!dryRun && !key) return integrationError("VALIDATION_ERROR", "Missing or invalid Idempotency-Key header", requestId);
-
-  const limited = await backupRateLimited(user.id, "restore", requestId);
-  if (limited) return limited;
-
   try {
-    const open = async () => parsePayload(await decryptBackup(backup, passphrase));
-
-    if (dryRun) {
-      return integrationOk(await restoreBackup(user.id, await open(), { dryRun: true }), requestId);
+    const early = await backupRateLimited(user.id, "request", requestId);
+    if (early) return early;
+    const read = await readBackupBody(req, requestId);
+    if (!read.ok) return read.res;
+    const parsed = bodySchema.safeParse(read.body);
+    if (!parsed.success) {
+      const envelopeBad = parsed.error.issues.some((i) => i.path[0] === "backup");
+      return integrationError(
+        "VALIDATION_ERROR",
+        envelopeBad ? "This is not a backup file this server can read" : "A passphrase of 12 to 256 characters is required",
+        requestId,
+        envelopeBad ? { reason: "invalid" } : undefined
+      );
     }
+    const { passphrase, backup, dryRun = false } = parsed.data;
+
+    const key = idempotencyKeyOf(req);
+    if (!dryRun && !key) return integrationError("VALIDATION_ERROR", "Missing or invalid Idempotency-Key header", requestId);
+
+    const limited = await backupRateLimited(user.id, dryRun ? "dryRun" : "restore", requestId);
+    if (limited) return limited;
+
+    const payload = parsePayload(await decryptBackup(backup, passphrase));
+    if (dryRun) return integrationOk(await restoreBackup(user.id, payload, { dryRun: true }), requestId);
 
     const outcome = await withIdempotency({
       userId: user.id,
@@ -52,7 +53,7 @@ export const POST = withIntegrationRoute("backup-restore", async ({ req, user, r
       key: key!,
       body: { backup: envelopeDigest(backup), mode: "merge" },
       execute: async () => {
-        const report = await restoreBackup(user.id, await open(), { dryRun: false });
+        const report = await restoreBackup(user.id, payload, { dryRun: false });
         return { status: 200, body: report as unknown as Record<string, unknown> };
       },
     });
@@ -61,8 +62,6 @@ export const POST = withIntegrationRoute("backup-restore", async ({ req, user, r
     }
     return integrationOk(outcome.body, requestId, { status: outcome.status });
   } catch (err) {
-    const known = backupFailure(err, requestId);
-    if (known) return known;
-    throw err;
+    return backupFailure(err, requestId, "backup-restore");
   }
 });

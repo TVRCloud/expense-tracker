@@ -8,14 +8,18 @@ import { z } from "zod";
 // wrong passphrase does. Nothing here logs or stores the passphrase.
 
 export const BACKUP_FORMAT = "expense-tracker-backup";
-export const BACKUP_VERSION = 1;
+// New files are version 2. Version 1 files (made before the cost went up) still
+// open: their lower cost stays whitelisted, so a backup kept for a while restores.
+export const BACKUP_VERSION = 2;
 
-// The only cost the format allows. A file cannot ask for more (or less): the
-// header is checked against these numbers before any key work starts.
-const SCRYPT_N = 65536;
+// The only costs the format allows, per version. A file cannot ask for more (or
+// less): the header is checked against these numbers before any key work starts.
+const SCRYPT_COST = { 1: 65536, 2: 131072 } as const;
+type FileVersion = keyof typeof SCRYPT_COST;
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
-const SCRYPT_MAXMEM = 128 * SCRYPT_N * SCRYPT_R * 2;
+// scrypt needs 128 * N * r bytes (128 MiB at version 2); allow double for overhead.
+const maxmemFor = (n: number) => 128 * n * SCRYPT_R * 2;
 
 export const PASSPHRASE_MIN = 12;
 export const PASSPHRASE_MAX = 256;
@@ -25,7 +29,7 @@ export const PASSPHRASE_MAX = 256;
 export const MAX_BACKUP_BYTES = 24 * 1024 * 1024;
 export const MAX_PLAIN_BYTES = 48 * 1024 * 1024;
 
-export type BackupFailure = "unreadable" | "invalid" | "too_large";
+export type BackupFailure = "unreadable" | "invalid" | "too_large" | "busy";
 
 export class BackupError extends Error {
   constructor(
@@ -42,56 +46,70 @@ const b64 = (bytes: number) => {
   return z.string().length(chars).regex(/^[A-Za-z0-9+/]+={0,2}$/);
 };
 
-export const backupEnvelopeSchema = z
-  .object({
-    format: z.literal(BACKUP_FORMAT),
-    v: z.literal(BACKUP_VERSION),
-    createdAt: z.string().max(40),
-    kdf: z
-      .object({
-        name: z.literal("scrypt"),
-        N: z.literal(SCRYPT_N),
-        r: z.literal(SCRYPT_R),
-        p: z.literal(SCRYPT_P),
-        salt: b64(16),
-      })
-      .strict(),
-    cipher: z.object({ name: z.literal("aes-256-gcm"), iv: b64(12), tag: b64(16) }).strict(),
-    ciphertext: z
-      .string()
-      .min(1)
-      .max(Math.ceil((MAX_BACKUP_BYTES * 4) / 3) + 4)
-      .regex(/^[A-Za-z0-9+/]+={0,2}$/),
-  })
-  .strict();
+const cipherText = z
+  .string()
+  .min(1)
+  .max(Math.ceil((MAX_BACKUP_BYTES * 4) / 3) + 4)
+  .regex(/^[A-Za-z0-9+/]+={0,2}$/);
+
+const envelopeFor = <V extends FileVersion>(v: V) =>
+  z
+    .object({
+      format: z.literal(BACKUP_FORMAT),
+      v: z.literal(v),
+      createdAt: z.string().max(40),
+      kdf: z
+        .object({
+          name: z.literal("scrypt"),
+          N: z.literal(SCRYPT_COST[v]),
+          r: z.literal(SCRYPT_R),
+          p: z.literal(SCRYPT_P),
+          salt: b64(16),
+        })
+        .strict(),
+      cipher: z.object({ name: z.literal("aes-256-gcm"), iv: b64(12), tag: b64(16) }).strict(),
+      ciphertext: cipherText,
+    })
+    .strict();
+
+export const backupEnvelopeSchema = z.discriminatedUnion("v", [envelopeFor(1), envelopeFor(2)]);
 
 export type BackupEnvelope = z.infer<typeof backupEnvelopeSchema>;
 
 export const passphraseSchema = z.string().min(PASSPHRASE_MIN).max(PASSPHRASE_MAX);
 
-function aad(e: Pick<BackupEnvelope, "createdAt" | "kdf"> & { cipher: { iv: string } }) {
+function aad(e: { v: number; createdAt: string; kdf: { N: number; r: number; p: number; salt: string }; cipher: { iv: string } }) {
   return Buffer.from(
-    [BACKUP_FORMAT, BACKUP_VERSION, e.createdAt, "scrypt", e.kdf.N, e.kdf.r, e.kdf.p, e.kdf.salt, "aes-256-gcm", e.cipher.iv].join("|"),
+    [BACKUP_FORMAT, e.v, e.createdAt, "scrypt", e.kdf.N, e.kdf.r, e.kdf.p, e.kdf.salt, "aes-256-gcm", e.cipher.iv].join("|"),
     "utf8"
   );
 }
 
-// scrypt holds 64 MiB while it runs; at most two run at once, the rest queue.
+// scrypt holds 128 MiB while it runs: at most two run at once, a short queue
+// waits, and anything past that is turned away instead of piling up memory.
+const MAX_ACTIVE = 2;
+const MAX_QUEUE = 16;
 let active = 0;
 const waiting: Array<() => void> = [];
 async function withKeySlot<T>(work: () => Promise<T>): Promise<T> {
-  if (active >= 2) await new Promise<void>((resolve) => waiting.push(resolve));
-  active += 1;
+  if (active >= MAX_ACTIVE) {
+    if (waiting.length >= MAX_QUEUE) throw new BackupError("busy", "The server is busy opening backups; try again in a moment");
+    // The finishing job hands its slot straight to us, so `active` stays put.
+    await new Promise<void>((resolve) => waiting.push(resolve));
+  } else {
+    active += 1;
+  }
   try {
     return await work();
   } finally {
-    active -= 1;
-    waiting.shift()?.();
+    const next = waiting.shift();
+    if (next) next();
+    else active -= 1;
   }
 }
 
-function deriveKey(passphrase: string, salt: Buffer): Promise<Buffer> {
-  const options: ScryptOptions = { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P, maxmem: SCRYPT_MAXMEM };
+function deriveKey(passphrase: string, salt: Buffer, n: number): Promise<Buffer> {
+  const options: ScryptOptions = { N: n, r: SCRYPT_R, p: SCRYPT_P, maxmem: maxmemFor(n) };
   return withKeySlot(
     () =>
       new Promise<Buffer>((resolve, reject) => {
@@ -107,17 +125,22 @@ const gunzipAsync = (data: Buffer) =>
     gunzip(data, { maxOutputLength: MAX_PLAIN_BYTES }, (err, out) => (err ? reject(err) : resolve(out)))
   );
 
-export async function encryptBackup(payload: unknown, passphrase: string, createdAt = new Date().toISOString()): Promise<BackupEnvelope> {
-  const plain = Buffer.from(JSON.stringify(payload), "utf8");
-  if (plain.length > MAX_PLAIN_BYTES) throw new BackupError("too_large", "Backup is too large");
-  const packed = await gzipAsync(plain);
-
+/** Encrypt already gzipped bytes. Exported for tests that need an unusual body. */
+export async function sealPacked(
+  packed: Buffer,
+  passphrase: string,
+  opts: { createdAt?: string; version?: FileVersion } = {}
+): Promise<BackupEnvelope> {
+  const version = opts.version ?? BACKUP_VERSION;
+  const createdAt = opts.createdAt ?? new Date().toISOString();
+  const n = SCRYPT_COST[version];
   const salt = randomBytes(16);
   const iv = randomBytes(12);
-  const key = await deriveKey(passphrase, salt);
+  const key = await deriveKey(passphrase, salt, n);
   const header = {
+    v: version,
     createdAt,
-    kdf: { name: "scrypt" as const, N: SCRYPT_N as 65536, r: SCRYPT_R as 8, p: SCRYPT_P as 1, salt: salt.toString("base64") },
+    kdf: { name: "scrypt" as const, N: n, r: SCRYPT_R as 8, p: SCRYPT_P as 1, salt: salt.toString("base64") },
     cipher: { iv: iv.toString("base64") },
   };
   const cipher = createCipheriv("aes-256-gcm", key, iv);
@@ -128,12 +151,22 @@ export async function encryptBackup(payload: unknown, passphrase: string, create
 
   return {
     format: BACKUP_FORMAT,
-    v: BACKUP_VERSION,
+    v: version,
     createdAt,
     kdf: header.kdf,
     cipher: { name: "aes-256-gcm", iv: header.cipher.iv, tag: tag.toString("base64") },
     ciphertext: ciphertext.toString("base64"),
-  };
+  } as BackupEnvelope;
+}
+
+export async function encryptBackup(
+  payload: unknown,
+  passphrase: string,
+  opts: { createdAt?: string; version?: FileVersion } = {}
+): Promise<BackupEnvelope> {
+  const plain = Buffer.from(JSON.stringify(payload), "utf8");
+  if (plain.length > MAX_PLAIN_BYTES) throw new BackupError("too_large", "Backup is too large");
+  return sealPacked(await gzipAsync(plain), passphrase, opts);
 }
 
 // A wrong passphrase and a changed file give the same answer on purpose.
@@ -146,12 +179,13 @@ export async function decryptBackup(input: unknown, passphrase: string): Promise
 
   let packed: Buffer;
   try {
-    const key = await deriveKey(passphrase, Buffer.from(env.kdf.salt, "base64"));
+    const key = await deriveKey(passphrase, Buffer.from(env.kdf.salt, "base64"), env.kdf.N);
     const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(env.cipher.iv, "base64"));
     decipher.setAAD(aad(env));
     decipher.setAuthTag(Buffer.from(env.cipher.tag, "base64"));
     packed = Buffer.concat([decipher.update(Buffer.from(env.ciphertext, "base64")), decipher.final()]);
-  } catch {
+  } catch (err) {
+    if (err instanceof BackupError) throw err; // "busy" is not a wrong passphrase
     throw new BackupError("unreadable", UNREADABLE);
   }
 

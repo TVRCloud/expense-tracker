@@ -120,6 +120,7 @@ describe("encrypted backup and restore", () => {
     });
     await Transaction.create({ user: userId, account: bank._id, type: "expense", amount: 1, category: "Food", date: new Date(), isDeleted: true });
     await Transaction.create({ user: userId, account: gone._id, type: "expense", amount: 1, category: "Food", date: new Date() });
+    await Transaction.create({ user: userId, account: bank._id, transferTo: gone._id, type: "transfer", amount: 300, category: "Transfer", date: new Date("2026-03-07T10:00:00Z") });
     await Budget.create({ user: userId, category: "Food", month: 3, year: 2026, limitAmount: 500000 });
     await Goal.create({ user: userId, name: "Bike", targetAmount: 300000, savedAmount: 1000 });
     const loan = await Loan.create({
@@ -145,14 +146,14 @@ describe("encrypted backup and restore", () => {
     for (const name of names) await (await import(`@/models/${name}`)).default.deleteMany({ user: userId });
   }
 
-  it("exports an encrypted file with no plain text, no secrets and no deleted rows", async () => {
+  it("exports an encrypted file with no plain text, no secrets and no soft-deleted rows", async () => {
     await seed(a);
     const res = await exportBackup();
     expect(res.status).toBe(200);
     const { data } = await res.json();
     expect(data.counts).toMatchObject({
-      accounts: 2,
-      transactions: 3,
+      accounts: 3,
+      transactions: 5,
       budgets: 1,
       goals: 1,
       loans: 1,
@@ -163,12 +164,12 @@ describe("encrypted backup and restore", () => {
       subscriptionDecisions: 1,
       spendLimit: 1,
     });
-    // the transaction on the deleted account is left out and reported
-    expect(data.omitted).toEqual({ transactions: 1 });
+    // a deleted account goes in too, so its transactions and the transfer to it stay attached
+    expect(data.omitted).toEqual({});
     const text = JSON.stringify(data.backup);
     expect(text).not.toContain("SECRET-MERCHANT-NAME");
     expect(text).not.toContain("secret-hash-a");
-    expect(data.backup).toMatchObject({ format: "expense-tracker-backup", v: 1, kdf: { name: "scrypt", N: 65536, r: 8, p: 1 } });
+    expect(data.backup).toMatchObject({ format: "expense-tracker-backup", v: 2, kdf: { name: "scrypt", N: 131072, r: 8, p: 1 } });
   });
 
   it("never puts keys, passwords or other users' rows in the plain text", async () => {
@@ -181,7 +182,7 @@ describe("encrypted backup and restore", () => {
     expect(plain).not.toContain("keyHash");
     expect(plain).not.toContain(b);
     expect(plain).not.toContain(`"user"`);
-    expect(payload.data.accounts).toHaveLength(2);
+    expect(payload.data.accounts).toHaveLength(3);
   });
 
   it("round-trips: wipe, restore, same rows with the same ids, owned by the caller", async () => {
@@ -199,12 +200,14 @@ describe("encrypted backup and restore", () => {
     expect(res.status).toBe(200);
     const report = (await res.json()).data;
     expect(report).toMatchObject({ dryRun: false, restored: true });
-    expect(report.counts.accounts).toEqual({ inBackup: 2, toCreate: 2, existing: 0 });
-    expect(report.counts.transactions).toEqual({ inBackup: 3, toCreate: 3, existing: 0 });
+    expect(report.counts.accounts).toEqual({ inBackup: 3, toCreate: 3, existing: 0 });
+    expect(report.counts.transactions).toEqual({ inBackup: 5, toCreate: 5, existing: 0 });
     expect(report.warnings).toEqual([]);
 
     const accounts = await Account.find({ user: a }).lean();
-    expect(accounts.map((x) => String(x._id)).sort()).toEqual([ids.bank, ids.card].sort());
+    expect(accounts).toHaveLength(3);
+    expect(accounts.map((x) => String(x._id))).toEqual(expect.arrayContaining([ids.bank, ids.card]));
+    expect(accounts.filter((x) => x.deletedAt)).toHaveLength(1);
     const card = accounts.find((x) => String(x._id) === ids.card)!;
     expect(card).toMatchObject({ balance: -5000, creditMeta: { creditLimit: 100000, lastFourDigits: "1234" }, rewardRule: { kind: "cashback", baseRate: 1.5 } });
     const after = await Transaction.find({ user: a, isDeleted: { $ne: true }, account: ids.bank }).sort({ date: 1 }).lean();
@@ -228,11 +231,11 @@ describe("encrypted backup and restore", () => {
     expect(res.status).toBe(200);
 
     const mine = await Account.find({ user: b }).lean();
-    expect(mine).toHaveLength(2);
+    expect(mine).toHaveLength(3);
     expect(mine.map((x) => String(x._id))).not.toContain(ids.bank);
     const mineIds = new Set(mine.map((x) => String(x._id)));
     const txs = await Transaction.find({ user: b }).lean();
-    expect(txs).toHaveLength(3);
+    expect(txs).toHaveLength(5);
     for (const t of txs) {
       expect(mineIds.has(String(t.account))).toBe(true);
       if (t.transferTo) expect(mineIds.has(String(t.transferTo))).toBe(true);
@@ -246,7 +249,7 @@ describe("encrypted backup and restore", () => {
 
     // user A is unchanged
     expect(await Account.countDocuments({ user: a })).toBe(3);
-    expect(await Transaction.countDocuments({ user: a })).toBe(5);
+    expect(await Transaction.countDocuments({ user: a })).toBe(6);
     expect(await Account.countDocuments({ _id: { $in: [ids.bank, ids.card] }, user: a })).toBe(2);
   });
 
@@ -290,7 +293,7 @@ describe("encrypted backup and restore", () => {
     expect(res.status).toBe(200);
     const report = (await res.json()).data;
     expect(report).toMatchObject({ dryRun: true, restored: false });
-    expect(report.counts.accounts).toEqual({ inBackup: 2, toCreate: 2, existing: 0 });
+    expect(report.counts.accounts).toEqual({ inBackup: 3, toCreate: 3, existing: 0 });
     expect(report.counts.spendLimit).toEqual({ inBackup: 1, toCreate: 1, existing: 0 });
     expect(await Account.countDocuments({ user: a })).toBe(0);
     expect(await Transaction.countDocuments({ user: a })).toBe(0);
@@ -309,14 +312,14 @@ describe("encrypted backup and restore", () => {
 
     const first = await restore({ passphrase: PASS, backup: data.backup }, { idem: "same" });
     const firstBody = (await first.json()).data;
-    expect(firstBody.counts.transactions.toCreate).toBe(3);
+    expect(firstBody.counts.transactions.toCreate).toBe(5);
     const replay = await restore({ passphrase: PASS, backup: data.backup }, { idem: "same" });
     expect((await replay.json()).data).toEqual(firstBody);
 
     const again = await restore({ passphrase: PASS, backup: data.backup }, { idem: "another" });
     const body = (await again.json()).data;
     for (const k of Object.keys(body.counts)) expect(body.counts[k].toCreate).toBe(0);
-    expect(await Transaction.countDocuments({ user: a })).toBe(3);
+    expect(await Transaction.countDocuments({ user: a })).toBe(5);
   });
 
   it("adds missing rows into existing accounts without deleting, and warns that balances are untouched", async () => {
@@ -329,9 +332,11 @@ describe("encrypted backup and restore", () => {
 
     const res = await restore({ passphrase: PASS, backup: data.backup });
     const report = (await res.json()).data;
-    expect(report.counts.accounts).toEqual({ inBackup: 2, toCreate: 0, existing: 2 });
+    expect(report.counts.accounts).toEqual({ inBackup: 3, toCreate: 0, existing: 3 });
     expect(report.counts.transactions.toCreate).toBe(1);
     expect(report.warnings[0]).toContain("balances are not changed");
+    // the deleted account sits in the trash and is not brought back
+    expect(report.warnings.join(" ")).toContain("already exist in your trash");
     expect(await Transaction.exists({ _id: extra._id })).toBeTruthy();
     expect((await Account.findById(ids.bank).lean())!.balance).toBe(90000);
   });
@@ -421,6 +426,208 @@ describe("encrypted backup and restore", () => {
     });
   });
 
+  it("running the same restore again into another user is a no-op (ids are derived, not random)", async () => {
+    await seed(a);
+    const { data } = await (await exportBackup()).json();
+    const { default: Account } = await import("@/models/Account");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { default: Repayment } = await import("@/models/Repayment");
+
+    const first = (await (await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B, idem: "b-1" })).json()).data;
+    expect(first.counts.accounts.toCreate).toBe(3);
+    const snapshot = async () => [
+      (await Account.find({ user: b }).lean()).map((x) => String(x._id)).sort(),
+      (await Transaction.find({ user: b }).lean()).map((x) => String(x._id)).sort(),
+      (await Repayment.find({ user: b }).lean()).map((x) => String(x._id)).sort(),
+    ];
+    const one = await snapshot();
+
+    // a retry under a new key (a lost reply, a second tap)
+    const again = (await (await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B, idem: "b-2" })).json()).data;
+    for (const k of Object.keys(again.counts)) expect(again.counts[k].toCreate).toBe(0);
+    expect(await snapshot()).toEqual(one);
+    expect(await Account.countDocuments({ user: b })).toBe(3);
+    expect(await Transaction.countDocuments({ user: b })).toBe(5);
+  });
+
+  it("a restore that stops half way can simply be run again, with no copies", async () => {
+    await seed(a);
+    const { data } = await (await exportBackup()).json();
+    const { default: Account } = await import("@/models/Account");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { default: Repayment } = await import("@/models/Repayment");
+
+    const spy = vi.spyOn(Transaction, "insertMany").mockRejectedValueOnce(new Error("boom"));
+    const failed = await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B, idem: "half-1" });
+    spy.mockRestore();
+    expect(failed.status).toBe(500);
+    expect(JSON.stringify(await failed.json())).not.toContain("boom");
+    expect(await Account.countDocuments({ user: b })).toBe(3);
+    expect(await Transaction.countDocuments({ user: b })).toBe(0);
+
+    const retry = await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B, idem: "half-2" });
+    expect(retry.status).toBe(200);
+    const report = (await retry.json()).data;
+    expect(report.counts.accounts).toEqual({ inBackup: 3, toCreate: 0, existing: 3 });
+    expect(report.counts.transactions.toCreate).toBe(5);
+    expect(await Account.countDocuments({ user: b })).toBe(3);
+    expect(await Transaction.countDocuments({ user: b })).toBe(5);
+    expect(await Repayment.countDocuments({ user: b })).toBe(1);
+  });
+
+  it("a transfer to a deleted account keeps its destination", async () => {
+    const ids = await seed(a);
+    const { buildBackup } = await import("@/lib/backup-service");
+    const { payload } = await buildBackup(a);
+    const gone = payload.data.accounts.find((x) => x.deletedAt)!;
+    const leg = payload.data.transactions.find((t) => t.amount === 300)!;
+    expect(leg.transferTo).toBe(gone.id);
+    expect(leg.account).toBe(ids.bank);
+  });
+
+  it("the same key and file with a wrong passphrase is refused, not replayed", async () => {
+    await seed(a);
+    const { data } = await (await exportBackup()).json();
+    await wipe(a);
+    const ok = await restore({ passphrase: PASS, backup: data.backup }, { idem: "replay" });
+    expect(ok.status).toBe(200);
+    const bad = await restore({ passphrase: "not the passphrase at all", backup: data.backup }, { idem: "replay" });
+    expect(bad.status).toBe(400);
+    expect((await bad.json()).error.reason).toBe("unreadable");
+    const good = await restore({ passphrase: PASS, backup: data.backup }, { idem: "replay" });
+    expect(good.status).toBe(200);
+  });
+
+  it("still restores a version 1 file (the lower cost stays whitelisted)", async () => {
+    const { encryptBackup } = await import("@/lib/backup-crypto");
+    const id = new mongoose.Types.ObjectId().toHexString();
+    const old = await encryptBackup(
+      { app: "expense-tracker", version: 1, createdAt: new Date().toISOString(), data: { accounts: [{ id, name: "Old", type: "bank", balance: 5 }] } },
+      PASS,
+      { version: 1 }
+    );
+    expect(old).toMatchObject({ v: 1, kdf: { N: 65536 } });
+    const res = await restore({ passphrase: PASS, backup: old });
+    expect(res.status).toBe(200);
+    const { default: Account } = await import("@/models/Account");
+    expect(await Account.exists({ _id: id, user: a })).toBeTruthy();
+    // a version 1 file cannot claim the version 2 cost, or the reverse
+    expect((await restore({ passphrase: PASS, backup: { ...old, kdf: { ...old.kdf, N: 131072 } } })).status).toBe(400);
+  });
+
+  describe("series and split groups", () => {
+    const oid = () => new mongoose.Types.ObjectId().toHexString();
+    async function craft(data: Record<string, unknown>) {
+      const { encryptBackup } = await import("@/lib/backup-crypto");
+      return encryptBackup({ app: "expense-tracker", version: 1, createdAt: new Date().toISOString(), data }, PASS);
+    }
+
+    it("a series or split id that another person already uses is not joined", async () => {
+      const { default: Transaction } = await import("@/models/Transaction");
+      const { default: Account } = await import("@/models/Account");
+      const theirAcct = await Account.create({ user: b, name: "Theirs", type: "bank" });
+      const recurringId = new mongoose.Types.ObjectId();
+      const splitGroupId = new mongoose.Types.ObjectId();
+      const theirs = await Transaction.create({
+        user: b, account: theirAcct._id, type: "expense", amount: 5, category: "Rent", date: new Date(),
+        isRecurring: true, recurringId, recurrenceIsOpenEnded: true, installmentIndex: 1, installmentStatus: "upcoming", splitGroupId,
+      });
+
+      const acct = oid();
+      const backup = await craft({
+        accounts: [{ id: acct, name: "Mine", type: "bank", balance: 0 }],
+        transactions: [
+          { id: oid(), account: acct, type: "expense", amount: 9, category: "Rent", date: new Date().toISOString(), recurringId: recurringId.toHexString(), splitGroupId: splitGroupId.toHexString(), isRecurring: true },
+          { id: oid(), account: acct, type: "expense", amount: 9, category: "Fresh", date: new Date().toISOString(), recurringId: oid() },
+        ],
+      });
+      const res = await restore({ passphrase: PASS, backup });
+      expect(res.status).toBe(200);
+      const mine = await Transaction.find({ user: a }).sort({ category: 1 }).lean();
+      expect(mine).toHaveLength(2);
+      const rent = mine.find((t) => t.category === "Rent")!;
+      expect(String(rent.recurringId)).not.toBe(String(recurringId));
+      expect(String(rent.splitGroupId)).not.toBe(String(splitGroupId));
+      // a group nobody else uses keeps its id
+      const fresh = mine.find((t) => t.category === "Fresh")!;
+      expect(fresh.recurringId).toBeTruthy();
+      // their row is untouched and still alone in its series
+      expect(await Transaction.countDocuments({ recurringId })).toBe(1);
+      expect(String((await Transaction.findById(theirs._id).lean())!.user)).toBe(b);
+
+      // running it again does not make a second series
+      const again = await restore({ passphrase: PASS, backup }, { idem: "grp-2" });
+      expect((await again.json()).data.counts.transactions.toCreate).toBe(0);
+    });
+
+    it("topping up an open-ended series stays inside one person's rows", async () => {
+      const { default: Transaction } = await import("@/models/Transaction");
+      const { default: Account } = await import("@/models/Account");
+      const { topUpRecurringSeries } = await import("@/lib/recurring-topup");
+      const { OPEN_ENDED_WINDOW } = await import("@/lib/recurrence");
+      const shared = new mongoose.Types.ObjectId();
+      const mk = async (user: string, category: string) => {
+        const acct = await Account.create({ user, name: category, type: "bank" });
+        await Transaction.create({
+          user, account: acct._id, type: "expense", amount: 10, category, date: new Date(), isRecurring: true,
+          recurringId: shared, recurrenceFrequency: "monthly", recurrenceInterval: 1, recurrenceIsOpenEnded: true,
+          installmentIndex: 1, installmentStatus: "upcoming",
+        });
+        return acct._id.toString();
+      };
+      const acctA = await mk(a, "A-series");
+      const acctB = await mk(b, "B-series");
+      await topUpRecurringSeries();
+      const rowsA = await Transaction.find({ user: a, recurringId: shared }).lean();
+      const rowsB = await Transaction.find({ user: b, recurringId: shared }).lean();
+      expect(rowsA).toHaveLength(OPEN_ENDED_WINDOW);
+      expect(rowsB).toHaveLength(OPEN_ENDED_WINDOW);
+      expect(rowsA.every((t) => String(t.account) === acctA && t.category === "A-series")).toBe(true);
+      expect(rowsB.every((t) => String(t.account) === acctB && t.category === "B-series")).toBe(true);
+    });
+  });
+
+  it("a dry run does not use up the real restore quota", async () => {
+    await seed(a);
+    const { data } = await (await exportBackup()).json();
+    await wipe(a);
+    for (let i = 0; i < 13; i += 1) {
+      expect((await restore({ passphrase: PASS, backup: data.backup, dryRun: true }, { idem: null })).status).toBe(200);
+    }
+    expect((await restore({ passphrase: PASS, backup: data.backup }, { idem: "after-dry-runs" })).status).toBe(200);
+  });
+
+  it("reads the body as a stream and stops past the cap, even with no Content-Length", async () => {
+    const { POST } = await import("@/app/api/integrations/backup/restore/route");
+    const { MAX_BACKUP_BYTES } = await import("@/lib/backup-crypto");
+    const big = "x".repeat(Math.ceil((MAX_BACKUP_BYTES * 4) / 3) + 8192);
+    const res = await POST(
+      new NextRequest("http://localhost/api/integrations/backup/restore", {
+        method: "POST",
+        headers: { authorization: `Bearer ${KEY_A}`, "content-type": "application/json", "idempotency-key": "big" },
+        body: big,
+      }),
+      {}
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.reason).toBe("too_large");
+  });
+
+  it("checks the quota before reading the body", async () => {
+    const { checkSecurityRateLimit } = await import("@/lib/security-rate-limit");
+    for (let i = 0; i < 40; i += 1) await checkSecurityRateLimit({ key: `backup:request:${a}`, limit: 40, windowMs: 600000 });
+    const { POST } = await import("@/app/api/integrations/backup/restore/route");
+    const res = await POST(
+      new NextRequest("http://localhost/api/integrations/backup/restore", {
+        method: "POST",
+        headers: { authorization: `Bearer ${KEY_A}`, "content-type": "application/json" },
+        body: "this is not even json",
+      }),
+      {}
+    );
+    expect(res.status).toBe(429);
+  });
+
   it("limits how often a user can try", async () => {
     let last = 0;
     for (let i = 0; i < 7; i += 1) last = (await exportBackup()).status;
@@ -450,9 +657,48 @@ describe("backup crypto", () => {
   });
 
   it("stops a compression bomb that opens with the right passphrase", async () => {
-    const { encryptBackup, decryptBackup, MAX_PLAIN_BYTES } = await import("@/lib/backup-crypto");
-    // 60 MB of one character compresses to a few tiny bytes and is over the plain limit.
-    const bomb = { pad: "a".repeat(MAX_PLAIN_BYTES + 1024) };
-    await expect(encryptBackup(bomb, PASS)).rejects.toMatchObject({ reason: "too_large" });
+    const { sealPacked, decryptBackup, MAX_PLAIN_BYTES } = await import("@/lib/backup-crypto");
+    const { gzipSync } = await import("zlib");
+    // 49 MiB of zeros is a few dozen KiB packed: it passes the tag check and must stop at the unpack limit.
+    const bomb = gzipSync(Buffer.alloc(MAX_PLAIN_BYTES + 1024 * 1024));
+    expect(bomb.length).toBeLessThan(1024 * 1024);
+    const env = await sealPacked(bomb, PASS);
+    await expect(decryptBackup(env, PASS)).rejects.toMatchObject({ reason: "unreadable" });
+  });
+
+  it("refuses to build a file whose plain text is over the limit", async () => {
+    const { encryptBackup, MAX_PLAIN_BYTES } = await import("@/lib/backup-crypto");
+    await expect(encryptBackup({ pad: "a".repeat(MAX_PLAIN_BYTES + 1024) }, PASS)).rejects.toMatchObject({ reason: "too_large" });
+  });
+
+  it("turns away work past the queue instead of piling up memory, then recovers", async () => {
+    const { encryptBackup, decryptBackup } = await import("@/lib/backup-crypto");
+    const env = await encryptBackup({ ok: true }, PASS);
+    const results = await Promise.allSettled(Array.from({ length: 30 }, () => decryptBackup(env, PASS)));
+    const busy = results.filter((r) => r.status === "rejected" && (r.reason as { reason?: string }).reason === "busy");
+    expect(results.some((r) => r.status === "fulfilled")).toBe(true);
+    expect(busy.length).toBeGreaterThan(0);
+    expect(await decryptBackup(env, PASS)).toEqual({ ok: true });
+  });
+});
+
+describe("security rate limit", () => {
+  it("lets exactly `limit` of many concurrent callers through", async () => {
+    const { checkSecurityRateLimit } = await import("@/lib/security-rate-limit");
+    const results = await Promise.all(
+      Array.from({ length: 25 }, () => checkSecurityRateLimit({ key: "race", limit: 5, windowMs: 60000 }))
+    );
+    expect(results.filter((r) => r.allowed)).toHaveLength(5);
+    const denied = results.find((r) => !r.allowed) as { retryAfterSeconds: number };
+    expect(denied.retryAfterSeconds).toBeGreaterThan(0);
+  });
+
+  it("starts a new window once the old one has expired", async () => {
+    const { checkSecurityRateLimit } = await import("@/lib/security-rate-limit");
+    const { default: SecurityRateLimit } = await import("@/models/SecurityRateLimit");
+    await checkSecurityRateLimit({ key: "win", limit: 1, windowMs: 60000 });
+    expect((await checkSecurityRateLimit({ key: "win", limit: 1, windowMs: 60000 })).allowed).toBe(false);
+    await SecurityRateLimit.updateOne({ key: "win" }, { $set: { expiresAt: new Date(Date.now() - 1000) } });
+    expect((await checkSecurityRateLimit({ key: "win", limit: 1, windowMs: 60000 })).allowed).toBe(true);
   });
 });

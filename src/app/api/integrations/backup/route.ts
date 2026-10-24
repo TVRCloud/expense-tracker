@@ -12,22 +12,22 @@ const bodySchema = z.object({ passphrase: passphraseSchema });
 // reads and writes nothing, so it takes no Idempotency-Key. The passphrase is
 // used for this call only: it is not stored and not logged.
 export const POST = withIntegrationRoute("backup", async ({ req, user, requestId }) => {
-  const read = await readBackupBody(req, requestId);
-  if (!read.ok) return read.res;
-  const parsed = bodySchema.safeParse(read.body);
-  if (!parsed.success) {
-    return integrationError("VALIDATION_ERROR", "A passphrase of 12 to 256 characters is required", requestId);
-  }
-  const limited = await backupRateLimited(user.id, "export", requestId);
-  if (limited) return limited;
-
   try {
+    const early = await backupRateLimited(user.id, "request", requestId);
+    if (early) return early;
+    const read = await readBackupBody(req, requestId);
+    if (!read.ok) return read.res;
+    const parsed = bodySchema.safeParse(read.body);
+    if (!parsed.success) {
+      return integrationError("VALIDATION_ERROR", "A passphrase of 12 to 256 characters is required", requestId);
+    }
+    const limited = await backupRateLimited(user.id, "export", requestId);
+    if (limited) return limited;
+
     const { payload, counts, omitted } = await buildBackup(user.id);
-    const backup = await encryptBackup(payload, parsed.data.passphrase, payload.createdAt);
+    const backup = await encryptBackup(payload, parsed.data.passphrase, { createdAt: payload.createdAt });
     return integrationOk({ backup, createdAt: payload.createdAt, counts, omitted }, requestId);
   } catch (err) {
-    const known = backupFailure(err, requestId);
-    if (known) return known;
-    throw err;
+    return backupFailure(err, requestId, "backup");
   }
 });

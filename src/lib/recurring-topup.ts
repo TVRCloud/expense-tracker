@@ -7,7 +7,7 @@ import { redis } from "@/lib/redis";
 import logger from "@/lib/logger";
 
 interface SeriesNeedingTopUp {
-  _id: Types.ObjectId;
+  _id: { user: Types.ObjectId; recurringId: Types.ObjectId };
   remaining: number;
 }
 
@@ -29,7 +29,7 @@ export async function topUpRecurringSeries(): Promise<void> {
       },
       {
         $group: {
-          _id: "$recurringId",
+          _id: { user: "$user", recurringId: "$recurringId" },
           remaining: {
             $sum: { $cond: [{ $in: ["$installmentStatus", ["upcoming", "overdue"]] }, 1, 0] },
           },
@@ -45,7 +45,8 @@ export async function topUpRecurringSeries(): Promise<void> {
       if (need <= 0) continue;
 
       const last = await Transaction.findOne({
-        recurringId: series._id,
+        user: series._id.user,
+        recurringId: series._id.recurringId,
         isDeleted: { $ne: true },
       })
         .sort({ installmentIndex: -1 })
@@ -99,7 +100,7 @@ export async function topUpRecurringSeries(): Promise<void> {
       }
 
       logger.info(
-        { recurringId: series._id.toString(), added: newDocs.length },
+        { recurringId: series._id.recurringId.toString(), added: newDocs.length },
         "Topped up open-ended recurring series"
       );
     }

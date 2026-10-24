@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { Types, type Model } from "mongoose";
 import { z } from "zod";
 import connectDB from "@/lib/mongodb";
@@ -12,7 +13,7 @@ import SinkingFund from "@/models/SinkingFund";
 import SpendLimit from "@/models/SpendLimit";
 import SubscriptionDecision from "@/models/SubscriptionDecision";
 import Transaction from "@/models/Transaction";
-import { BackupError } from "@/lib/backup-crypto";
+import { BackupError, MAX_PLAIN_BYTES } from "@/lib/backup-crypto";
 
 // What goes into a backup, how it is checked on the way back in, and the
 // restore itself. The file is untrusted input: every field is whitelisted and
@@ -90,6 +91,7 @@ const accountSchema = z.object({
     })
   ),
   smsLastFour: nul(z.array(z.string().regex(/^\d{4}$/)).max(20)),
+  deletedAt: nul(when),
   ...stamps,
 });
 
@@ -303,22 +305,32 @@ const wire = (doc: Record<string, unknown>) => {
   return { id: String(_id), ...(JSON.parse(JSON.stringify(rest)) as Record<string, unknown>) };
 };
 
+// One shared byte budget for the whole export: rows are read in batches and
+// counted as they are serialised, so a huge account stops early instead of
+// being loaded first.
+type Budget = { bytes: number };
+
 async function readAll<S extends z.ZodType>(
   model: AnyModel,
   filter: Record<string, unknown>,
   schema: S,
   cap: number,
   label: string,
-  omitted: Record<string, number>
+  omitted: Record<string, number>,
+  budget: Budget
 ): Promise<z.infer<S>[]> {
-  const total = await model.countDocuments(filter);
-  if (total > cap) throw new BackupError("too_large", `Too many ${label} for one backup (limit ${cap})`);
-  const docs = await model.find(filter).sort({ _id: 1 }).limit(cap).lean<Record<string, unknown>[]>();
+  const tooBig = () => new BackupError("too_large", `Too much data for one backup (${label})`);
+  if ((await model.countDocuments(filter)) > cap) throw new BackupError("too_large", `Too many ${label} for one backup (limit ${cap})`);
   const out: z.infer<S>[] = [];
-  for (const doc of docs) {
-    const parsed = schema.safeParse(wire(doc));
-    if (parsed.success) out.push(parsed.data);
-    else omitted[label] = (omitted[label] ?? 0) + 1;
+  for await (const doc of model.find(filter).sort({ _id: 1 }).lean<Record<string, unknown>[]>().cursor({ batchSize: 500 })) {
+    const parsed = schema.safeParse(wire(doc as Record<string, unknown>));
+    if (!parsed.success) {
+      omitted[label] = (omitted[label] ?? 0) + 1;
+      continue;
+    }
+    budget.bytes += JSON.stringify(parsed.data).length;
+    if (budget.bytes > MAX_PLAIN_BYTES || out.length >= cap) throw tooBig();
+    out.push(parsed.data);
   }
   return out;
 }
@@ -333,31 +345,36 @@ export async function buildBackup(userId: string): Promise<BackupBuild> {
   await connectDB();
   const user = new Types.ObjectId(userId);
   const omitted: Record<string, number> = {};
+  const budget: Budget = { bytes: 0 };
   const live = { user, isDeleted: { $ne: true } };
   const m = <T,>(model: T) => model as unknown as AnyModel;
 
-  const accounts = await readAll(m(Account), { user, deletedAt: null }, accountSchema, CAPS.accounts, "accounts", omitted);
-  const loans = await readAll(m(Loan), live, loanSchema, CAPS.loans, "loans", omitted);
-  const goals = await readAll(m(Goal), live, goalSchema, CAPS.goals, "goals", omitted);
-  const budgets = await readAll(m(Budget), live, budgetSchema, CAPS.budgets, "budgets", omitted);
-  const rules = await readAll(m(Rule), { user }, ruleSchema, CAPS.rules, "rules", omitted);
-  const sinkingFunds = await readAll(m(SinkingFund), live, sinkingFundSchema, CAPS.sinkingFunds, "sinkingFunds", omitted);
-  const manualAssets = await readAll(m(ManualAsset), { user }, manualAssetSchema, CAPS.manualAssets, "manualAssets", omitted);
+  const accounts = await readAll(m(Account), { user }, accountSchema, CAPS.accounts, "accounts", omitted, budget);
+  const loans = await readAll(m(Loan), live, loanSchema, CAPS.loans, "loans", omitted, budget);
+  const goals = await readAll(m(Goal), live, goalSchema, CAPS.goals, "goals", omitted, budget);
+  const budgets = await readAll(m(Budget), live, budgetSchema, CAPS.budgets, "budgets", omitted, budget);
+  const rules = await readAll(m(Rule), { user }, ruleSchema, CAPS.rules, "rules", omitted, budget);
+  const sinkingFunds = await readAll(m(SinkingFund), live, sinkingFundSchema, CAPS.sinkingFunds, "sinkingFunds", omitted, budget);
+  const manualAssets = await readAll(m(ManualAsset), { user }, manualAssetSchema, CAPS.manualAssets, "manualAssets", omitted, budget);
   const subscriptionDecisions = await readAll(
     m(SubscriptionDecision),
     { user },
     decisionSchema,
     CAPS.subscriptionDecisions,
     "subscriptionDecisions",
-    omitted
+    omitted,
+    budget
   );
-  const transactions = await readAll(m(Transaction), live, transactionSchema, CAPS.transactions, "transactions", omitted);
-  const repayments = await readAll(m(Repayment), live, repaymentSchema, CAPS.repayments, "repayments", omitted);
+  const transactions = await readAll(m(Transaction), live, transactionSchema, CAPS.transactions, "transactions", omitted, budget);
+  const repayments = await readAll(m(Repayment), live, repaymentSchema, CAPS.repayments, "repayments", omitted, budget);
   const limitDoc = await SpendLimit.findOne({ user }).lean<Record<string, unknown> | null>();
   const parsedLimit = limitDoc ? spendLimitSchema.safeParse(wire(limitDoc)) : null;
   const spendLimit = parsedLimit?.success ? parsedLimit.data : undefined;
   if (limitDoc && !spendLimit) omitted.spendLimit = 1;
 
+  // Deleted accounts go in too (still marked deleted): the balances of live
+  // accounts include transfers to and from them, and their transactions stay
+  // attached to something.
   // Keep the file self-consistent: a row that points at something that is not
   // in the file loses the pointer (or is dropped if it cannot stand alone).
   const drop = (name: string) => (omitted[name] = (omitted[name] ?? 0) + 1);
@@ -482,37 +499,90 @@ function checkConsistency(d: BackupData) {
   }
 }
 
-async function ownersOf(model: AnyModel, ids: string[]): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
+type Held = { owner: string; trashed: boolean };
+
+async function ownersOf(model: AnyModel, ids: string[]): Promise<Map<string, Held>> {
+  const out = new Map<string, Held>();
   for (let i = 0; i < ids.length; i += CHUNK) {
     const slice = ids.slice(i, i + CHUNK).map((id) => new Types.ObjectId(id));
-    const rows = await model.find({ _id: { $in: slice } }, { user: 1 }).lean<{ _id: Types.ObjectId; user?: Types.ObjectId }[]>();
-    for (const r of rows) out.set(String(r._id), r.user ? String(r.user) : "");
+    const rows = await model
+      .find({ _id: { $in: slice } }, { user: 1, isDeleted: 1, deletedAt: 1 })
+      .lean<{ _id: Types.ObjectId; user?: Types.ObjectId; isDeleted?: boolean; deletedAt?: Date | null }[]>();
+    for (const r of rows) out.set(String(r._id), { owner: r.user ? String(r.user) : "", trashed: r.isDeleted === true || Boolean(r.deletedAt) });
   }
   return out;
 }
 
-type Planned = { final: Map<string, string>; create: Set<string>; existing: Set<string> };
+// The id a row gets when the file's own id is held by someone else. The same
+// (person, kind, original id) always gives the same id, so running a restore
+// again finds the rows it made and skips them instead of copying them.
+const derivedId = (userId: string, kind: string, id: string) =>
+  new Types.ObjectId(createHash("sha256").update(`${userId}:${kind}:${id}`).digest("hex").slice(0, 24)).toHexString();
+
+type Planned = { final: Map<string, string>; create: Set<string>; existing: Set<string>; trashed: number };
 
 // For each row: mine already -> keep, skip; free -> keep id, create; held by
-// someone else -> a fresh id, create. Nothing is ever overwritten.
-async function plan(model: AnyModel, rows: { id: string }[], userId: string): Promise<Planned> {
+// someone else -> a derived id (mine already -> skip, else create). Nothing is
+// ever overwritten.
+async function plan(model: AnyModel, kind: string, rows: { id: string }[], userId: string): Promise<Planned> {
   const ids = rows.map((r) => r.id.toLowerCase());
   const owners = await ownersOf(model, ids);
   const final = new Map<string, string>();
   const create = new Set<string>();
   const existing = new Set<string>();
+  let trashed = 0;
+  const moved: string[] = [];
   for (const id of ids) {
-    const owner = owners.get(id);
-    if (owner === userId) {
+    const held = owners.get(id);
+    if (held?.owner === userId) {
       final.set(id, id);
       existing.add(id);
+      if (held.trashed) trashed += 1;
+    } else if (held) {
+      moved.push(id);
     } else {
-      final.set(id, owner === undefined ? id : new Types.ObjectId().toHexString());
+      final.set(id, id);
       create.add(id);
     }
   }
-  return { final, create, existing };
+  const derived = new Map(moved.map((id) => [id, derivedId(userId, kind, id)]));
+  const derivedHeld = await ownersOf(model, [...derived.values()]);
+  for (const [id, d] of derived) {
+    const held = derivedHeld.get(d);
+    final.set(id, d);
+    if (held?.owner === userId) {
+      existing.add(id);
+      if (held.trashed) trashed += 1;
+    } else if (held) {
+      throw new BackupError("invalid", "Could not place a row from the backup");
+    } else {
+      create.add(id);
+    }
+  }
+  return { final, create, existing, trashed };
+}
+
+// A recurring series or split group is only an id shared by rows. If another
+// person's rows already carry the file's id, this person's rows get a derived
+// one instead, so they never join a series that is not theirs.
+async function groupIds(userId: string, txs: { recurringId?: string; splitGroupId?: string }[]) {
+  const wanted = new Set<string>();
+  for (const t of txs) {
+    if (t.recurringId) wanted.add(t.recurringId.toLowerCase());
+    if (t.splitGroupId) wanted.add(t.splitGroupId.toLowerCase());
+  }
+  const foreign = new Set<string>();
+  const all = [...wanted];
+  for (let i = 0; i < all.length; i += CHUNK) {
+    const slice = all.slice(i, i + CHUNK).map((id) => new Types.ObjectId(id));
+    for (const field of ["recurringId", "splitGroupId"] as const) {
+      const rows = await Transaction.find({ [field]: { $in: slice }, user: { $ne: new Types.ObjectId(userId) } }, { [field]: 1 }).lean<
+        Record<string, Types.ObjectId>[]
+      >();
+      for (const r of rows) foreign.add(String(r[field]));
+    }
+  }
+  return (id?: string) => (id ? (foreign.has(id.toLowerCase()) ? derivedId(userId, "group", id.toLowerCase()) : id.toLowerCase()) : undefined);
 }
 
 async function insertChunks(model: AnyModel, docs: Record<string, unknown>[]) {
@@ -531,13 +601,15 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
   const user = new Types.ObjectId(userId);
   const m = <T,>(model: T) => model as unknown as AnyModel;
 
-  const accounts = await plan(m(Account), d.accounts, userId);
-  const loans = await plan(m(Loan), d.loans, userId);
-  const goals = await plan(m(Goal), d.goals, userId);
-  const sinking = await plan(m(SinkingFund), d.sinkingFunds, userId);
-  const assets = await plan(m(ManualAsset), d.manualAssets, userId);
-  const txs = await plan(m(Transaction), d.transactions, userId);
-  const repayments = await plan(m(Repayment), d.repayments, userId);
+  const accounts = await plan(m(Account), "account", d.accounts, userId);
+  const loans = await plan(m(Loan), "loan", d.loans, userId);
+  const goals = await plan(m(Goal), "goal", d.goals, userId);
+  const sinking = await plan(m(SinkingFund), "fund", d.sinkingFunds, userId);
+  const assets = await plan(m(ManualAsset), "asset", d.manualAssets, userId);
+  const txs = await plan(m(Transaction), "transaction", d.transactions, userId);
+  const repayments = await plan(m(Repayment), "repayment", d.repayments, userId);
+
+  const group = await groupIds(userId, d.transactions);
 
   // Budgets, rules and subscription choices also have a unique key per person.
   const budgetKey = (b: { category: string; year: number; month: number }) => `${b.category}|${b.year}|${b.month}`;
@@ -585,6 +657,11 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
     warnings.push(
       `${repaidOld} repayment${repaidOld === 1 ? "" : "s"} will be added to loans that already exist here. Those loans' remaining amounts are not changed.`
     );
+  }
+
+  const trashed = [accounts, loans, goals, sinking, assets, txs, repayments].reduce((n, p) => n + p.trashed, 0);
+  if (trashed > 0) {
+    warnings.push(`${trashed} row${trashed === 1 ? "" : "s"} in the backup already exist in your trash and ${trashed === 1 ? "was" : "were"} not restored.`);
   }
 
   const count = (inBackup: number, toCreate: number): RestoreCounts => ({ inBackup, toCreate, existing: inBackup - toCreate });
@@ -638,6 +715,8 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
         account: fin(accounts, t.account),
         transferTo: fin(accounts, t.transferTo),
         refundOf: fin(txs, t.refundOf),
+        recurringId: group(t.recurringId),
+        splitGroupId: group(t.splitGroupId),
       })
     )
   );
