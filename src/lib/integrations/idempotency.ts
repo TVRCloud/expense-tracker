@@ -82,8 +82,24 @@ export async function withIdempotency<T extends Record<string, unknown>>(params:
     return { kind: "conflict", reason: "in_progress" };
   }
 
+  let result: { status: number; body: T };
   try {
-    const result = await execute();
+    result = await execute();
+  } catch (error) {
+    // Don't let a transient failure permanently block retries under this key
+    // before the TTL would otherwise expire it.
+    try {
+      await IdempotencyRecord.deleteOne({ userId, endpoint, key, status: "pending" });
+    } catch (cleanupError) {
+      logger.error({ err: cleanupError }, "Failed to clean up pending idempotency record");
+    }
+    throw error;
+  }
+
+  // The work is done. If only recording it fails, the record stays pending (a
+  // retry is told to wait rather than doing the write again) and the caller
+  // still gets the result.
+  try {
     await IdempotencyRecord.findOneAndUpdate(
       { userId, endpoint, key },
       {
@@ -95,15 +111,8 @@ export async function withIdempotency<T extends Record<string, unknown>>(params:
         },
       }
     );
-    return { kind: "executed", status: result.status, body: result.body };
-  } catch (error) {
-    // Don't let a transient failure permanently block retries under this key
-    // before the TTL would otherwise expire it.
-    try {
-      await IdempotencyRecord.deleteOne({ userId, endpoint, key, status: "pending" });
-    } catch (cleanupError) {
-      logger.error({ err: cleanupError }, "Failed to clean up pending idempotency record");
-    }
-    throw error;
+  } catch (err) {
+    logger.error({ err, userId, endpoint }, "Failed to record the idempotency result after a successful write");
   }
+  return { kind: "executed", status: result.status, body: result.body };
 }

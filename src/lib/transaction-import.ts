@@ -67,7 +67,12 @@ export class TransactionImportError extends Error {
 const ERROR_LIMIT = 50;
 const SAMPLE_LIMIT = 20;
 export const EXISTING_LIMIT = 20_000;
-const LOCK_SECONDS = 120;
+// The commit route may run 60 s (its maxDuration). The lock and the pending
+// idempotency record must outlive a run that is still going, so each is at
+// least twice that: a retry never overlaps a live run, and a killed run frees
+// its key and lock within a few minutes.
+export const IMPORT_PENDING_TTL_SECONDS = 120;
+const LOCK_SECONDS = IMPORT_PENDING_TTL_SECONDS;
 const DAY_MS = 86_400_000;
 
 export function rowHash(dateKey: string, type: string, amount: number) {

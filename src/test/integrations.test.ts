@@ -7222,6 +7222,20 @@ describe("csv import helpers", () => {
     expect(apia.getTime()).toBe(localMidnight("Pacific/Apia", 2011, 12, 31).getTime());
   });
 
+  it("explains a short year under ymd, but not a four-digit year that is not a date", async () => {
+    const { rowToCandidate } = await import("@/lib/csv-import");
+    const opts = { mapping: {}, dateOrder: "ymd" as const, amountSign: "signed" as const, now: new Date("2026-12-01T00:00:00Z"), timeZone: "Asia/Kolkata" };
+    const msg = (cell: string) => {
+      const out = rowToCandidate([cell, "5"], 1, { date: 0, amount: 1 }, opts);
+      if (out.ok) throw new Error("should not read");
+      return out.error.message;
+    };
+    expect(msg("24-10-26")).toContain("year first needs four digits");
+    expect(msg("2026-13-01")).toBe('Cannot read the date "2026-13-01"');
+    expect(msg("2026-02-30")).toBe('Cannot read the date "2026-02-30"');
+    expect(msg("garbage")).toBe('Cannot read the date "garbage"');
+  });
+
   it("an import row on a day the zone skipped is a row error", async () => {
     const { rowToCandidate } = await import("@/lib/csv-import");
     const opts = { mapping: {}, dateOrder: "ymd" as const, amountSign: "signed" as const, now: new Date("2012-06-01T00:00:00Z"), timeZone: "Pacific/Apia" };
@@ -7728,6 +7742,34 @@ describe("integration export and import", () => {
     const ok = await commit({ csv: statement }, { "idempotency-key": "held" });
     expect(ok.status).toBe(201);
     expect(await ImportLock.countDocuments({})).toBe(0);
+  });
+
+  it("keeps the pending record and the result when only recording the result fails", async () => {
+    const { withIdempotency } = await import("@/lib/integrations/idempotency");
+    const { default: IdempotencyRecord } = await import("@/models/IdempotencyRecord");
+    let writes = 0;
+    const spy = vi.spyOn(IdempotencyRecord, "findOneAndUpdate").mockImplementation((() => {
+      throw new Error("db hiccup");
+    }) as never);
+    const run = () =>
+      withIdempotency({ userId, endpoint: "t2", key: "ck", body: { a: 1 }, execute: async () => { writes += 1; return { status: 201, body: { ok: true } }; } });
+    const first = await run();
+    spy.mockRestore();
+    expect(first).toEqual({ kind: "executed", status: 201, body: { ok: true } });
+    // The record is still there (pending), so a retry waits instead of writing again.
+    expect(await IdempotencyRecord.countDocuments({ userId, key: "ck", status: "pending" })).toBe(1);
+    const retry = await run();
+    expect(retry).toEqual({ kind: "conflict", reason: "in_progress" });
+    expect(writes).toBe(1);
+    // A failing execute still frees the key.
+    await expect(withIdempotency({ userId, endpoint: "t2", key: "bad", body: { a: 1 }, execute: async () => { throw new Error("boom"); } })).rejects.toThrow("boom");
+    expect(await IdempotencyRecord.countDocuments({ userId, key: "bad" })).toBe(0);
+  });
+
+  it("keeps the pending key and lock at least twice the commit route's run time", async () => {
+    const { maxDuration } = await import("@/app/api/integrations/import/commit/route");
+    const { IMPORT_PENDING_TTL_SECONDS } = await import("@/lib/transaction-import");
+    expect(IMPORT_PENDING_TTL_SECONDS).toBeGreaterThanOrEqual(2 * maxDuration);
   });
 
   it("the pending idempotency record expires in minutes, the finished one keeps the full time", async () => {

@@ -2,9 +2,11 @@ import { withIntegrationRoute } from "@/lib/integrations/handler";
 import { integrationError, integrationOk } from "@/lib/integrations/response";
 import { withIdempotency } from "@/lib/integrations/idempotency";
 import { conflictMessage, idempotencyKeyOf, readJsonBodyLimited } from "@/lib/integrations/write-helpers";
-import { commitImport, importCommitSchema, TransactionImportError } from "@/lib/transaction-import";
+import { commitImport, IMPORT_PENDING_TTL_SECONDS, importCommitSchema, TransactionImportError } from "@/lib/transaction-import";
 
-// A row-by-row write of up to 500 rows.
+// A row-by-row write of up to 500 rows. IMPORT_PENDING_TTL_SECONDS (the pending
+// key and the lock) must stay at least twice this; a test checks it. Next needs
+// the literal here.
 export const maxDuration = 60;
 
 // The 1 MB csv plus its JSON wrapper and the other fields.
@@ -35,7 +37,7 @@ export const POST = withIntegrationRoute("import", async ({ req, user, requestId
       endpoint: "integrations:import:commit:POST",
       key,
       // A killed run leaves its pending record only this long, not a day.
-      pendingTtlSeconds: 120,
+      pendingTtlSeconds: IMPORT_PENDING_TTL_SECONDS,
       // The request fingerprint only reads top-level keys, so the nested mapping
       // goes in as one string.
       body: { ...parsed.data, mapping: JSON.stringify(parsed.data.mapping ?? null) },

@@ -292,7 +292,8 @@ export function rowToCandidate(
   const parsedDate = parseDateCell(dateCell, opts.dateOrder);
   if (!parsedDate) {
     if (!dateCell) return fail("date", "Date is empty");
-    const hint = opts.dateOrder === "ymd" ? " (year first needs four digits)" : "";
+    // Only a short-year cell is explained this way; a four-digit year that is not a date is just unreadable.
+    const hint = opts.dateOrder === "ymd" && /^\d{1,2}[-/.]/.test(dateCell) ? " (year first needs four digits)" : "";
     return fail("date", `Cannot read the date "${dateCell.slice(0, 40)}"${hint}`);
   }
   const year = parsedDate.y;

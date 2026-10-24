@@ -59,7 +59,9 @@ export function localMidnight(timeZone: string, year: number, month: number, day
   const guess = wall - offsetAt(first, timeZone);
   // Fast path: the guess is on the day and the second before it is not.
   if (wallDayAt(guess) >= wall && wallDayAt(guess - 1000) < wall) return new Date(guess);
-  // The wall-clock date never goes backwards, so "date >= wanted" flips once.
+  // Assumes the wall-clock date does not go backwards inside this 48 h window
+  // (a clock change repeats an hour but never rewinds past a date, in every
+  // zone checked), so "date >= wanted" flips once and bisecting finds it.
   let lo = guess - 86_400_000;
   let hi = guess + 86_400_000;
   while (hi - lo > 1000) {
