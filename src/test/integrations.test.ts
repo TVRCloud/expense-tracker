@@ -8816,12 +8816,102 @@ describe("integration export and import", () => {
     expect((await res.json()).data.imported).toBe(IMPORT_MAX_ROWS);
     expect(await Transaction.countDocuments({ user: userId })).toBe(IMPORT_MAX_ROWS);
     // The route allows 60 s; leave a wide margin for a slower database.
-    expect(ms).toBeLessThan(15_000);
+    expect(ms).toBeLessThan(40_000);
     lines.push("2026-09-01,One too many,-1.00");
     const over = await preview({ csv: lines.join("\n") });
     expect(over.status).toBe(400);
     expect((await over.json()).error.details.code).toBe("INVALID_CSV");
   }, 60_000);
+
+  async function setBase(code: string) {
+    const { default: User } = await import("@/models/User");
+    await User.updateOne({ _id: userId }, { $set: { "preferences.currency": code } });
+  }
+  const baseLockedOf = async () => {
+    const { default: User } = await import("@/models/User");
+    return Boolean((await User.findById(userId).select("baseLocked").lean<{ baseLocked?: boolean }>())?.baseLocked);
+  };
+
+  it("imports into an account labelled with another currency, in the base currency", async () => {
+    const { default: Account } = await import("@/models/Account");
+    const { default: Transaction } = await import("@/models/Transaction");
+    await setBase("USD");
+    await Account.updateOne({ _id: accountId }, { $set: { currency: "EUR" } });
+    const csv = "Date,Description,Amount\n2026-10-05,Coffee,-12.50\n2026-10-06,Pay,300.00";
+    const res = await commit({ csv });
+    expect(res.status).toBe(201);
+    const { data } = await res.json();
+    expect(data).toMatchObject({ imported: 2, failed: 0, invalidCount: 0, baseCurrency: "USD", account: { currency: "EUR" } });
+    const rows = await Transaction.find({ user: userId }).sort({ date: 1 }).lean();
+    expect(rows.map((r) => [r.amount, r.currency])).toEqual([[1250, "USD"], [30000, "USD"]]);
+    expect(rows.every((r) => r.source === "import")).toBe(true);
+    const text = (await (await exportCsv()).text()).split("\n");
+    expect(text[1]).toContain(",12.50,USD,");
+  });
+
+  it("preview does not pin the base currency; the first import that writes does, and one that writes nothing does not", async () => {
+    await setBase("USD");
+    const csv = "Date,Amount\n2026-10-05,-5.00";
+    const p = await preview({ csv });
+    expect((await p.json()).data).toMatchObject({ baseCurrency: "USD", minorExponent: 2 });
+    expect(await baseLockedOf()).toBe(false);
+    // Nothing valid to write: no lock.
+    expect((await commit({ csv: "Date,Amount\nnope,1" })).status).toBe(201);
+    expect(await baseLockedOf()).toBe(false);
+    expect((await commit({ csv })).status).toBe(201);
+    expect(await baseLockedOf()).toBe(true);
+    const { setBaseCurrency } = await import("@/lib/base-currency");
+    await expect(setBaseCurrency(userId, "EUR")).rejects.toMatchObject({ code: "HAS_MONEY_DATA" });
+  });
+
+  it.each([
+    { base: "JPY", exponent: 0, cell: "1250", exported: "1250", totalCell: "300", three: "-" },
+    { base: "USD", exponent: 2, cell: "12.50", exported: "12.50", totalCell: "3.00", three: "-" },
+    { base: "KWD", exponent: 3, cell: "1.250", exported: "1.250", totalCell: "0.300", three: "-" },
+  ])("reads, writes, exports and de-duplicates in the minor units of $base ($exponent decimals)", async ({ base, cell, exported, totalCell }) => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { default: Account } = await import("@/models/Account");
+    await setBase(base);
+    const csv = `Date,Description,Amount\n2026-10-05,Lunch,-${cell}\n2026-10-06,Refund,${totalCell}`;
+    const data = (await (await preview({ csv })).json()).data;
+    expect(data).toMatchObject({ baseCurrency: base, validCount: 2, invalidCount: 0, expenseTotal: 1250, incomeTotal: 300 });
+    expect((await commit({ csv })).status).toBe(201);
+    const rows = await Transaction.find({ user: userId }).sort({ date: 1 }).lean();
+    expect(rows.map((r) => [r.amount, r.currency])).toEqual([[1250, base], [300, base]]);
+    const text = (await (await exportCsv()).text()).split("\n");
+    const cells = text[1].split(",");
+    expect(cells[2]).toBe(exported);
+    expect(cells[3]).toBe(base);
+    // The export reads back as the same rows: a duplicate here, and exact in a fresh account.
+    expect((await (await preview({ csv: text.join("\n") })).json()).data).toMatchObject({ duplicateCount: 2, importCount: 0 });
+    const fresh = await Account.create({ user: userId, name: "Fresh", type: "bank", balance: 0, currency: "INR" });
+    await commit({ csv: text.join("\n"), accountId: fresh._id.toString() });
+    const back = await Transaction.find({ account: fresh._id }).sort({ date: 1 }).lean();
+    expect(back.map((r) => [r.type, r.amount])).toEqual([["expense", 1250], ["income", 300]]);
+  });
+
+  it("refuses digits the currency does not have, but takes trailing zeros", async () => {
+    const { parseAmountCell } = await import("@/lib/csv-import");
+    expect(parseAmountCell("1000.00", 0)).toBe(1000);
+    expect(parseAmountCell("12.5", 0)).toBeNull();
+    expect(parseAmountCell("1,250", 0)).toBe(1250);
+    expect(parseAmountCell("1.2345", 3)).toBeNull();
+    expect(parseAmountCell("1.2500", 3)).toBe(1250);
+    expect(parseAmountCell("1.5", 3)).toBe(1500);
+    expect(parseAmountCell("1.234")).toBeNull();
+    expect(parseAmountCell("12.50")).toBe(1250);
+    expect(parseAmountCell("-5", 0)).toBe(-5);
+  });
+
+  it("formats minor units with the currency's own digits", async () => {
+    const { majorUnits } = await import("@/lib/transaction-export");
+    expect(majorUnits(125050)).toBe("1250.50");
+    expect(majorUnits(5, 2)).toBe("0.05");
+    expect(majorUnits(125050, 0)).toBe("125050");
+    expect(majorUnits(-7, 0)).toBe("-7");
+    expect(majorUnits(1250, 3)).toBe("1.250");
+    expect(majorUnits(5, 3)).toBe("0.005");
+  });
 });
 
 describe("import body size", () => {

@@ -186,8 +186,13 @@ export function parseDateCell(raw: string, order: DateOrder): { y: number; m: nu
 // lone "12,50" could be a decimal comma, so it is refused, not guessed.
 const GROUPED = /^(\d{1,3}(,\d{3})+|\d{1,2}(,\d{2})+,\d{3})(\.\d{1,2})?$/;
 
-/** "1,234.50", "₹ 1234", "(500.00)", "250 Dr" to integer paise (negative when written so), or null. */
-export function parseAmountCell(raw: string): number | null {
+/**
+ * "1,234.50", "₹ 1234", "(500.00)", "250 Dr" to integer minor units of the base
+ * currency (negative when written so), or null. `exponent` is the number of
+ * decimals the currency has: 2 for INR and USD, 0 for JPY, 3 for KWD. Digits
+ * past it are accepted only as zeros ("1000.00" for yen), never rounded.
+ */
+export function parseAmountCell(raw: string, exponent = 2): number | null {
   if (raw.length > 64) return null;
   let s = raw.trim();
   if (!s) return null;
@@ -217,11 +222,13 @@ export function parseAmountCell(raw: string): number | null {
     if (!GROUPED.test(s)) return null;
     s = s.replace(/,/g, "");
   }
-  const m = /^(\d{1,15})(?:\.(\d{1,2}))?$/.exec(s);
+  const m = /^(\d{1,15})(?:\.(\d{1,6}))?$/.exec(s);
   if (!m) return null;
-  const paise = Number(m[1]) * 100 + Number((m[2] ?? "").padEnd(2, "0") || 0);
-  if (!Number.isSafeInteger(paise) || paise > MAX_AMOUNT_PAISE) return null;
-  return negative ? -paise : paise;
+  const fraction = m[2] ?? "";
+  if (!/^0*$/.test(fraction.slice(exponent))) return null;
+  const minor = Number(m[1]) * 10 ** exponent + Number(fraction.slice(0, exponent).padEnd(exponent, "0") || 0);
+  if (!Number.isSafeInteger(minor) || minor > MAX_AMOUNT_PAISE) return null;
+  return negative ? -minor : minor;
 }
 
 /** A numeric date whose day and month could swap: 03/04/2026 reads two ways. */
@@ -247,6 +254,7 @@ export type ImportOptions = {
   amountSign: AmountSign;
   now: Date;
   timeZone: string; // the user's zone: a row lands on its own calendar day there
+  exponent?: number; // decimals of the base currency (default 2)
 };
 
 export type ImportCandidate = {
@@ -305,8 +313,8 @@ export function rowToCandidate(
   let type: "income" | "expense" | null = null;
 
   if (columns.debit !== undefined || columns.credit !== undefined) {
-    const debit = cell("debit") ? parseAmountCell(cell("debit")) : null;
-    const credit = cell("credit") ? parseAmountCell(cell("credit")) : null;
+    const debit = cell("debit") ? parseAmountCell(cell("debit"), opts.exponent) : null;
+    const credit = cell("credit") ? parseAmountCell(cell("credit"), opts.exponent) : null;
     if ((cell("debit") && debit === null) || (cell("credit") && credit === null)) return fail("amount", "Cannot read the amount");
     const d = Math.abs(debit ?? 0);
     const c = Math.abs(credit ?? 0);
@@ -317,7 +325,7 @@ export function rowToCandidate(
   } else {
     if (columns.amount === undefined) return fail("amount", "No amount column is mapped");
     const raw = cell("amount");
-    signed = parseAmountCell(raw);
+    signed = parseAmountCell(raw, opts.exponent);
     if (signed === null) return fail("amount", raw ? `Cannot read the amount "${raw.slice(0, 40)}"` : "Amount is empty");
     if (signed === 0) return fail("amount", "Amount is zero");
     const typeCell = cell("type");

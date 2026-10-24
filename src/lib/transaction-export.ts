@@ -4,6 +4,8 @@ import Account from "@/models/Account";
 import Transaction from "@/models/Transaction";
 import User from "@/models/User";
 import { toCsv } from "@/lib/csv";
+import { getBaseCurrency } from "@/lib/base-currency";
+import { minorExponent } from "@/lib/currency";
 import { DEFAULT_TIME_ZONE, isValidTimeZone, localDateKey, localMidnight } from "@/lib/spend-limit-time";
 
 // CSV of a person's transactions for the integrations export. Amounts are in
@@ -27,10 +29,13 @@ export const EXPORT_COLUMNS = [
   "source",
 ];
 
-export function majorUnits(paise: number) {
-  const sign = paise < 0 ? "-" : "";
-  const abs = Math.abs(paise);
-  return `${sign}${Math.trunc(abs / 100)}.${String(abs % 100).padStart(2, "0")}`;
+/** Minor units to a decimal string with the currency's own digits: 125050 is "1250.50" (2), "125050" (0, yen), "125.050" (3, dinar). */
+export function majorUnits(minor: number, exponent = 2) {
+  const sign = minor < 0 ? "-" : "";
+  const abs = Math.abs(minor);
+  if (exponent === 0) return `${sign}${abs}`;
+  const scale = 10 ** exponent;
+  return `${sign}${Math.trunc(abs / scale)}.${String(abs % scale).padStart(exponent, "0")}`;
 }
 
 function dayStart(value: string, timeZone: string, plusDays = 0): Date | null {
@@ -56,6 +61,10 @@ export async function exportTransactionsCsv(params: ExportParams) {
   const user = await User.findById(params.userId).select("preferences.timezone").lean<{ preferences?: { timezone?: string } }>();
   const tzPref = user?.preferences?.timezone;
   const timeZone = tzPref && isValidTimeZone(tzPref) ? tzPref : DEFAULT_TIME_ZONE;
+  // Every stored amount is in minor units of the base currency, whatever an
+  // account is labelled, so that is the unit and the code the file carries.
+  const base = await getBaseCurrency(params.userId);
+  const exponent = minorExponent(base);
 
   const filter: Record<string, unknown> = {
     user: params.userId,
@@ -87,13 +96,12 @@ export async function exportTransactionsCsv(params: ExportParams) {
     Transaction.find(filter)
       .sort({ date: 1, _id: 1 })
       .limit(EXPORT_MAX_ROWS + 1)
-      .select("date type amount currency category subcategory description account note tags source")
+      .select("date type amount category subcategory description account note tags source")
       .lean<
         {
           date: Date;
           type: string;
           amount: number;
-          currency?: string;
           category: string;
           subcategory?: string;
           description?: string;
@@ -110,8 +118,8 @@ export async function exportTransactionsCsv(params: ExportParams) {
   const rows = (truncated ? found.slice(0, EXPORT_MAX_ROWS) : found).map((t) => ({
     date: localDateKey(t.date, timeZone),
     type: t.type,
-    amount: majorUnits(t.amount),
-    currency: t.currency ?? "INR",
+    amount: majorUnits(t.amount, exponent),
+    currency: base,
     category: t.category,
     subcategory: t.subcategory ?? "",
     description: t.description ?? "",
