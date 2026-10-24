@@ -53,7 +53,7 @@ Every message is stored in `captured_messages`. The raw text is encrypted with `
 
 `correctTransaction` (`src/lib/reconcile/correct.ts`):
 - **Can change:** amount, type (debit/credit), account, date, category, description.
-- **Refused with 409:** transfers, split, recurring, and statement- or loan-linked rows.
+- **Refused with 409:** transfers, split, recurring, and statement- or loan-linked rows. An ATM withdrawal capture with a cash account becomes an unreviewed transfer, so in the review inbox it can be confirmed but not corrected or voided; edit or delete it with `/api/integrations/transfers/[id]`. A later message for the same withdrawal never rewrites it.
 - **Balances:** the old balance effect is reversed and the new one applied, each with an atomic `$inc` per account. Every write is also added to the ledger chain.
 - **Record:** each fix writes a `transaction_corrections` row with before and after snapshots, changed fields, reason, note, `via` (`web | mobile | system`), balance effects, and the ledger sequence. These rows are never updated or deleted.
 - **Voiding:** the reasons `duplicate` and `not_a_transaction` void the row (balance reversed, soft-deleted, `reviewStatus: voided`). The original values are kept in the correction.

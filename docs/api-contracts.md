@@ -86,6 +86,15 @@ A transfer is one `type: "transfer"` row (`account` is the source, `transferTo` 
 
 `POST /api/integrations/transactions` answers with `transferToId` (null unless the row is a transfer).
 
+## Cash
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/integrations/cash` | `{account, lowBalanceAt, lowBalanceIsDefault, isLow, last30Days: {withdrawn, withdrawals, spent}, recentWithdrawals: [{id, amount, date, fromAccountId, description}]}`. `account` is `{id, name, balance, currency, lowBalanceAt}` or null when the user has no live cash account (the other fields are then zero or default). `withdrawn` sums transfers into cash, `spent` sums expenses on it; amounts are paise; `lowBalanceAt` is the effective line (set value or 50000), `account.lowBalanceAt` is null when unset |
+| POST | `/api/integrations/cash` | Body `{name?, openingBalance?, lowBalanceAt?}` (all optional; `lowBalanceAt` is paise >= 0 or null for the default; needs `Idempotency-Key`). Creates the cash account if none (201, named "Cash" unless `name`), otherwise updates `name` and `lowBalanceAt` (200). Same shape as GET. 400 bad data |
+
+An ATM withdrawal message (`withdrawn ... at ATM`, `cash withdrawal`, `ATM WDL`) from a debit on a matched bank account becomes an unreviewed transfer (description "ATM withdrawal") into the user's cash account instead of an expense, once the message is read with enough confidence. With no live cash account it stays an ordinary expense. The accounts list also returns `lowBalanceAt` (cash accounts, when set).
+
 ## Spend limit
 
 | Method | Path | Description |

@@ -41,6 +41,8 @@ export const accountUpdateSchema = z.object({
   color: z.string().optional(),
   icon: z.string().optional(),
   isArchived: z.boolean().optional(),
+  // Cash accounts: balance (cents) under which the app shows "low cash". null clears it.
+  lowBalanceAt: z.number().int().min(0).nullable().optional(),
   creditMeta: creditMetaSchema.optional(),
   // Last 4 digits as they appear in bank SMS ("A/c XX1234"), for matching
   // captured messages to this account.
@@ -79,4 +81,12 @@ export async function archiveAccount(userId: string, accountId: string, actor: A
   if (!account) throw new AccountServiceError("ACCOUNT_NOT_FOUND", "Account not found");
 
   await appendLedgerBlock({ userId, scope: "account", entityId: accountId, action: "delete", before, after: account, actor });
+}
+
+/** The user's cash account: the oldest live one of type "cash", or null. */
+export async function findCashAccount(userId: string) {
+  await connectDB();
+  return Account.findOne({ user: userId, type: "cash", isArchived: { $ne: true } })
+    .sort({ createdAt: 1 })
+    .lean<{ _id: { toString(): string }; name: string; balance: number; currency: string; lowBalanceAt?: number | null } | null>();
 }

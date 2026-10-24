@@ -14,6 +14,8 @@ const AccountSchema = new Schema(
     color: { type: String },
     icon: { type: String },
     isArchived: { type: Boolean, default: false },
+    // Cash accounts only: below this balance (cents) the app shows "low cash".
+    lowBalanceAt: { type: Number, min: 0 },
     creditMeta: {
       creditLimit: { type: Number }, // cents
       billingCycleDay: { type: Number, min: 1, max: 31 },

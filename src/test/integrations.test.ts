@@ -4268,3 +4268,359 @@ describe("categorise rules", () => {
     });
   });
 });
+
+// ── cash account and ATM withdrawals ───────────────────────────────────────
+
+describe("ATM withdrawal detection", () => {
+  const RECEIVED = new Date("2026-09-26T06:30:00Z");
+  const parse = async (text: string) => {
+    const { parseCapture } = await import("@/lib/capture/parsers");
+    return parseCapture(text, RECEIVED);
+  };
+
+  const ATM_TEXTS = [
+    "Rs.5,000.00 withdrawn from A/c XX1234 at ATM ABC NAGAR on 26-09-26. Avl Bal Rs 45,000.00",
+    "Cash withdrawal of Rs 2000.00 from A/c XX1234 on 26-09-26. Avl Bal INR 10,000.00",
+    "INR 10,000.00 debited from A/c XX1234 on 26-Sep-26 for ATM WDL. Avl Bal INR 5,000.00",
+    "Dear Customer, Rs.1,500.00 withdrawn from your A/c XX1234 using NFS cash withdrawal on 26/09/26",
+    "Rs 3000 debited A/c XX1234 on 26Sep26 ATM-CASH WDL at SBI ATM. -SBI",
+  ];
+  for (const text of ATM_TEXTS) {
+    it(`flags: ${text.slice(0, 50)}…`, async () => {
+      const p = await parse(text);
+      expect(p.kind).toBe("money");
+      if (p.kind !== "money") return;
+      expect(p.type).toBe("expense");
+      expect(p.atm).toBe(true);
+    });
+  }
+
+  const NOT_ATM = [
+    "Rs.250.00 debited from A/c XX1234 on 26-09-26 to VPA swiggy@icici. UPI Ref 426912345678",
+    "Dear Customer, Rs.499.00 spent on ICICI Bank Card XX9012 on 26-Sep-26 at ATM FOODS. Avl Lmt: Rs 1,20,000.00",
+    "Rs.800.00 debited from A/c XX1234 on 26-09-26 to VPA atmcafe@icici. UPI Ref 426912345678",
+    "Rs.5,000.00 deposited in A/c XX1234 via ATM on 26-09-26. Avl Bal Rs 50,000.00",
+  ];
+  for (const text of NOT_ATM) {
+    it(`does not flag: ${text.slice(0, 50)}…`, async () => {
+      const p = await parse(text);
+      if (p.kind === "money") expect(p.atm).toBeUndefined();
+    });
+  }
+
+  it("a credit is never an ATM withdrawal even when it mentions cash withdrawal", async () => {
+    const p = await parse("Rs.500.00 credited to A/c XX1234 on 26-09-26 as reversal of failed cash withdrawal");
+    if (p.kind === "money") expect(p.atm).toBeUndefined();
+  });
+});
+
+describe("ATM captures become transfers to cash", () => {
+  const T0 = new Date("2026-09-26T06:30:00Z");
+  const minutes = (n: number) => new Date(T0.getTime() + n * 60_000);
+  const ATM_SMS = "Rs.5,000.00 withdrawn from A/c XX1234 at ATM ABC NAGAR on 26-09-26. Avl Bal Rs 45,000.00";
+  const ATM_NOTIFICATION = "₹5,000 withdrawn at ATM from A/c XX1234";
+
+  async function setup({ withCash = true }: { withCash?: boolean } = {}) {
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const user = await User.create({ name: "Atm", email: `atm${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    const bank = await Account.create({ user: user._id, name: "HDFC", type: "bank", balance: 100000, currency: "INR", smsLastFour: ["1234"] });
+    const cash = withCash ? await Account.create({ user: user._id, name: "Cash", type: "cash", balance: 2000, currency: "INR" }) : null;
+    const actor = { id: user._id.toString(), name: user.name, email: user.email, role: "user" };
+    return { user, bank, cash, actor };
+  }
+
+  async function ingest(actor: { id: string; name: string; email: string; role: string }, channel: "sms" | "notification" | "n8n", text: string, receivedAt: Date) {
+    const { ingestCapture } = await import("@/lib/capture/ingest");
+    return ingestCapture({ user: actor, channel, text, receivedAt, sender: channel === "sms" ? "VM-HDFCBK" : undefined });
+  }
+
+  async function balanceOf(id: unknown) {
+    const { default: Account } = await import("@/models/Account");
+    return (await Account.findById(id).lean<{ balance: number }>())!.balance;
+  }
+
+  async function liveTxns(userId: unknown) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    return Transaction.find({ user: userId, isDeleted: { $ne: true } }).lean<
+      { _id: unknown; type: string; amount: number; account: unknown; transferTo?: unknown; reviewStatus: string | null; description: string; category: string }[]
+    >();
+  }
+
+  it("an ATM SMS moves money from the bank to cash, once, and is not spending", async () => {
+    const { actor, bank, cash } = await setup();
+    const res = await ingest(actor, "sms", ATM_SMS, T0);
+    expect(res.httpStatus).toBe(201);
+    expect(res.body.status).toBe("created");
+
+    const [txn] = await liveTxns(actor.id);
+    expect(txn).toMatchObject({ type: "transfer", amount: 500000, description: "ATM withdrawal", category: "Transfer", reviewStatus: "unreviewed" });
+    expect(String(txn.account)).toBe(String(bank._id));
+    expect(String(txn.transferTo)).toBe(String(cash!._id));
+    expect(await balanceOf(bank._id)).toBe(100000 - 500000);
+    expect(await balanceOf(cash!._id)).toBe(2000 + 500000);
+
+    const { getRangeStats } = await import("@/lib/stats-service");
+    const [month] = await getRangeStats(actor.id, [{ year: 2026, month: 9 }]);
+    expect(month.stats.expense).toBe(0);
+
+    const { verifyLedgerChain } = await import("@/lib/ledger");
+    expect(((await verifyLedgerChain(actor.id)) as { valid: boolean }).valid).toBe(true);
+  });
+
+  it("the same message again (n8n, a day later) is a duplicate: one transfer, balances unchanged", async () => {
+    const { actor, bank, cash } = await setup();
+    await ingest(actor, "sms", ATM_SMS, T0);
+    const again = await ingest(actor, "n8n", `VM-HDFCBK: ${ATM_SMS}`, minutes(25 * 60));
+    expect(again.body.status).toBe("duplicate");
+    expect(await liveTxns(actor.id)).toHaveLength(1);
+    expect(await balanceOf(bank._id)).toBe(100000 - 500000);
+    expect(await balanceOf(cash!._id)).toBe(2000 + 500000);
+  });
+
+  it("a notification and then its SMS give one transfer", async () => {
+    const { actor, bank, cash } = await setup();
+    const held = await ingest(actor, "notification", ATM_NOTIFICATION, T0);
+    expect(held.body.status).toBe("pending");
+    const sms = await ingest(actor, "sms", ATM_SMS, minutes(2));
+    expect(sms.body.status).toBe("created");
+    const txns = await liveTxns(actor.id);
+    expect(txns).toHaveLength(1);
+    expect(txns[0].type).toBe("transfer");
+    expect(await balanceOf(bank._id)).toBe(100000 - 500000);
+    expect(await balanceOf(cash!._id)).toBe(2000 + 500000);
+  });
+
+  it("a transfer made from a promoted notification is left alone when the SMS arrives later", async () => {
+    const { actor, bank, cash } = await setup();
+    await ingest(actor, "notification", ATM_NOTIFICATION, T0);
+    const { promoteStalePendingSms } = await import("@/lib/capture/ingest");
+    const { promoted } = await promoteStalePendingSms({ now: new Date(Date.now() + 16 * 60_000) });
+    expect(promoted).toBe(1);
+    expect(await liveTxns(actor.id)).toHaveLength(1);
+    // The user already confirmed it: an SMS that "differs" (expense vs transfer) must not raise a conflict.
+    const { default: Transaction } = await import("@/models/Transaction");
+    await Transaction.updateMany({ user: actor.id }, { $set: { reviewStatus: "confirmed" } });
+
+    const sms = await ingest(actor, "sms", ATM_SMS, minutes(20));
+    expect(["updated", "duplicate"]).toContain(sms.body.status);
+    const txns = await liveTxns(actor.id);
+    expect(txns).toHaveLength(1);
+    expect(txns[0].type).toBe("transfer");
+    expect(await balanceOf(bank._id)).toBe(100000 - 500000);
+    expect(await balanceOf(cash!._id)).toBe(2000 + 500000);
+
+    // Not queued as a conflict either.
+    const { default: CapturedMessage } = await import("@/models/CapturedMessage");
+    expect(await CapturedMessage.countDocuments({ status: "pending" })).toBe(0);
+  });
+
+  it("without a cash account it stays an ordinary expense", async () => {
+    const { actor, bank } = await setup({ withCash: false });
+    const res = await ingest(actor, "sms", ATM_SMS, T0);
+    expect(res.body.status).toBe("created");
+    const [txn] = await liveTxns(actor.id);
+    expect(txn.type).toBe("expense");
+    expect(await balanceOf(bank._id)).toBe(100000 - 500000);
+  });
+
+  it("an archived cash account is not used", async () => {
+    const { actor, cash } = await setup();
+    const { default: Account } = await import("@/models/Account");
+    await Account.updateOne({ _id: cash!._id }, { $set: { isArchived: true } });
+    await ingest(actor, "sms", ATM_SMS, T0);
+    expect((await liveTxns(actor.id))[0].type).toBe("expense");
+    expect(await balanceOf(cash!._id)).toBe(2000);
+  });
+
+  it("another user's cash account is never touched", async () => {
+    const mine = await setup({ withCash: false });
+    const theirs = await setup();
+    await ingest(mine.actor, "sms", ATM_SMS, T0);
+    expect((await liveTxns(mine.actor.id))[0].type).toBe("expense");
+    expect(await balanceOf(theirs.cash!._id)).toBe(2000);
+  });
+
+  it("a card spend or UPI payment next to the word ATM is not turned into a transfer", async () => {
+    const { actor } = await setup();
+    await ingest(actor, "sms", "Rs.800.00 debited from A/c XX1234 on 26-09-26 to VPA atmcafe@icici. UPI Ref 426912345678", T0);
+    expect((await liveTxns(actor.id))[0].type).toBe("expense");
+  });
+
+  it("an ATM withdrawal stays a transfer to cash even when a rule matches it, and a refund credit still gets its suggestion", async () => {
+    const { actor, bank, cash } = await setup();
+    const { createRule } = await import("@/lib/rule-service");
+    // Matches both the ATM message and the Swiggy messages below.
+    await createRule({ userId: actor.id, field: "text", op: "contains", value: "ATM", category: "food", merchantName: "Rule cafe", tags: ["ruled"], priority: 0, isActive: true });
+    await createRule({ userId: actor.id, field: "text", op: "contains", value: "swiggy", category: "food", tags: [], priority: 1, isActive: true });
+
+    const atm = await ingest(actor, "sms", ATM_SMS, T0);
+    expect(atm.body.status).toBe("created");
+    const [transfer] = await liveTxns(actor.id);
+    expect(transfer).toMatchObject({ type: "transfer", description: "ATM withdrawal", category: "Transfer" });
+    expect(String(transfer.transferTo)).toBe(String(cash!._id));
+    expect(await balanceOf(bank._id)).toBe(100000 - 500000);
+    expect(await balanceOf(cash!._id)).toBe(2000 + 500000);
+
+    // An ordinary UPI debit next to it is spending and still gets the rule's defaults.
+    const spend = await ingest(actor, "sms", "Rs.250.00 debited from A/c XX1234 on 26-09-26 to VPA swiggy@icici. UPI Ref 426912345678", minutes(10));
+    expect(spend.body.status).toBe("created");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const expense = await Transaction.findOne({ user: actor.id, type: "expense" }).lean<{ _id: unknown; category: string }>();
+    expect(expense?.category).toBe("food");
+    await Transaction.updateOne({ _id: expense!._id }, { $set: { description: "Swiggy", date: new Date("2026-09-24T06:30:00Z") } });
+
+    // Its refund credit is still matched back to it, with the cash transfer ignored.
+    const back = await ingest(actor, "sms", "Rs.250.00 credited to A/c XX1234 on 26-09-26 by Swiggy refund. UPI Ref 426999999999.", minutes(20));
+    expect(back.body.status).toBe("created");
+    const credit = await Transaction.findOne({ user: actor.id, type: "income" }).lean<{ refundStatus?: string; refundOf?: { toString(): string } }>();
+    expect(credit?.refundStatus).toBe("suggested");
+    expect(credit?.refundOf?.toString()).toBe(String(expense!._id));
+  });
+});
+
+describe("integration cash account", () => {
+  const KEY = "test-cash-api-key";
+  let userId: string;
+  let bankId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { default: Account } = await import("@/models/Account");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Cash User", email: `cs${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    const bank = await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 1_000_000, currency: "INR" });
+    userId = user._id.toString();
+    bankId = bank._id.toString();
+  });
+
+  function req(method: "GET" | "POST", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest("http://localhost/api/integrations/cash", {
+      method,
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json", "idempotency-key": `cash-key-${n}`, ...headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+  const get = async () => {
+    const { GET } = await import("@/app/api/integrations/cash/route");
+    return GET(req("GET"), {});
+  };
+  const post = async (body: unknown, headers: Record<string, string> = {}) => {
+    const { POST } = await import("@/app/api/integrations/cash/route");
+    return POST(req("POST", body, headers), {});
+  };
+
+  it("GET with no cash account answers an empty view", async () => {
+    const res = await get();
+    expect(res.status).toBe(200);
+    const { data } = await res.json();
+    expect(data).toMatchObject({
+      account: null,
+      lowBalanceAt: 50000,
+      lowBalanceIsDefault: true,
+      isLow: false,
+      last30Days: { withdrawn: 0, withdrawals: 0, spent: 0 },
+      recentWithdrawals: [],
+    });
+  });
+
+  it("POST creates the cash account (201), then updates it (200), and replays on the same key", async () => {
+    const { default: Account } = await import("@/models/Account");
+    const first = await post({ openingBalance: 300000, lowBalanceAt: 100000 }, { "idempotency-key": "setup" });
+    expect(first.status).toBe(201);
+    const { data } = await first.json();
+    expect(data.account).toMatchObject({ name: "Cash", balance: 300000, currency: "INR", lowBalanceAt: 100000 });
+    expect(data).toMatchObject({ lowBalanceAt: 100000, lowBalanceIsDefault: false, isLow: false });
+
+    const replay = await post({ openingBalance: 300000, lowBalanceAt: 100000 }, { "idempotency-key": "setup" });
+    expect((await replay.json()).data.account.id).toBe(data.account.id);
+    expect(await Account.countDocuments({ user: userId, type: "cash" })).toBe(1);
+
+    const second = await post({ name: "Wallet cash", lowBalanceAt: 400000, openingBalance: 999 });
+    expect(second.status).toBe(200);
+    const upd = (await second.json()).data;
+    expect(upd.account).toMatchObject({ id: data.account.id, name: "Wallet cash", balance: 300000, lowBalanceAt: 400000 });
+    expect(upd.isLow).toBe(true);
+    expect(await Account.countDocuments({ user: userId, type: "cash" })).toBe(1);
+
+    const cleared = await post({ lowBalanceAt: null });
+    const c = (await cleared.json()).data;
+    expect(c).toMatchObject({ lowBalanceAt: 50000, lowBalanceIsDefault: true, isLow: false });
+    expect(c.account.lowBalanceAt).toBeNull();
+
+    const reused = await post({ lowBalanceAt: 1 }, { "idempotency-key": "setup" });
+    expect(reused.status).toBe(409);
+  });
+
+  it("POST with no body fields just makes sure the account exists", async () => {
+    const res = await post({});
+    expect(res.status).toBe(201);
+    expect((await res.json()).data.account).toMatchObject({ name: "Cash", balance: 0 });
+    expect((await post({})).status).toBe(200);
+  });
+
+  it("POST rejects bad data, a missing key and a bad API key", async () => {
+    expect((await post({ lowBalanceAt: -1 })).status).toBe(400);
+    expect((await post({ lowBalanceAt: 10.5 })).status).toBe(400);
+    expect((await post({ name: "" })).status).toBe(400);
+    const { POST } = await import("@/app/api/integrations/cash/route");
+    const noKey = new NextRequest("http://localhost/api/integrations/cash", {
+      method: "POST",
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
+      body: "{}",
+    });
+    expect((await POST(noKey, {})).status).toBe(400);
+    expect((await post({}, { authorization: "Bearer wrong" })).status).toBe(401);
+    const { default: Account } = await import("@/models/Account");
+    expect(await Account.countDocuments({ user: userId, type: "cash" })).toBe(0);
+  });
+
+  it("GET shows balance, 30 days of withdrawals and cash spending, and the latest withdrawals", async () => {
+    const { createTransfer } = await import("@/lib/transfer-service");
+    const { createTransaction } = await import("@/lib/transaction-service");
+    const actor = { id: userId, name: "Cash User", email: "x@x.com", role: "user" };
+    const created = await (await post({ openingBalance: 100000 })).json();
+    const cashId = created.data.account.id as string;
+
+    await createTransfer({ userId, actor, fromAccountId: bankId, toAccountId: cashId, amount: 200000, currency: "INR", description: "ATM withdrawal" });
+    await createTransfer({ userId, actor, fromAccountId: bankId, toAccountId: cashId, amount: 50000, currency: "INR" });
+    await createTransaction({
+      userId, actor, accountId: cashId, type: "expense", amount: 30000, currency: "INR", category: "food",
+      description: "Chai", date: new Date().toISOString(), tags: [], isRecurring: false, provenance: { source: "manual" },
+    });
+    // Older than 30 days: out of the totals, still the latest withdrawal list.
+    await createTransfer({
+      userId, actor, fromAccountId: bankId, toAccountId: cashId, amount: 70000, currency: "INR",
+      date: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+
+    const { data } = await (await get()).json();
+    expect(data.account.balance).toBe(100000 + 200000 + 50000 - 30000 + 70000);
+    expect(data.last30Days).toEqual({ withdrawn: 250000, withdrawals: 2, spent: 30000 });
+    expect(data.recentWithdrawals).toHaveLength(3);
+    expect(data.recentWithdrawals[0]).toMatchObject({ fromAccountId: bankId });
+    expect(data.isLow).toBe(false);
+  });
+
+  it("another user's cash account and withdrawals are never in the view", async () => {
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const other = await User.create({ name: "Other", email: `o${Date.now()}@x.com`, password: "hash", isActive: true });
+    await Account.create({ user: other._id, name: "Their cash", type: "cash", balance: 9, currency: "INR" });
+    expect((await (await get()).json()).data.account).toBeNull();
+  });
+
+  it("the accounts list returns the low-cash line", async () => {
+    await post({ lowBalanceAt: 123400 });
+    const { GET } = await import("@/app/api/integrations/accounts/route");
+    const res = await GET(new NextRequest("http://localhost/api/integrations/accounts", { headers: { authorization: `Bearer ${KEY}` } }), {});
+    const list = (await res.json()).data as { type: string; lowBalanceAt?: number }[];
+    expect(list.find((a) => a.type === "cash")?.lowBalanceAt).toBe(123400);
+    expect(list.find((a) => a.type === "bank")?.lowBalanceAt).toBeUndefined();
+  });
+});

@@ -8,6 +8,7 @@ Purpose: API-key surface for n8n and the Android companion app. Contracts: [docs
 - loans (+ `[id]`, `[id]/repayments`): loan CRUD and repayments over loan-service.
 - transfers (POST, `[id]` GET PATCH DELETE): money between own accounts over transfer-service. `transactions` GET also takes `includeIncomingTransfers`.
 - rules (+ `[id]`, `test`): categorise rules over rule-service; `test` is a read-only dry run.
+- cash (GET, POST): the cash account and its low-cash view over cash-service; POST makes sure the account exists. ATM withdrawal captures become transfers to it.
 - captures, sms: bank message ingest (phone app, n8n). review/*: phone review inbox, confirm, correct, resolve, discard, history.
 - subscriptions (GET detected repeating charges, `[id]` PATCH confirm or dismiss) over subscription-service.
 - refunds (GET suggestions, `[id]/confirm` and `[id]/reject` POST): refund and reversal matching over refund-service.

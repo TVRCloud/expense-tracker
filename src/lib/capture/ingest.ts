@@ -9,6 +9,8 @@ import type { AuthUser } from "@/lib/auth-guard";
 import { decryptField, encryptField } from "@/lib/crypto";
 import { createTransaction, TransactionServiceError } from "@/lib/transaction-service";
 import { suggestRefundSafely } from "@/lib/refund-service";
+import { findCashAccount } from "@/lib/account-service";
+import { TRANSFER_CATEGORY } from "@/lib/transfer-service";
 import { createRepayment, LoanServiceError } from "@/lib/loan-service";
 import { findMatchingRule } from "@/lib/rule-service";
 import { correctTransaction, ReconcileError } from "@/lib/reconcile/correct";
@@ -228,16 +230,21 @@ async function createFromCapture(
   if (parse.confidence < CONFIDENCE_AUTO_CREATE) return queue(capture, "low_confidence");
 
   const captureId = capture._id.toString();
+  // An ATM withdrawal moves money from the bank to the user's cash account: a
+  // transfer, not spending. Without a cash account it stays an ordinary expense.
+  const cash = parse.atm && parse.type === "expense" ? await findCashAccount(user.id) : null;
+  const toCash = cash && cash._id.toString() !== accountId ? cash._id.toString() : null;
   try {
     const { transaction } = await createTransaction({
       userId: user.id,
       actor: user,
       accountId,
-      type: parse.type,
+      ...(toCash ? { transferToId: toCash } : {}),
+      type: toCash ? "transfer" : parse.type,
       amount: parse.amountMinor,
       currency: parse.currency,
-      category: "other",
-      description: descriptionOf(parse),
+      category: toCash ? TRANSFER_CATEGORY : "other",
+      description: toCash ? "ATM withdrawal" : descriptionOf(parse),
       note: `Auto-captured from ${capture.channel === "notification" ? "an app notification" : capture.channel === "n8n" ? "n8n" : "SMS"}`,
       date: (parse.date ?? capture.receivedAt).toISOString(),
       tags: [],
@@ -391,6 +398,10 @@ async function handleMatch(
   if (capture.sourcePriority <= sourcePriorityOf(txn.source)) {
     return markSupporting(capture, other, txnId);
   }
+  // The earlier copy of an ATM withdrawal became a transfer to cash. Its type
+  // differs from this message's "expense" only because of that, so it is the
+  // same event, not a conflict, and a transfer is never rewritten by a capture.
+  if (txn.type === "transfer" && parse.atm) return markSupporting(capture, other, txnId);
 
   const valuesDiffer =
     txn.amount !== parse.amountMinor ||
