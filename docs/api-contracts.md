@@ -78,7 +78,7 @@ All monetary amounts are in **cents** (integers).
 ### Tags, split edits and receipts
 Added in Phase 6. Everything here is additive. Integration routes answer `{success, data, requestId}`; browser routes answer `{data}` or `{error}` and need the session.
 
-**Tags.** `tags` on create and `PATCH` are lower-cased, trimmed and de-duplicated. At most 10, each at most 40 characters, none with a colon (the server keeps `loan:`, `repayment:` and `credit_statement:` link tags itself; an edit never removes them). Too many, too long or a colon is 400.
+**Tags.** `tags` on create and `PATCH` are lower-cased, trimmed and de-duplicated. At most 10, each at most 40 characters, none with a colon or a semicolon (the server keeps `loan:`, `repayment:` and `credit_statement:` link tags itself; an edit never removes them). Too many, too long, a colon or a semicolon is 400. The CSV export joins tags with `;` and import splits the tags cell on `;` only, so a tag like `food, cafe` or `a|b` survives a round trip.
 
 | Method | Path | Description |
 |--------|------|-------------|

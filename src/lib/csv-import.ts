@@ -333,7 +333,7 @@ export function rowToCandidate(
 
   const tagsCell = text("tags");
   const tags = tagsCell
-    ? [...new Set(tagsCell.split(/[;,|]/).map((t) => t.trim().slice(0, 40)).filter(Boolean))].slice(0, 10)
+    ? [...new Set(tagsCell.split(";").map((t) => t.trim().slice(0, 40)).filter(Boolean))].slice(0, 10)
     : [];
   const description = text("description").slice(0, 200);
   const category = text("category").slice(0, 50) || "other";

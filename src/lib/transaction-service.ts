@@ -359,23 +359,26 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   // !rest.isRecurring, and splits summing to rest.amount when this is set)
   if (rest.splits) {
     const splitGroupId = new Types.ObjectId();
-    const accountBefore = account.toObject();
-    // Atomic $inc (not read-modify-write + save) so concurrent captures on
-    // the same account can't overwrite each other's balance change.
-    const accountAfter = await Account.findOneAndUpdate(
-      { _id: account._id, user: userId },
-      { $inc: { balance: -rest.amount } },
-      { new: true }
-    );
-    await appendLedgerBlock({
-      userId,
-      scope: "account",
-      entityId: account._id.toString(),
-      action: "update",
-      before: accountBefore,
-      after: accountAfter,
-      actor,
-    });
+    // An import of history (skipBalance) leaves the balance alone, as for a single row.
+    if (!skipBalance) {
+      const accountBefore = account.toObject();
+      // Atomic $inc (not read-modify-write + save) so concurrent captures on
+      // the same account can't overwrite each other's balance change.
+      const accountAfter = await Account.findOneAndUpdate(
+        { _id: account._id, user: userId },
+        { $inc: { balance: -rest.amount } },
+        { new: true }
+      );
+      await appendLedgerBlock({
+        userId,
+        scope: "account",
+        entityId: account._id.toString(),
+        action: "update",
+        before: accountBefore,
+        after: accountAfter,
+        actor,
+      });
+    }
 
     const { splits, category: _unusedCategory, ...sharedRest } = rest;
     const docs = splits.map((s) => ({
@@ -400,13 +403,16 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
       });
     }
     await invalidateStatsCache(userId, startDate);
-    for (const s of splits) {
-      void checkBudgetAlert(userId, s.category, s.amount, startDate);
+    // An import is history: no alerts and no round-up, as for a single row.
+    if (!quiet) {
+      for (const s of splits) {
+        void checkBudgetAlert(userId, s.category, s.amount, startDate);
+      }
+      void checkSpendLimitAlert(userId);
+      void applyRoundUp(userId, rest.amount, actor).catch((err) =>
+        logger.error({ err, userId }, "applyRoundUp failed")
+      );
     }
-    void checkSpendLimitAlert(userId);
-    void applyRoundUp(userId, rest.amount, actor).catch((err) =>
-      logger.error({ err, userId }, "applyRoundUp failed")
-    );
 
     logger.info({ userId, splitGroupId: splitGroupId.toString(), count: docs.length }, "Split transaction created");
     return { kind: "split", transaction: inserted[0], splitGroupId: splitGroupId.toString(), count: docs.length };

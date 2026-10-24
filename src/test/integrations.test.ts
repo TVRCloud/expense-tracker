@@ -7426,6 +7426,45 @@ describe("tags, split edits and receipts", () => {
       expect(res.status).toBe(400);
     });
 
+    it("tags with a comma or a pipe survive an export and re-import", async () => {
+      const { commitImport } = await import("@/lib/transaction-import");
+      const { GET } = await import("@/app/api/integrations/export/transactions/route");
+      const { default: Transaction } = await import("@/models/Transaction");
+      await addTxn({ amount: 12000, tags: ["food, cafe", "a|b", "plain"], date: new Date(2026, 9, 5, 12) });
+      const out = await GET(req("export/transactions"), {});
+      const csv = await out.text();
+      expect(csv).toContain("food, cafe;a|b;plain");
+      await Transaction.deleteMany({ user: userId });
+      const res = await commitImport(userId, actor, { accountId, csv, dateOrder: "ymd", amountSign: "expense", includeDuplicates: false, adjustBalance: false });
+      expect(res.imported).toBe(1);
+      const row = await Transaction.findOne({ user: userId, source: "import" }).lean<{ tags: string[] }>();
+      expect(row!.tags).toEqual(["food, cafe", "a|b", "plain"]);
+    });
+
+    it("a tag cannot contain a semicolon (the export's separator)", async () => {
+      const { transactionCreateSchema } = await import("@/lib/transaction-service");
+      expect(transactionCreateSchema.safeParse({ accountId, type: "expense", amount: 100, category: "food", date: "2026-10-05", tags: ["a;b"] }).success).toBe(false);
+    });
+
+    it("a split made by an import leaves the balance alone and raises no alerts", async () => {
+      const { vi } = await import("vitest");
+      const { createTransaction } = await import("@/lib/transaction-service");
+      const alert = await import("@/lib/budget-alert");
+      const spy = vi.spyOn(alert, "checkBudgetAlert").mockResolvedValue(undefined as never);
+      const base = {
+        userId, actor, accountId, type: "expense" as const, amount: 3000, currency: "INR", tags: [], isRecurring: false,
+        date: "2026-10-05T10:00:00.000Z", splits: [{ category: "a", amount: 1000 }, { category: "b", amount: 2000 }],
+      };
+      const before = await balance();
+      await createTransaction({ ...base, provenance: { source: "import" }, skipBalance: true });
+      expect(await balance()).toBe(before);
+      expect(spy).not.toHaveBeenCalled();
+      await createTransaction(base);
+      expect(await balance()).toBe(before - 3000);
+      expect(spy).toHaveBeenCalledTimes(2);
+      spy.mockRestore();
+    });
+
     it("the browser split route answers 400 to a body that is not JSON", async () => {
       const { PUT } = await import("@/app/api/transactions/[id]/splits/route");
       const t = await addTxn();

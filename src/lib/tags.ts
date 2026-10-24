@@ -44,6 +44,10 @@ export const tagListSchema = z
         ctx.addIssue({ code: "custom", message: `A tag can be at most ${MAX_TAG_LENGTH} characters` });
         break;
       }
+      if (tag.includes(";")) {
+        ctx.addIssue({ code: "custom", message: "A tag cannot contain a semicolon" });
+        break;
+      }
       if (isReservedTag(tag)) {
         ctx.addIssue({ code: "custom", message: "A tag cannot contain a colon" });
         break;
@@ -54,7 +58,7 @@ export const tagListSchema = z
 /** Tags from outside (a CSV file): cleaned, link tags dropped, at most MAX_TAGS. */
 export function userTagsOnly(tags: readonly string[]): string[] {
   return normaliseTags(tags)
-    .filter((t) => t.length <= MAX_TAG_LENGTH && !isReservedTag(t))
+    .filter((t) => t.length <= MAX_TAG_LENGTH && !isReservedTag(t) && !t.includes(";"))
     .slice(0, MAX_TAGS);
 }
 
