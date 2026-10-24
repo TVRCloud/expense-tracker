@@ -1,14 +1,31 @@
 import connectDB from "@/lib/mongodb";
 import User from "@/models/User";
 import Transaction from "@/models/Transaction";
-import { isSupportedCurrency } from "@/lib/currency";
+import Account from "@/models/Account";
+import Budget from "@/models/Budget";
+import Goal from "@/models/Goal";
+import Loan from "@/models/Loan";
+import SinkingFund from "@/models/SinkingFund";
+import ManualAsset from "@/models/ManualAsset";
+import SpendLimit from "@/models/SpendLimit";
+import { isSupportedCurrency, type CurrencyCode } from "@/lib/currency";
 
 // The base currency is `preferences.currency` (what the web app already uses
-// to format every amount). All stored `amount` values are paise of it, so it
-// cannot change once the user has transactions.
+// to format every amount). Every stored amount (transactions, balances,
+// budgets, goals, loans, funds, assets, limits) is in minor units of it, so it
+// must not change once any of them exists.
+//
+// The guard is a flag on the user document, `baseLocked`:
+//  - lockBaseCurrency() sets it atomically and returns the base in force at
+//    that moment. Every writer of a base-unit amount calls it BEFORE the insert.
+//  - setBaseCurrency() changes the base with a single conditional update that
+//    only matches while the flag is absent, so a write that locked first wins
+//    and a write that comes after sees the new base.
+//  - Accounts that had data before the flag existed are locked lazily: the
+//    first setBaseCurrency finds the rows, sets the flag and refuses.
 
 export class BaseCurrencyError extends Error {
-  code: "UNSUPPORTED_CURRENCY" | "HAS_TRANSACTIONS";
+  code: "UNSUPPORTED_CURRENCY" | "HAS_MONEY_DATA";
   constructor(code: BaseCurrencyError["code"], message: string) {
     super(message);
     this.code = code;
@@ -16,28 +33,73 @@ export class BaseCurrencyError extends Error {
   }
 }
 
-export async function getBaseCurrency(userId: string): Promise<string> {
-  await connectDB();
-  const user = await User.findById(userId)
-    .select("currency preferences.currency")
-    .lean<{ currency?: string; preferences?: { currency?: string } } | null>();
+type PrefsDoc = { currency?: string; preferences?: { currency?: string } } | null;
+
+function baseOf(user: PrefsDoc): CurrencyCode {
   const code = user?.preferences?.currency ?? user?.currency ?? "INR";
   return isSupportedCurrency(code) ? code : "INR";
 }
 
-/** Sets the base currency. Refused once any transaction (even a deleted one) exists, unless it is the same code. */
+export async function getBaseCurrency(userId: string): Promise<CurrencyCode> {
+  await connectDB();
+  const user = await User.findById(userId).select("currency preferences.currency").lean<PrefsDoc>();
+  return baseOf(user);
+}
+
+/**
+ * Locks the base currency for this user (atomic) and returns it. Call before
+ * writing any amount in base units; one cheap query that writes only the first time.
+ */
+export async function lockBaseCurrency(userId: string): Promise<CurrencyCode> {
+  await connectDB();
+  const user = await User.findOneAndUpdate(
+    { _id: userId },
+    { $set: { baseLocked: true } },
+    { projection: { currency: 1, "preferences.currency": 1 } }
+  ).lean<PrefsDoc>();
+  return baseOf(user);
+}
+
+/** True when the user has any row whose amounts are in base units. */
+export async function hasMoneyData(userId: string): Promise<boolean> {
+  const mine = { user: userId };
+  const found = await Promise.all([
+    Transaction.exists(mine),
+    Account.exists({ ...mine, balance: { $ne: 0 } }),
+    Budget.exists(mine),
+    Goal.exists(mine),
+    Loan.exists(mine),
+    SinkingFund.exists(mine),
+    ManualAsset.exists(mine),
+    SpendLimit.exists({ ...mine, $or: [{ dailyAmount: { $gt: 0 } }, { weeklyAmount: { $gt: 0 } }] }),
+  ]);
+  return found.some(Boolean);
+}
+
+const REFUSED =
+  "The base currency is fixed once you have transactions, balances, budgets, goals, loans, funds, assets or a spend limit, because every stored amount is in it.";
+
+/** Sets the base currency. Refused once any money row exists or the user is locked, unless it is the same code. */
 export async function setBaseCurrency(userId: string, code: string): Promise<string> {
   if (!isSupportedCurrency(code)) {
     throw new BaseCurrencyError("UNSUPPORTED_CURRENCY", "Currency is not supported");
   }
-  const current = await getBaseCurrency(userId);
-  if (current === code) return code;
-  if (await Transaction.exists({ user: userId })) {
-    throw new BaseCurrencyError(
-      "HAS_TRANSACTIONS",
-      "The base currency is fixed once you have transactions, because every stored amount is in it."
-    );
+  await connectDB();
+  const user = await User.findById(userId)
+    .select("currency preferences.currency baseLocked")
+    .lean<(PrefsDoc & { baseLocked?: boolean }) | null>();
+  if (baseOf(user) === code) return code;
+  if (user?.baseLocked) throw new BaseCurrencyError("HAS_MONEY_DATA", REFUSED);
+
+  if (await hasMoneyData(userId)) {
+    await User.updateOne({ _id: userId }, { $set: { baseLocked: true } });
+    throw new BaseCurrencyError("HAS_MONEY_DATA", REFUSED);
   }
-  await User.updateOne({ _id: userId }, { $set: { "preferences.currency": code } });
+  // Matches only while nothing has locked the base since the check above.
+  const res = await User.updateOne(
+    { _id: userId, baseLocked: { $ne: true } },
+    { $set: { "preferences.currency": code } }
+  );
+  if (res.matchedCount === 0) throw new BaseCurrencyError("HAS_MONEY_DATA", REFUSED);
   return code;
 }

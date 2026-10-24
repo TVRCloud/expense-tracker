@@ -14,7 +14,8 @@ const TransactionSchema = new Schema(
     originalCurrency: { type: String },
     originalExponent: { type: Number },
     rate: { type: Number }, // base units per 1 unit of originalCurrency
-    rateDate: { type: Date },
+    rateDate: { type: Date }, // when the provider published the rate; unset for a client rate
+    rateSource: { type: String, enum: ["provider", "client"] },
     category: { type: String, required: true },
     subcategory: { type: String },
     description: { type: String },

@@ -65,20 +65,33 @@ export function normalizeRate(rate: number): number {
 /**
  * Convert an amount in the original currency's minor units to the base
  * currency's minor units. `rate` is base units per 1 unit of the original.
- * Rounds once, half up. Throws when the result is below 1 or above the cap.
+ * Exact: the 10-digit rate is split into an integer mantissa and a power of
+ * ten, and everything is done in BigInt, rounding half up once at the end.
+ * Throws when the result is below 1 or above the cap.
  */
 export function convertMinor(originalAmount: number, from: string, base: string, rate: number): number {
   if (!Number.isSafeInteger(originalAmount) || originalAmount < 1 || originalAmount > MAX_MINOR_AMOUNT) {
     throw new CurrencyError("AMOUNT_OUT_OF_RANGE", "Amount is out of range");
   }
   const r = normalizeRate(rate);
-  const value = originalAmount * r * 10 ** (minorExponent(base) - minorExponent(from));
-  const out = Math.round(value);
-  if (!Number.isFinite(out) || out < 1) {
+  // r = mantissa * 10^(exp - 9), the mantissa having 10 digits.
+  const [mantissaText, expText] = r.toExponential(9).split("e");
+  const mantissa = BigInt(mantissaText!.replace(".", ""));
+  const power = Number(expText) - 9 + (minorExponent(base) - minorExponent(from));
+  let numerator = BigInt(originalAmount) * mantissa;
+  let out: bigint;
+  if (power >= 0) {
+    out = numerator * BigInt(10) ** BigInt(power);
+  } else {
+    const divisor = BigInt(10) ** BigInt(-power);
+    numerator *= BigInt(2);
+    out = (numerator + divisor) / (BigInt(2) * divisor);
+  }
+  if (out < BigInt(1)) {
     throw new CurrencyError("AMOUNT_OUT_OF_RANGE", "Converted amount is too small");
   }
-  if (out > MAX_MINOR_AMOUNT) {
+  if (out > BigInt(MAX_MINOR_AMOUNT)) {
     throw new CurrencyError("AMOUNT_OUT_OF_RANGE", "Converted amount is too large");
   }
-  return out;
+  return Number(out);
 }

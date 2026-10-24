@@ -4,6 +4,8 @@ import connectDB from "@/lib/mongodb";
 import Transaction from "@/models/Transaction";
 import type { AuthUser } from "@/lib/auth-guard";
 import { createAccount, findCashAccount, updateAccount } from "@/lib/account-service";
+import { MAX_MINOR_AMOUNT } from "@/lib/currency";
+import { getBaseCurrency } from "@/lib/base-currency";
 
 // The user's cash: the account that ATM withdrawals move money into and cash
 // spends come out of. One cash account per user is "the" cash account (the
@@ -19,7 +21,7 @@ const RECENT = 5;
 export const cashSetupSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(),
   // Only used when the cash account is created now.
-  openingBalance: z.number().int().optional(),
+  openingBalance: z.number().int().min(-MAX_MINOR_AMOUNT).max(MAX_MINOR_AMOUNT).optional(),
   // paise; null puts the default back.
   lowBalanceAt: z.number().int().min(0).nullable().optional(),
 });
@@ -49,6 +51,7 @@ export async function getCashSummary(userId: string, now = new Date()): Promise<
   const cash = await findCashAccount(userId);
   if (!cash) return EMPTY;
 
+  const baseCurrency = await getBaseCurrency(userId);
   const cashId = new Types.ObjectId(cash._id.toString());
   const user = new Types.ObjectId(userId);
   const since = new Date(now.getTime() - WINDOW_DAYS * 24 * 60 * 60 * 1000);
@@ -77,7 +80,7 @@ export async function getCashSummary(userId: string, now = new Date()): Promise<
       id: cash._id.toString(),
       name: cash.name,
       balance: cash.balance,
-      currency: cash.currency,
+      currency: baseCurrency,
       lowBalanceAt: setLine,
     },
     lowBalanceAt: line,
@@ -110,7 +113,7 @@ export async function setupCash(input: CashSetupInput): Promise<{ summary: CashS
       name: name ?? "Cash",
       type: "cash",
       balance: openingBalance ?? 0,
-      currency: "INR",
+      currency: await getBaseCurrency(userId),
     });
     if (typeof lowBalanceAt === "number") {
       await updateAccount({ userId, accountId: account._id.toString(), actor, lowBalanceAt });

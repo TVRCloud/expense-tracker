@@ -6,6 +6,8 @@ import type { AuthUser } from "@/lib/auth-guard";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { budgetCreateSchema } from "@/features/budgets/schemas/budget.schema";
 import { z } from "zod";
+import { lockBaseCurrency } from "@/lib/base-currency";
+import { MAX_MINOR_AMOUNT } from "@/lib/currency";
 
 export { budgetCreateSchema };
 
@@ -132,6 +134,7 @@ export class BudgetServiceError extends Error {
 export async function createBudget(input: CreateBudgetInput) {
   const { userId, actor, ...rest } = input;
   await connectDB();
+  await lockBaseCurrency(userId);
 
   const existing = await Budget.findOne({
     user: userId,
@@ -172,7 +175,7 @@ export async function createBudget(input: CreateBudgetInput) {
 }
 
 export const budgetUpdateSchema = z.object({
-  limitAmount: z.number().int().positive().optional(),
+  limitAmount: z.number().int().positive().max(MAX_MINOR_AMOUNT).optional(),
   alertAt: z.number().min(1).max(100).optional(),
   isActive: z.boolean().optional(),
   rollover: z.boolean().optional(),

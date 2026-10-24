@@ -5,6 +5,7 @@ import type { AuthUser } from "@/lib/auth-guard";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { isSupportedCurrency } from "@/lib/currency";
 import { accountCreateSchema, creditMetaSchema } from "@/features/accounts/schemas/account.schema";
+import { lockBaseCurrency } from "@/lib/base-currency";
 
 export { accountCreateSchema };
 
@@ -24,6 +25,8 @@ export type CreateAccountInput = z.infer<typeof accountCreateSchema> & { userId:
 export async function createAccount(input: CreateAccountInput) {
   const { userId, actor, ...rest } = input;
   await connectDB();
+  // An opening balance is a base-unit amount; an empty account is not.
+  if (rest.balance !== 0) await lockBaseCurrency(userId);
   const account = await Account.create({ ...rest, user: userId });
   await appendLedgerBlock({
     userId,

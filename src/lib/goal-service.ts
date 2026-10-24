@@ -5,6 +5,8 @@ import Notification from "@/models/Notification";
 import type { AuthUser } from "@/lib/auth-guard";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { goalCreateSchema } from "@/features/goals/schemas/goal.schema";
+import { lockBaseCurrency } from "@/lib/base-currency";
+import { MAX_MINOR_AMOUNT } from "@/lib/currency";
 
 interface GoalCompletionCheck {
   _id: unknown;
@@ -91,6 +93,7 @@ export type CreateGoalInput = z.infer<typeof goalCreateSchema> & { userId: strin
 export async function createGoal(input: CreateGoalInput) {
   const { userId, actor, ...rest } = input;
   await connectDB();
+  await lockBaseCurrency(userId);
 
   const goal = await Goal.create({
     ...rest,
@@ -120,8 +123,8 @@ export class GoalServiceError extends Error {
 
 export const goalUpdateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
-  targetAmount: z.number().int().positive().optional(),
-  savedAmount: z.number().int().min(0).optional(),
+  targetAmount: z.number().int().positive().max(MAX_MINOR_AMOUNT).optional(),
+  savedAmount: z.number().int().min(0).max(MAX_MINOR_AMOUNT).optional(),
   targetDate: z.string().optional(),
   icon: z.string().optional(),
   isCompleted: z.boolean().optional(),

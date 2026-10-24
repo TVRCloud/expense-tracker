@@ -13,7 +13,7 @@ import { computeInstallmentDates, OPEN_ENDED_WINDOW } from "@/lib/recurrence";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { ruleOverridesForTransaction } from "@/lib/rule-service";
 import logger from "@/lib/logger";
-import { getBaseCurrency } from "@/lib/base-currency";
+import { lockBaseCurrency } from "@/lib/base-currency";
 import { convertMinor, CurrencyError, isSupportedCurrency, MAX_MINOR_AMOUNT, minorExponent } from "@/lib/currency";
 import { getRate, RateUnavailableError } from "@/lib/exchange-rate-service";
 
@@ -30,8 +30,10 @@ export const transactionCreateSchema = z
     accountId: z.string(),
     type: z.enum(["income", "expense", "transfer"]),
     // Paise of the base currency. Leave out when sending originalAmount.
-    amount: z.number().int().positive().optional(),
-    // Ignored: `currency` on a stored row is always the base currency.
+    amount: z.number().int().positive().max(MAX_MINOR_AMOUNT).optional(),
+    // Only the base currency's code is accepted (another code is a 400: send
+    // originalAmount and originalCurrency instead). A stored row's currency is
+    // always the base currency.
     currency: z.string().optional(),
     // Foreign spend: minor units of originalCurrency (cents, yen, fils...).
     // The server converts to the base currency and sets `amount`.
@@ -57,7 +59,7 @@ export const transactionCreateSchema = z
     // (see splitGroupId on the model). Sum of split amounts must equal `amount`.
     splits: z.array(z.object({
       category: z.string().min(1),
-      amount: z.number().int().positive(),
+      amount: z.number().int().positive().max(MAX_MINOR_AMOUNT),
       description: z.string().optional(),
     })).min(2).optional(),
   })
@@ -159,6 +161,7 @@ export type TransactionServiceErrorCode =
   | "TRANSFER_ACCOUNT_NOT_FOUND"
   | "RATE_UNAVAILABLE"
   | "CONVERSION_FAILED"
+  | "CURRENCY_MISMATCH"
   | "TRANSACTION_NOT_FOUND"
   | "TRANSACTION_LOCKED"
   | "INSTALLMENT_NOT_FOUND";
@@ -235,6 +238,7 @@ type ResolvedAmount = {
     originalExponent?: number;
     rate?: number;
     rateDate?: Date;
+    rateSource?: "provider" | "client";
   };
 };
 
@@ -242,11 +246,19 @@ type ResolvedAmount = {
 // Plain base-currency requests pass through untouched.
 async function resolveAmount(
   userId: string,
-  input: { amount?: number; originalAmount?: number; originalCurrency?: string; rate?: number }
+  input: { amount?: number; currency?: string; originalAmount?: number; originalCurrency?: string; rate?: number }
 ): Promise<ResolvedAmount> {
-  const baseCurrency = await getBaseCurrency(userId);
+  // Locks the base currency (atomic) and reads it in the same step, so a
+  // concurrent base change either lands before this row or is refused.
+  const baseCurrency = await lockBaseCurrency(userId);
   if (input.originalAmount === undefined || input.originalCurrency === undefined) {
     if (input.amount === undefined) throw new Error("createTransaction needs amount or originalAmount");
+    if (input.currency !== undefined && input.currency !== baseCurrency) {
+      throw new TransactionServiceError(
+        "CURRENCY_MISMATCH",
+        `Amounts are in ${baseCurrency}. For ${input.currency}, send originalAmount and originalCurrency instead of amount.`
+      );
+    }
     return { amount: input.amount, baseCurrency, stored: {} };
   }
   const { originalAmount, originalCurrency } = input;
@@ -264,7 +276,8 @@ async function resolveAmount(
         originalCurrency,
         originalExponent: minorExponent(originalCurrency),
         rate: resolved.rate,
-        rateDate: resolved.rateDate,
+        ...(resolved.rateDate ? { rateDate: resolved.rateDate } : {}),
+        rateSource: resolved.source,
       },
     };
   } catch (err) {

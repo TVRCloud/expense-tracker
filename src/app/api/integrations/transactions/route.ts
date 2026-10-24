@@ -107,6 +107,7 @@ export const POST = withIntegrationRoute("transactions", async ({ req, user, req
             originalExponent?: number | null;
             rate?: number | null;
             rateDate?: Date | null;
+            rateSource?: string | null;
             category: string;
             account: { toString(): string };
             transferTo?: { toString(): string } | null;
@@ -124,6 +125,7 @@ export const POST = withIntegrationRoute("transactions", async ({ req, user, req
             originalExponent: transaction.originalExponent ?? null,
             rate: transaction.rate ?? null,
             rateDate: transaction.rateDate ?? null,
+            rateSource: transaction.rateSource ?? null,
             category: transaction.category,
             accountId: transaction.account.toString(),
             transferToId: transaction.transferTo ? transaction.transferTo.toString() : null,
@@ -139,7 +141,7 @@ export const POST = withIntegrationRoute("transactions", async ({ req, user, req
           // Idempotency-Key: a retry with the same key must try again.
           if (err instanceof TransactionServiceError && err.code === "RATE_UNAVAILABLE") throw err;
           if (err instanceof TransactionServiceError) {
-            return { status: err.code === "CONVERSION_FAILED" ? 400 : 404, body: { errorCode: err.code, message: err.message } };
+            return { status: err.code === "CONVERSION_FAILED" || err.code === "CURRENCY_MISMATCH" ? 400 : 404, body: { errorCode: err.code, message: err.message } };
           }
           throw err;
         }

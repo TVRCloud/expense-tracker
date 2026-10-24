@@ -11,7 +11,9 @@ import logger from "@/lib/logger";
 
 function statusOf(err: ReconcileError | TransactionServiceError) {
   if (err instanceof TransactionServiceError) {
-    return err.code === "TRANSACTION_LOCKED" ? 409 : 404;
+    if (err.code === "TRANSACTION_LOCKED") return 409;
+    if (err.code === "RATE_UNAVAILABLE" || err.code === "CONVERSION_FAILED" || err.code === "CURRENCY_MISMATCH") return 400;
+    return 404;
   }
   switch (err.code) {
     case "NOT_FOUND":

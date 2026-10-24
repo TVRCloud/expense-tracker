@@ -60,6 +60,17 @@ describe("convertMinor", () => {
     expect(convertMinor(1, "USD", "INR", 84.49)).toBe(84);
   });
 
+  it("is exact where floating point is not: 103700 JPY at 142.01895 is 1472736512 paise", () => {
+    // 103700 * 142.01895 * 100 is 1472736511.4999998 in doubles; exactly it is ...512 (.5 rounds up).
+    expect(convertMinor(103700, "JPY", "INR", 142.01895)).toBe(1472736512);
+    expect(convertMinor(25, "USD", "INR", 0.1)).toBe(3);
+    expect(convertMinor(5, "USD", "INR", 0.1)).toBe(1);
+    expect(convertMinor(333333, "USD", "INR", 0.003)).toBe(1000);
+    expect(convertMinor(999999999, "KWD", "INR", 0.3333333333)).toBe(33333333);
+    expect(convertMinor(1, "JPY", "KWD", 0.0005)).toBe(1);
+    expect(convertMinor(700, "USD", "JPY", 0.5)).toBe(4);
+  });
+
   it("rejects amounts that round to nothing or are out of range", () => {
     expect(() => convertMinor(1, "JPY", "INR", 0.001)).toThrow(CurrencyError);
     expect(() => convertMinor(0, "USD", "INR", 84)).toThrow(CurrencyError);

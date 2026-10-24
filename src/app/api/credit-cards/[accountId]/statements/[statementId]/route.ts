@@ -9,9 +9,11 @@ import { z } from "zod";
 import { Types } from "mongoose";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { getDueDateForStatementClose } from "@/lib/credit-card";
+import { MAX_MINOR_AMOUNT } from "@/lib/currency";
+import { getBaseCurrency } from "@/lib/base-currency";
 
 const paySchema = z.object({
-  paidAmount: z.number().int().positive(),
+  paidAmount: z.number().int().positive().max(MAX_MINOR_AMOUNT),
   paidAt: z.string().optional(),
   paymentTransactionId: z.string().optional(),
   sourceAccountId: z.string().optional(),
@@ -191,7 +193,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Params }) {
         account: parsed.data.sourceAccountId,
         type: "transfer",
         amount: parsed.data.paidAmount,
-        currency: cardAccount.currency ?? "INR",
+        currency: await getBaseCurrency(user.id),
         category: "Transfer",
         description: `Payment to ${cardAccount.name}`,
         date: paymentDate,

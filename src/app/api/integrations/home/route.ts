@@ -6,6 +6,7 @@ import { getMonthlyStats } from "@/lib/stats-service";
 import { listTransactions } from "@/lib/transaction-query";
 import { getReviewCounts } from "@/lib/reconcile/inbox";
 import { getSpendLimitStatusIfConfigured } from "@/lib/spend-limit";
+import { getBaseCurrency } from "@/lib/base-currency";
 
 // GET /api/integrations/home — everything a connected app's home screen
 // needs in one request: accounts, this month's stats, the latest few
@@ -21,8 +22,9 @@ export const GET = withIntegrationRoute("home", async ({ req, user, requestId })
   const year = now.getFullYear();
 
   await connectDB();
-  const [accounts, stats, latest, reviewCounts, spendLimit] = await Promise.all([
+  const [accounts, baseCurrency, stats, latest, reviewCounts, spendLimit] = await Promise.all([
     Account.find({ user: user.id, isArchived: false }).select("_id name type balance currency").lean(),
+    getBaseCurrency(user.id),
     getMonthlyStats(user.id, year, month),
     listTransactions({ userId: user.id, skip: 0, limit: latestLimit, hideFuture: true, includeTotal: false }),
     getReviewCounts(user.id),
@@ -33,7 +35,8 @@ export const GET = withIntegrationRoute("home", async ({ req, user, requestId })
     {
       user: { name: user.name },
       period: { month, year },
-      accounts,
+      // Balances are in the base currency; the account's own `currency` is a label.
+      accounts: accounts.map((a) => ({ ...a, currency: baseCurrency })),
       stats,
       latest: latest.data,
       reviewCounts,

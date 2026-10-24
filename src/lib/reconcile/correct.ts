@@ -15,6 +15,7 @@ import {
 } from "@/lib/transaction-service";
 import logger from "@/lib/logger";
 import { learnDigitsFromCapture } from "@/lib/capture/account-match";
+import { MAX_MINOR_AMOUNT } from "@/lib/currency";
 
 // Reconcile: confirm an auto-captured transaction, or fix it in place and
 // keep a permanent TransactionCorrection record of what changed. Shared by
@@ -48,7 +49,7 @@ const objectId = z.string().refine((v) => Types.ObjectId.isValid(v), "Invalid id
 
 export const correctionChangesSchema = z
   .object({
-    amount: z.number().int().positive().optional(),
+    amount: z.number().int().positive().max(MAX_MINOR_AMOUNT).optional(),
     type: z.enum(["income", "expense"]).optional(),
     accountId: objectId.optional(),
     date: z.string().datetime().optional(),

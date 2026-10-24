@@ -19,6 +19,7 @@ All monetary fields are stored as **integers (cents)** — divide by 100 for dis
 | `preferences.emailNotifications` | Boolean | |
 | `preferences.weekStartsOn` | Number | 0=Sun, 1=Mon |
 | `preferences.timezone` | String | IANA zone, default `Asia/Kolkata`; decides where a day starts for spend limits |
+| `baseLocked` | Boolean | set atomically by the first write of any base-unit amount; once set the base currency cannot change |
 | `preferences.currency` | String | ISO 4217, the base currency every `amount` is in; supported codes only, cannot change once the user has transactions |
 | `preferences.billReminders.enabled` | Boolean | default false; turns on bill due reminders |
 | `preferences.billReminders.leadDays` | Number | 1 to 14, default 3; how many days ahead to remind |
@@ -72,7 +73,8 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `originalCurrency` | String | foreign spend only: ISO 4217 |
 | `originalExponent` | Number | foreign spend only: minor-unit digits of `originalCurrency` (JPY 0, USD 2, KWD 3) |
 | `rate` | Number | foreign spend only: base units per 1 unit of `originalCurrency`, 10 significant digits |
-| `rateDate` | Date | foreign spend only: when the rate was published (now, for a client-supplied rate) |
+| `rateDate` | Date | foreign spend only: when the provider published the rate; unset for a client rate |
+| `rateSource` | String | foreign spend only: `provider\|client` |
 | `category` | String | |
 | `subcategory` | String | |
 | `description` | String | full-text indexed |
@@ -388,6 +390,7 @@ One cached rate table per base currency (open.er-api.com), refreshed after 24 ho
 | `rates` | Object | code to units of that currency per 1 unit of `base` (supported codes only) |
 | `rateDate` | Date | the provider's own update time |
 | `fetchedAt` | Date | when we fetched it |
+| `lastAttemptAt` | Date | set when a refresh failed; no new attempt for 10 minutes (a row can exist with no table yet) |
 
 ## credit_statements
 
