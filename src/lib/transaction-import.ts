@@ -10,7 +10,7 @@ import type { AuthUser } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { createTransaction } from "@/lib/transaction-service";
 import { getBaseCurrency, lockBaseCurrency } from "@/lib/base-currency";
-import { minorExponent } from "@/lib/currency";
+import { BASE_CURRENCY_ONLY_TWO_DECIMALS, isSupportedAsBase, minorExponent } from "@/lib/currency";
 import { userTagsOnly } from "@/lib/tags";
 import { DEFAULT_TIME_ZONE, isValidTimeZone, localDateKey } from "@/lib/spend-limit-time";
 import {
@@ -57,7 +57,7 @@ export type ImportRequest = z.infer<typeof importRequestSchema>;
 export type ImportCommitRequest = z.infer<typeof importCommitSchema>;
 
 export class TransactionImportError extends Error {
-  code: "ACCOUNT_NOT_FOUND" | "NEEDS_MAPPING" | "INVALID_CSV" | "TOO_MANY_EXISTING" | "NEEDS_DATE_ORDER" | "IMPORT_IN_PROGRESS";
+  code: "ACCOUNT_NOT_FOUND" | "NEEDS_MAPPING" | "INVALID_CSV" | "TOO_MANY_EXISTING" | "NEEDS_DATE_ORDER" | "IMPORT_IN_PROGRESS" | "UNSUPPORTED_BASE_CURRENCY";
   details?: Record<string, unknown>;
   constructor(code: TransactionImportError["code"], message: string, details?: Record<string, unknown>) {
     super(message);
@@ -281,6 +281,11 @@ export async function commitImport(userId: string, actor: AuthUser, input: Impor
   const lockId = await takeLock(userId, input.accountId);
   try {
     let a = await analyze(userId, input);
+    // A base with other than two decimals cannot be written to for now (it would
+    // otherwise fail every row one by one); preview still works.
+    if (!isSupportedAsBase(a.baseCurrency)) {
+      throw new TransactionImportError("UNSUPPORTED_BASE_CURRENCY", BASE_CURRENCY_ONLY_TWO_DECIMALS);
+    }
     if (a.ambiguousDates && input.dateOrder === undefined) {
       throw new TransactionImportError("NEEDS_DATE_ORDER", "The file has dates that read two ways; send dateOrder (dmy, mdy or ymd)");
     }

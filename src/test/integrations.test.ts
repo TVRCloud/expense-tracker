@@ -9055,30 +9055,48 @@ describe("integration export and import", () => {
     await expect(setBaseCurrency(userId, "EUR")).rejects.toMatchObject({ code: "HAS_MONEY_DATA" });
   });
 
-  it.each([
-    { base: "JPY", exponent: 0, cell: "1250", exported: "1250", totalCell: "300", three: "-" },
-    { base: "USD", exponent: 2, cell: "12.50", exported: "12.50", totalCell: "3.00", three: "-" },
-    { base: "KWD", exponent: 3, cell: "1.250", exported: "1.250", totalCell: "0.300", three: "-" },
-  ])("reads, writes, exports and de-duplicates in the minor units of $base ($exponent decimals)", async ({ base, cell, exported, totalCell }) => {
+  it("reads, writes, exports and de-duplicates in the minor units of USD (2 decimals)", async () => {
     const { default: Transaction } = await import("@/models/Transaction");
     const { default: Account } = await import("@/models/Account");
-    await setBase(base);
-    const csv = `Date,Description,Amount\n2026-10-05,Lunch,-${cell}\n2026-10-06,Refund,${totalCell}`;
+    await setBase("USD");
+    const csv = "Date,Description,Amount\n2026-10-05,Lunch,-12.50\n2026-10-06,Refund,3.00";
     const data = (await (await preview({ csv })).json()).data;
-    expect(data).toMatchObject({ baseCurrency: base, validCount: 2, invalidCount: 0, expenseTotal: 1250, incomeTotal: 300 });
+    expect(data).toMatchObject({ baseCurrency: "USD", validCount: 2, invalidCount: 0, expenseTotal: 1250, incomeTotal: 300 });
     expect((await commit({ csv })).status).toBe(201);
     const rows = await Transaction.find({ user: userId }).sort({ date: 1 }).lean();
-    expect(rows.map((r) => [r.amount, r.currency])).toEqual([[1250, base], [300, base]]);
+    expect(rows.map((r) => [r.amount, r.currency])).toEqual([[1250, "USD"], [300, "USD"]]);
     const text = (await (await exportCsv()).text()).split("\n");
     const cells = text[1].split(",");
-    expect(cells[2]).toBe(exported);
-    expect(cells[3]).toBe(base);
+    expect(cells[2]).toBe("12.50");
+    expect(cells[3]).toBe("USD");
     // The export reads back as the same rows: a duplicate here, and exact in a fresh account.
     expect((await (await preview({ csv: text.join("\n") })).json()).data).toMatchObject({ duplicateCount: 2, importCount: 0 });
     const fresh = await Account.create({ user: userId, name: "Fresh", type: "bank", balance: 0, currency: "INR" });
     await commit({ csv: text.join("\n"), accountId: fresh._id.toString() });
     const back = await Transaction.find({ account: fresh._id }).sort({ date: 1 }).lean();
     expect(back.map((r) => [r.type, r.amount])).toEqual([["expense", 1250], ["income", 300]]);
+  });
+
+  // A JPY or KWD base cannot be selected or written to (two-decimal bases only
+  // for now), so these check the pure reading and the preview maths, which
+  // write nothing, and that a commit is refused.
+  it.each([
+    { base: "JPY", exponent: 0, cell: "1250", income: "300" },
+    { base: "KWD", exponent: 3, cell: "1.250", income: "0.300" },
+  ])("previews in the minor units of $base ($exponent decimals) and refuses to import into it", async ({ base, exponent, cell, income }) => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    await setBase(base);
+    const csv = `Date,Description,Amount\n2026-10-05,Lunch,-${cell}\n2026-10-06,Refund,${income}`;
+    const data = (await (await preview({ csv })).json()).data;
+    expect(data).toMatchObject({ baseCurrency: base, minorExponent: exponent, validCount: 2, invalidCount: 0, expenseTotal: 1250, incomeTotal: 300 });
+
+    const res = await commit({ csv });
+    expect(res.status).toBe(400);
+    const { error } = await res.json();
+    expect(error.details.code).toBe("UNSUPPORTED_BASE_CURRENCY");
+    expect(error.message).toMatch(/Only currencies with two decimals/);
+    expect(await Transaction.countDocuments({ user: userId })).toBe(0);
+    expect(await baseLockedOf()).toBe(false);
   });
 
   it("refuses digits the currency does not have, but takes trailing zeros", async () => {
