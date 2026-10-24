@@ -384,3 +384,7 @@ Index: `{user, revoked}`
 | `keys.p256dh` | String | |
 | `keys.auth` | String | |
 | `isActive` | Boolean | set false on 410 |
+
+## Backup files
+
+No collection. A backup is built from the user's rows (accounts, transactions, budgets, goals, loans, repayments, rules, sinking funds, manual assets, subscription decisions, spend limit) and returned to the caller as an encrypted file; a restore inserts rows with the caller as `user`. Format and rules: [backup.md](backup.md).

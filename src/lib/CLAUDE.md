@@ -11,6 +11,7 @@ Purpose: server business logic shared by browser routes, integration routes, ser
 - Forecast: forecast-math.ts (pure: daily balance points, lowest point, shortfall, subscription repeats) and cash-flow-forecast.ts (gathers liquid balances, unpaid recurring items, card and loan dues from bills.ts, subscriptions and the 30 day average spend).
 - Bills: bills.ts (upcoming bills from recurring payments, card statements and loans owed; mark paid), bill-settings.ts (`preferences.billReminders`), bill-reminders.ts (once per bill per due date, from 09:00 local; `sendBillReminders`).
 - Sinking funds and savings rate: sinking-fund-service.ts (funds with a due date and monthly set-aside; `describeFund` computes remaining, percent, monthsLeft, suggestedMonthly and status on read; atomic contribute) and savings-rate.ts (income minus spending per month from `getRangeStats`, average and trend). integrations/write-helpers.ts holds the Idempotency-Key, JSON body and conflict-message checks new integration routes share.
+- Backup: backup-crypto.ts (passphrase to AES-256-GCM file: scrypt, header bound as AAD, one generic failure, size caps) and backup-service.ts (`buildBackup` whitelist export, zod schemas, `restoreBackup` merge-only with a dry run, caller owns every row, fresh ids for ids held by others). Format and threat model: [docs/backup.md](../../docs/backup.md); the HTTP side is integrations/backup-http.ts.
 - Weekly review: weekly-review.ts (`summarizeWeek` and `buildHighlights` are pure; `getWeeklyReview` reads one Monday to Sunday week in the user's time zone; `sendWeeklyReviews` is the opt-in notification) and weekly-review-settings.ts (`preferences.weeklyReview`).
 - Recurring and reminders: recurrence.ts, recurring-topup.ts, recurring-series.ts (series list, get, cancel; shared by browser and integration routes), reminder-scheduler.ts, emi-notifications.ts, credit-notifications.ts, push.ts.
 - refund-service.ts (match a credit to the expense it refunds, suggest, confirm, reject; stats and budgets net confirmed refunds out), see [docs/reconcile.md](../../docs/reconcile.md).
@@ -41,7 +42,7 @@ Purpose: server business logic shared by browser routes, integration routes, ser
 - integrations/sms-parser.ts (`parseBankSms`) has no importer in src, scripts or server.ts; ingest uses `parseCapture` from capture/parsers.
 
 ## Tests
-- `src/test/integrations.test.ts`, `src/lib/realtime/*.test.ts`, `src/lib/subscription-detector.test.ts`, `src/lib/forecast-math.test.ts`, `src/lib/card-rewards.test.ts`, `src/lib/weekly-review.test.ts`, `src/lib/tax-year.test.ts`.
+- `src/test/integrations.test.ts`, `src/lib/realtime/*.test.ts`, `src/lib/subscription-detector.test.ts`, `src/lib/forecast-math.test.ts`, `src/lib/card-rewards.test.ts`, `src/lib/weekly-review.test.ts`, `src/lib/tax-year.test.ts`, `src/test/backup.test.ts`.
 
 ## Last changed
 - e19229d feat(realtime): live updates for every screen and an app event channel
