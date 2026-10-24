@@ -112,6 +112,8 @@ Authorization: Bearer <YOUR_API_KEY>
 | GET, PATCH, DELETE | `/api/integrations/sinking-funds/[id]` | Read, edit (name, target, due date, monthly plan), soft delete a fund (writes need `Idempotency-Key`) |
 | POST | `/api/integrations/sinking-funds/[id]/contribute` | `{amount}` in paise: positive saves into the fund, negative takes out (balance stops at 0); needs `Idempotency-Key` |
 | GET | `/api/integrations/savings-rate` | Share of income saved per month, average and trend; `months` 1 to 24, default 6; see below |
+| GET | `/api/integrations/weekly-review` | The look back at one week (Monday to Sunday on the user's clock). `week=YYYY-MM-DD` is any date inside the week; default the last completed week |
+| GET, PATCH | `/api/integrations/weekly-review/settings` | Notification settings `{enabled, day}` (off by default, `day` 0 Sunday to 6, default 1); PATCH changes only what is sent (needs `Idempotency-Key`) |
 | GET | `/api/integrations/summary` | Snapshot: accounts, monthly stats, budgets |
 | POST | `/api/integrations/sms` | Parse a bank/NBFC SMS and create a transaction or loan repayment |
 
@@ -557,3 +559,32 @@ A credit card can carry one reward rule. `PUT /api/integrations/credit-cards/[ac
 - `GET .../[accountId]/rewards?cycles=3` answers `{accountId, name, lastFourDigits, rule, reason, cycles, total}`. `reason` is `no_rule` or `billing_cycle_not_set` when there is no estimate (then `cycles` is empty and `total` is `null`), otherwise `null`. Each cycle is `{label, periodStart, periodEnd, dueDate, isCurrent, unit: "paise" | "points", spend, refunded, uncapped, earned, capReached, value, byCategory: [{category, rate, spend, earned}]}`; `value` is always paise (points times the point value). Cycles are the card's billing cycles (the same ones as its statements), current first.
 - Errors: 400 `VALIDATION_ERROR` for an invalid rule, a missing `Idempotency-Key`, a bad `cycles`, or an account that is not a credit card; 404 `NOT_FOUND` for a card that is not the user's or is archived; 409 `IDEMPOTENCY_CONFLICT` for a key reused with a different rule.
 - The rule is a field on the account, so a change shows up on the `accounts` realtime resource. The browser has the same routes under `/api/credit-cards/rewards` and `/api/credit-cards/[accountId]/rewards` (session auth, bare JSON).
+
+## Weekly review
+
+`GET /api/integrations/weekly-review?week=2026-10-19` looks back at one week: Monday to Sunday on the user's wall clock (`preferences.timezone`). `week` is any date inside the wanted week; without it, the last completed week. A week that has not started is refused (400 `VALIDATION_ERROR`, `details.code` `FUTURE_WEEK`), a bad date likewise (`INVALID_WEEK`). The week in progress is allowed and comes back with `isComplete: false`.
+
+```json
+{ "week": { "start": "2026-10-18T18:30:00.000Z", "end": "2026-10-25T18:30:00.000Z", "startDate": "2026-10-19",
+            "endDate": "2026-10-25", "timeZone": "Asia/Kolkata", "isComplete": true },
+  "totals": { "spent": 440000, "income": 900000, "net": 460000, "previousSpent": 400000,
+              "change": { "amount": 40000, "percent": 10 } },
+  "topCategories": [{ "category": "Shopping", "total": 250000, "share": 57 }],
+  "topMerchants": [{ "merchant": "Amazon", "total": 250000, "count": 1 }],
+  "biggestExpense": { "id": "66f0...", "amount": 250000, "description": "Amazon", "category": "Shopping", "date": "2026-10-21T06:30:00.000Z" },
+  "days": [{ "date": "2026-10-19", "spent": 0 }],
+  "noSpendDays": 3,
+  "budgets": { "month": 10, "year": 2026, "asOf": "2026-10-27T04:30:00.000Z", "total": 2, "over": 1, "near": 0,
+               "items": [{ "category": "Food", "spent": 170000, "limit": 100000, "percent": 170 }] },
+  "spendLimit": { "dailyAmount": 100000, "daysWithin": 6, "daysOver": 1, "daysTracked": 7 },
+  "unreviewed": 2,
+  "highlights": ["You spent ₹400.00 more than the week before (up 10%)."],
+  "settings": { "enabled": false, "day": 1 } }
+```
+
+- Amounts are in minor units. `topCategories` and `topMerchants` hold at most three, largest first; `share` is a whole percent of `spent`. `days` always has seven entries, Monday first.
+- Transfers are neither spending nor income, voided rows are left out, a confirmed refund comes off `spent` and its category (not onto income), and a recurring installment counts when it was paid.
+- `noSpendDays` counts finished days with no spending. `spendLimit` follows the daily spend limit's own rule (expenses that are not recurring bills and not in an excluded category) and judges each finished day against the limit in force that day; `null` when no limit was ever set or no day has finished. `budgets` is the active budgets of the month the week ends in, as of `asOf` (spending after the week is included), `null` without any. `unreviewed` is the review queue size now (capped at 100).
+- `highlights` is at most two plain sentences: the change on the week before (10% or more), how the daily limit held, no-spend days, the top category (30% or more of spending). An empty week says "No spending recorded this week."
+- `PATCH /weekly-review/settings` takes `enabled` (boolean) and/or `day` (whole number 0 to 6) and changes only what is sent.
+- Notification: with `enabled`, a notification (type `system`, `meta.kind` `weekly_review`, title "Your week in review") and push are created once per week, on the chosen weekday from 09:00 on the user's clock, for the last completed week. A week with no spending and no income sends nothing. The job runs every 30 minutes from `server.ts`; on Vercel call `GET /api/cron/weekly-review` with `Authorization: Bearer $CRON_SECRET` from a scheduler every 30 minutes (safe to call often).

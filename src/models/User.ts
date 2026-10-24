@@ -28,6 +28,12 @@ const UserSchema = new Schema(
         enabled: { type: Boolean, default: false },
         leadDays: { type: Number, default: 3, min: 1, max: 14 },
       },
+      // Weekly review notification (src/lib/weekly-review.ts): off until the
+      // user turns it on. `day` is the weekday it arrives, 0 Sunday to 6 Saturday.
+      weeklyReview: {
+        enabled: { type: Boolean, default: false },
+        day: { type: Number, default: 1, min: 0, max: 6 },
+      },
     },
     passwordResetToken: { type: String },
     passwordResetExpires: { type: Date },

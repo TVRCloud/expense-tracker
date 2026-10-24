@@ -5966,3 +5966,261 @@ describe("net worth", () => {
     });
   });
 });
+
+
+describe("weekly review", () => {
+  const KEY = "test-weekly-review-api-key";
+  // Monday 5 Jan to Sunday 11 Jan 2026 on the Kolkata clock (the default zone).
+  const WEEK = "2026-01-07";
+  const at = (day: number, hour = 12, month = "01") =>
+    new Date(`2026-${month}-${String(day).padStart(2, "0")}T${String(hour).padStart(2, "0")}:00:00+05:30`);
+  let userId: string;
+  let otherUserId: string;
+  let accountId: string;
+  let otherAccountId: string;
+  let n = 0;
+  // Integration handlers take the route context as a second argument; none of these routes use one.
+  const run = (handler: (r: NextRequest, ctx: never) => Promise<Response>, r: NextRequest) => handler(r, undefined as never);
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Review User", email: `wr${Date.now()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `wro${Date.now()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    const account = await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 1000000, currency: "INR" });
+    const otherAccount = await Account.create({ user: other._id, name: "Bank", type: "bank", balance: 1000000, currency: "INR" });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+    accountId = account._id.toString();
+    otherAccountId = otherAccount._id.toString();
+  });
+
+  function req(path: string, method: "GET" | "PATCH" = "GET", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/weekly-review${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${KEY}`,
+        "content-type": "application/json",
+        ...(method === "GET" ? {} : { "idempotency-key": `wr-key-${n}` }),
+        ...headers,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+
+  async function txn(over: Record<string, unknown> = {}, owner = userId, account = accountId) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    return Transaction.create({ user: owner, account, type: "expense", amount: 10000, category: "Food", date: at(6), ...over });
+  }
+
+  it("needs an API key", async () => {
+    const { GET } = await import("@/app/api/integrations/weekly-review/route");
+    const res = await run(GET, new NextRequest(`http://localhost/api/integrations/weekly-review?week=${WEEK}`));
+    expect(res.status).toBe(401);
+  });
+
+  it("returns the week with totals, change, categories, days and highlights, for this user only", async () => {
+    const { GET } = await import("@/app/api/integrations/weekly-review/route");
+    await txn({ amount: 120000, category: "Food", description: "Swiggy", date: at(6) });
+    await txn({ amount: 250000, category: "Shopping", description: "Amazon", date: at(7) });
+    await txn({ amount: 900000, type: "income", category: "Salary", date: at(8) });
+    await txn({ amount: 300000, category: "Food", date: at(1) }); // the week before (29 Dec to 4 Jan)
+    await txn({ amount: 777777, category: "Food", date: at(6) }, otherUserId, otherAccountId); // someone else's
+
+    const res = await run(GET, req(`?week=${WEEK}`));
+    expect(res.status).toBe(200);
+    const { data } = await res.json();
+    expect(data.week).toMatchObject({ startDate: "2026-01-05", endDate: "2026-01-11", timeZone: "Asia/Kolkata", isComplete: true });
+    expect(data.totals).toMatchObject({ spent: 370000, income: 900000, net: 530000, previousSpent: 300000 });
+    expect(data.totals.change).toEqual({ amount: 70000, percent: 23 });
+    expect(data.topCategories.map((c: { category: string }) => c.category)).toEqual(["Shopping", "Food"]);
+    expect(data.topMerchants[0]).toMatchObject({ merchant: "Amazon", total: 250000 });
+    expect(data.biggestExpense).toMatchObject({ amount: 250000, category: "Shopping" });
+    expect(data.days).toHaveLength(7);
+    expect(data.days[1]).toEqual({ date: "2026-01-06", spent: 120000 });
+    expect(data.noSpendDays).toBe(5);
+    expect(data.highlights[0]).toBe("You spent ₹700.00 more than the week before (up 23%).");
+    expect(data.settings).toEqual({ enabled: false, day: 1 });
+    expect(data.spendLimit).toBeNull();
+    expect(data.budgets).toBeNull();
+  });
+
+  it("an empty week is zeros with a plain highlight", async () => {
+    const { GET } = await import("@/app/api/integrations/weekly-review/route");
+    const { data } = await (await run(GET, req(`?week=${WEEK}`))).json();
+    expect(data.totals).toMatchObject({ spent: 0, income: 0, previousSpent: 0 });
+    expect(data.biggestExpense).toBeNull();
+    expect(data.noSpendDays).toBe(7);
+    expect(data.highlights).toEqual(["No spending recorded this week."]);
+  });
+
+  it("defaults to the last completed week, a Monday to Sunday that has ended", async () => {
+    const { GET } = await import("@/app/api/integrations/weekly-review/route");
+    const { data } = await (await run(GET, req(""))).json();
+    expect(data.week.isComplete).toBe(true);
+    const start = new Date(data.week.start);
+    const end = new Date(data.week.end);
+    expect(end.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(end.getTime() - start.getTime()).toBeGreaterThanOrEqual(7 * 23 * 3600_000);
+    expect(new Date(`${data.week.startDate}T12:00:00Z`).getUTCDay()).toBe(1);
+  });
+
+  it("refuses a bad or future week", async () => {
+    const { GET } = await import("@/app/api/integrations/weekly-review/route");
+    for (const bad of ["nope", "2026-13-01", "2026-02-30", "2099-01-05"]) {
+      const res = await run(GET, req(`?week=${bad}`));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.code).toBe("VALIDATION_ERROR");
+    }
+  });
+
+  it("brings the budgets, the spend limit result and the review queue with it", async () => {
+    const { GET } = await import("@/app/api/integrations/weekly-review/route");
+    const { default: Budget } = await import("@/models/Budget");
+    const { default: SpendLimit } = await import("@/models/SpendLimit");
+    await Budget.create({ user: userId, category: "Food", month: 1, year: 2026, limitAmount: 100000, alertAt: 80 });
+    await Budget.create({ user: userId, category: "Shopping", month: 1, year: 2026, limitAmount: 1000000, alertAt: 80 });
+    await SpendLimit.create({ user: userId, dailyAmount: 100000, alertAt: 80, excludeCategories: [], rollover: false });
+    await txn({ amount: 150000, category: "Food", date: at(6) }); // over its budget and the day's limit
+    await txn({ amount: 50000, category: "Shopping", date: at(7) });
+    await txn({ amount: 20000, category: "Food", date: at(30, 12, "01"), reviewStatus: "unreviewed", source: "sms" }); // unreviewed, in a later week
+    const { data } = await (await run(GET, req(`?week=${WEEK}`))).json();
+
+    expect(data.budgets).toMatchObject({ month: 1, year: 2026, total: 2, over: 1, near: 0 });
+    expect(data.budgets.items[0]).toMatchObject({ category: "Food", spent: 170000, limit: 100000, percent: 170 });
+    expect(data.spendLimit).toEqual({ dailyAmount: 100000, daysWithin: 6, daysOver: 1, daysTracked: 7 });
+    expect(data.unreviewed).toBe(1);
+  });
+
+  it("judges past days against the limit that was in force then", async () => {
+    const { getWeeklyReview } = await import("@/lib/weekly-review");
+    const { updateSpendLimit } = await import("@/lib/spend-limit");
+    // 80,000 on Monday 5 Jan and on Friday 9 Jan; the limit goes 70,000 to 100,000 from Thursday 8 Jan.
+    await txn({ amount: 80000, date: at(5) });
+    await txn({ amount: 80000, date: at(9) });
+    await updateSpendLimit(userId, { dailyAmount: 70000 }, at(1));
+    await updateSpendLimit(userId, { dailyAmount: 100000 }, at(8, 9));
+    const review = await getWeeklyReview(userId, { week: WEEK, now: at(14) });
+    expect(review.spendLimit).toEqual({ dailyAmount: 100000, daysWithin: 6, daysOver: 1, daysTracked: 7 });
+  });
+
+  describe("settings", () => {
+    it("starts off, on Monday", async () => {
+      const { GET } = await import("@/app/api/integrations/weekly-review/settings/route");
+      const res = await run(GET, req("/settings"));
+      expect((await res.json()).data).toEqual({ enabled: false, day: 1 });
+    });
+
+    it("saves only what is sent, validates, and replays an idempotency key", async () => {
+      const { PATCH } = await import("@/app/api/integrations/weekly-review/settings/route");
+      const on = await run(PATCH, req("/settings", "PATCH", { enabled: true }));
+      expect(on.status).toBe(200);
+      expect((await on.json()).data).toEqual({ enabled: true, day: 1 });
+      const sunday = await run(PATCH, req("/settings", "PATCH", { day: 0 }));
+      expect((await sunday.json()).data).toEqual({ enabled: true, day: 0 });
+
+      for (const bad of [{}, { day: 7 }, { day: -1 }, { day: 1.5 }, { enabled: "yes" }, { other: 1 }]) {
+        expect((await run(PATCH, req("/settings", "PATCH", bad))).status).toBe(400);
+      }
+      expect((await run(PATCH, req("/settings", "PATCH", { day: 2 }, { "idempotency-key": "" }))).status).toBe(400);
+
+      const first = await run(PATCH, req("/settings", "PATCH", { day: 3 }, { "idempotency-key": "same-key" }));
+      const replay = await run(PATCH, req("/settings", "PATCH", { day: 3 }, { "idempotency-key": "same-key" }));
+      expect((await first.json()).data).toEqual((await replay.json()).data);
+      const conflict = await run(PATCH, req("/settings", "PATCH", { day: 4 }, { "idempotency-key": "same-key" }));
+      expect(conflict.status).toBe(409);
+    });
+  });
+
+  describe("the notification", () => {
+    // Tuesday 27 Oct 2026, 10:00 in Kolkata; the last completed week is 19 to 25 Oct.
+    const now = new Date("2026-10-27T04:30:00Z");
+    const early = new Date("2026-10-27T02:30:00Z"); // 08:00
+    const tuesday = 2;
+    const notices = async () => {
+      const { default: Notification } = await import("@/models/Notification");
+      return Notification.find({ user: userId, "meta.kind": "weekly_review" }).lean<Array<{ type: string; title: string; body: string }>>();
+    };
+    async function enable(day = tuesday) {
+      const { default: User } = await import("@/models/User");
+      await User.updateOne({ _id: userId }, { $set: { "preferences.weeklyReview": { enabled: true, day } } });
+    }
+
+    it("sends once, on the chosen weekday from 09:00, with the week's spend and a highlight", async () => {
+      const { sendWeeklyReviews } = await import("@/lib/weekly-review");
+      await enable();
+      await txn({ amount: 100000, category: "Food", date: at(20, 12, "10") });
+      await txn({ amount: 150000, category: "Food", date: at(14, 12, "10") }); // the week before
+
+      expect(await sendWeeklyReviews(early)).toEqual({ checked: 1, sent: 0 });
+      expect(await sendWeeklyReviews(now)).toEqual({ checked: 1, sent: 1 });
+      expect(await sendWeeklyReviews(new Date(now.getTime() + 30 * 60_000))).toEqual({ checked: 1, sent: 0 });
+      const sent = await notices();
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({ type: "system", title: "Your week in review" });
+      expect(sent[0].body).toBe("You spent ₹1,000.00 last week. You spent ₹500.00 less than the week before (down 33%).");
+
+      // The next Tuesday is a new week with nothing in it: nothing is sent.
+      expect((await sendWeeklyReviews(new Date(now.getTime() + 7 * 86_400_000))).sent).toBe(0);
+    });
+
+    it("waits for the chosen weekday and skips an empty week", async () => {
+      const { sendWeeklyReviews } = await import("@/lib/weekly-review");
+      await enable(5); // Friday
+      await txn({ amount: 100000, date: at(20, 12, "10") });
+      expect((await sendWeeklyReviews(now)).sent).toBe(0); // Tuesday
+      await enable(tuesday);
+      const { default: Transaction } = await import("@/models/Transaction");
+      await Transaction.deleteMany({ user: userId });
+      expect((await sendWeeklyReviews(now)).sent).toBe(0); // nothing happened that week
+    });
+
+    it("only checks users who turned it on", async () => {
+      const { sendWeeklyReviews } = await import("@/lib/weekly-review");
+      await txn({ amount: 100000, date: at(20, 12, "10") });
+      expect(await sendWeeklyReviews(now)).toEqual({ checked: 0, sent: 0 });
+      expect(await notices()).toHaveLength(0);
+    });
+
+    it("uses each user's time zone for the weekday and 09:00", async () => {
+      const { sendWeeklyReviews } = await import("@/lib/weekly-review");
+      const { default: User } = await import("@/models/User");
+      await enable();
+      await User.updateOne({ _id: userId }, { $set: { "preferences.timezone": "America/New_York" } });
+      await txn({ amount: 100000, date: new Date("2026-10-20T16:00:00Z") });
+      // 10:00 Kolkata Tuesday is 00:30 Tuesday in New York: before 09:00.
+      expect((await sendWeeklyReviews(now)).sent).toBe(0);
+      // 14:00Z is 10:00 Tuesday in New York.
+      expect((await sendWeeklyReviews(new Date("2026-10-27T14:00:00Z"))).sent).toBe(1);
+    });
+
+    it("the cron route needs the secret and reports what it did", async () => {
+      process.env.CRON_SECRET = "cron-secret-for-tests";
+      const { GET } = await import("@/app/api/cron/weekly-review/route");
+      const call = (headers: Record<string, string> = {}) => GET(new NextRequest("http://localhost/api/cron/weekly-review", { headers }));
+      expect((await call()).status).toBe(401);
+      expect((await call({ authorization: "Bearer wrong" })).status).toBe(401);
+      const ok = await call({ authorization: "Bearer cron-secret-for-tests" });
+      expect(ok.status).toBe(200);
+      expect(await ok.json()).toEqual({ ok: true, checked: 0, sent: 0 });
+    });
+  });
+
+  it("the browser route returns the same review for the signed-in user", async () => {
+    const { GET } = await import("@/app/api/weekly-review/route");
+    sessionUser.current = null;
+    expect((await GET(new NextRequest(`http://localhost/api/weekly-review?week=${WEEK}`))).status).toBe(401);
+    sessionUser.current = { id: userId, name: "Review User", email: "wr@x.com", role: "user" };
+    await txn({ amount: 50000, category: "Food", date: at(6) });
+    const res = await GET(new NextRequest(`http://localhost/api/weekly-review?week=${WEEK}`));
+    expect(res.status).toBe(200);
+    expect((await res.json()).data.totals.spent).toBe(50000);
+    expect((await GET(new NextRequest("http://localhost/api/weekly-review?week=bad"))).status).toBe(400);
+    sessionUser.current = null;
+  });
+});

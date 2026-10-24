@@ -6,6 +6,7 @@ Purpose: API-key surface for n8n and the Android companion app. Contracts: [docs
 - credit-cards/summary and credit-cards/[accountId]/statements: read-only card dues and statements. credit-cards/rewards (GET) and credit-cards/[accountId]/rewards (GET, PUT, DELETE with `Idempotency-Key`): reward rule and the earned estimate per billing cycle.
 - forecast (GET `?days`): cash flow forecast over cash-flow-forecast.ts; read-only. `src/app/api/forecast` is the browser twin.
 - bills (GET list, `[id]/pay` POST, `settings` GET PATCH): upcoming bills and reminder settings over bills.ts.
+- weekly-review (GET one week's look back, `settings` GET PATCH): over weekly-review.ts.
 - loans (+ `[id]`, `[id]/repayments`): loan CRUD and repayments over loan-service.
 - transfers (POST, `[id]` GET PATCH DELETE): money between own accounts over transfer-service. `transactions` GET also takes `includeIncomingTransfers`.
 - rules (+ `[id]`, `test`): categorise rules over rule-service; `test` is a read-only dry run.

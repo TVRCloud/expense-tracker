@@ -50,6 +50,19 @@ export function localMidnight(timeZone: string, year: number, month: number, day
   return new Date(wall - offsetAt(first, timeZone));
 }
 
+/** The calendar date on the user's wall clock at this instant (dayOfWeek: 0 is Sunday). */
+export function localDate(date: Date, timeZone: string) {
+  const tz = isValidTimeZone(timeZone) ? timeZone : DEFAULT_TIME_ZONE;
+  const { year, month, day, dayOfWeek } = localParts(date, tz);
+  return { year, month, day, dayOfWeek };
+}
+
+/** "YYYY-MM-DD" for the user's wall-clock date at this instant. */
+export function localDateKey(date: Date, timeZone: string) {
+  const { year, month, day } = localDate(date, timeZone);
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 /** The hour (0-23) on the user's wall clock. */
 export function localHour(now: Date, timeZone: string) {
   const tz = isValidTimeZone(timeZone) ? timeZone : DEFAULT_TIME_ZONE;

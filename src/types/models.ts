@@ -46,6 +46,8 @@ export interface UserPreferences {
   timezone?: string;
   /** Remind before a bill is due; off until turned on. */
   billReminders?: { enabled: boolean; leadDays: number };
+  /** Weekly review notification; off until turned on. day: 0 Sunday to 6 Saturday. */
+  weeklyReview?: { enabled: boolean; day: number };
 }
 
 export interface IUser {
