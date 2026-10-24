@@ -18,6 +18,7 @@ export const INVALIDATION_MAP: Readonly<Record<RealtimeResource, readonly (reado
     ["reconcile"],
     ["notifications"],
     ["subscriptions"],
+    ["savings-rate"],
   ],
   accounts: [["accounts"], ["credit-summary"], ["credit-statements"]],
   budgets: [["budgets"], ["notifications"]],
@@ -29,6 +30,7 @@ export const INVALIDATION_MAP: Readonly<Record<RealtimeResource, readonly (reado
   statements: [["credit-statements"], ["credit-summary"], ["notifications"]],
   spendLimits: [["spend-limit"], ["budgets"]],
   subscriptions: [["subscriptions"]],
+  sinkingFunds: [["sinking-funds"], ["notifications"]],
 };
 
 export function isRealtimeResource(value: unknown): value is RealtimeResource {

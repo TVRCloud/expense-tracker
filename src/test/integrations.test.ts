@@ -5027,3 +5027,413 @@ describe("cash flow forecast", () => {
     });
   });
 });
+
+// ── sinking funds and savings rate ─────────────────────────────────────────
+
+describe("sinking fund maths", () => {
+  const base = (over: Record<string, unknown> = {}) => ({
+    _id: "f1",
+    name: "Insurance",
+    targetAmount: 120000,
+    savedAmount: 0,
+    dueDate: new Date("2026-12-15T00:00:00Z"),
+    createdAt: new Date("2026-06-15T00:00:00Z"),
+    ...over,
+  });
+
+  it("monthsUntil counts calendar months and stops at 0", async () => {
+    const { monthsUntil } = await import("@/lib/sinking-fund-service");
+    const now = new Date("2026-10-20T10:00:00Z");
+    expect(monthsUntil(new Date("2026-12-05T00:00:00Z"), now)).toBe(2);
+    expect(monthsUntil(new Date("2027-01-31T00:00:00Z"), now)).toBe(3);
+    expect(monthsUntil(new Date("2026-10-28T00:00:00Z"), now)).toBe(0);
+    expect(monthsUntil(new Date("2026-01-01T00:00:00Z"), now)).toBe(0);
+  });
+
+  it("suggests what is left spread over the months left, rounded up, and all of it when none are left", async () => {
+    const { describeFund } = await import("@/lib/sinking-fund-service");
+    const now = new Date("2026-10-20T10:00:00Z");
+    const v = describeFund(base({ savedAmount: 20000 }), now);
+    expect(v).toMatchObject({ remaining: 100000, percent: 16, monthsLeft: 2, suggestedMonthly: 50000 });
+    const odd = describeFund(base({ targetAmount: 100001 }), now);
+    expect(odd.suggestedMonthly).toBe(50001);
+    const inDueMonth = describeFund(base({ dueDate: new Date("2026-10-28T00:00:00Z") }), now);
+    expect(inDueMonth).toMatchObject({ monthsLeft: 0, suggestedMonthly: 120000 });
+  });
+
+  it("status: done, overdue, on_track against a straight line, behind", async () => {
+    const { describeFund } = await import("@/lib/sinking-fund-service");
+    const now = new Date("2026-09-15T00:00:00Z"); // 3 of 6 months in: half of 120000
+    expect(describeFund(base({ savedAmount: 120000 }), now).status).toBe("done");
+    expect(describeFund(base({ savedAmount: 130000 }), now)).toMatchObject({ status: "done", remaining: 0, percent: 100, suggestedMonthly: 0 });
+    // 92 of 183 days in: the line is at 60328
+    expect(describeFund(base({ savedAmount: 61000 }), now).status).toBe("on_track");
+    expect(describeFund(base({ savedAmount: 60000 }), now).status).toBe("behind");
+    expect(describeFund(base({ savedAmount: 10 }), new Date("2027-01-02T00:00:00Z")).status).toBe("overdue");
+  });
+
+  it("totals add up and monthlyNeeded uses the plan when there is one and skips finished funds", async () => {
+    const { describeFund, totalFunds } = await import("@/lib/sinking-fund-service");
+    const now = new Date("2026-10-20T10:00:00Z");
+    const funds = [
+      describeFund(base({ _id: "a", savedAmount: 20000 }), now), // needs 50000
+      describeFund(base({ _id: "b", monthlyAmount: 7000 }), now), // plan 7000
+      describeFund(base({ _id: "c", savedAmount: 120000 }), now), // done
+    ];
+    expect(totalFunds(funds)).toEqual({ count: 3, targetAmount: 360000, savedAmount: 140000, remaining: 220000, monthlyNeeded: 57000 });
+  });
+});
+
+describe("savings rate maths", () => {
+  it("rate is saved over income, null without income, and negative when overspent", async () => {
+    const { savingsPoint, ratio } = await import("@/lib/savings-rate");
+    expect(savingsPoint({ year: 2026, month: 10 }, 100000, 75000)).toMatchObject({ saved: 25000, rate: 0.25 });
+    expect(savingsPoint({ year: 2026, month: 10 }, 0, 5000)).toMatchObject({ saved: -5000, rate: null });
+    expect(savingsPoint({ year: 2026, month: 10 }, 100000, 130000).rate).toBe(-0.3);
+    expect(ratio(1, 3)).toBe(0.3333);
+  });
+
+  it("lastMonths ends at the current month, oldest first, across a year boundary", async () => {
+    const { lastMonths } = await import("@/lib/savings-rate");
+    expect(lastMonths(3, new Date(2026, 0, 20))).toEqual([
+      { year: 2025, month: 11 },
+      { year: 2025, month: 12 },
+      { year: 2026, month: 1 },
+    ]);
+  });
+
+  it("trend compares the latest three months with the three before, and is null with too little to compare", async () => {
+    const { savingsPoint, savingsTrend } = await import("@/lib/savings-rate");
+    const pts = (rates: Array<number | null>) =>
+      rates.map((r, i) => savingsPoint({ year: 2026, month: i + 1 }, r === null ? 0 : 100000, r === null ? 0 : 100000 * (1 - r)));
+    expect(savingsTrend(pts([0.1, 0.1, 0.1, 0.3, 0.3, 0.3]))).toBe("up");
+    expect(savingsTrend(pts([0.3, 0.3, 0.3, 0.1, 0.1, 0.1]))).toBe("down");
+    expect(savingsTrend(pts([0.2, 0.2, 0.2, 0.21, 0.2, 0.2]))).toBe("flat");
+    expect(savingsTrend(pts([0.1, 0.3]))).toBe("up");
+    expect(savingsTrend(pts([0.2]))).toBeNull();
+    expect(savingsTrend(pts([null, null, 0.2]))).toBeNull();
+  });
+});
+
+describe("integration sinking funds", () => {
+  const KEY = "test-sinking-funds-api-key";
+  let userId: string;
+  let otherUserId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "SF User", email: `sf${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `sfo${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+  });
+
+  function req(path: string, method: "GET" | "POST" | "PATCH" | "DELETE", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/${path}`, {
+      method,
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json", "idempotency-key": `sf-key-${n}`, ...headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+  const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+  // A fixed time of day so the same call twice sends the same body (the idempotency fingerprint).
+  const inMonths = (months: number) => {
+    const d = new Date();
+    d.setUTCMonth(d.getUTCMonth() + months, 15);
+    d.setUTCHours(0, 0, 0, 0);
+    return d.toISOString();
+  };
+  const fundBody = (over: Record<string, unknown> = {}) => ({ name: "Insurance", targetAmount: 120000, dueDate: inMonths(6), ...over });
+
+  async function create(over: Record<string, unknown> = {}, headers: Record<string, string> = {}) {
+    const { POST } = await import("@/app/api/integrations/sinking-funds/route");
+    return POST(req("sinking-funds", "POST", fundBody(over), headers), {});
+  }
+  async function contribute(id: string, amount: number, headers: Record<string, string> = {}) {
+    const { POST } = await import("@/app/api/integrations/sinking-funds/[id]/contribute/route");
+    return POST(req(`sinking-funds/${id}/contribute`, "POST", { amount }, headers), ctx(id));
+  }
+
+  it("POST creates a fund with its computed fields, and replays on the same key", async () => {
+    const { default: SinkingFund } = await import("@/models/SinkingFund");
+    const first = await create({ savedAmount: 20000 }, { "idempotency-key": "mk" });
+    expect(first.status).toBe(201);
+    const { data } = await first.json();
+    expect(data).toMatchObject({
+      name: "Insurance",
+      targetAmount: 120000,
+      savedAmount: 20000,
+      currency: "INR",
+      monthlyAmount: null,
+      remaining: 100000,
+      percent: 16,
+      isCompleted: false,
+    });
+    expect(data.monthsLeft).toBeGreaterThanOrEqual(5);
+    expect(data.suggestedMonthly).toBe(Math.ceil(100000 / data.monthsLeft));
+    expect(["on_track", "behind"]).toContain(data.status);
+
+    const replay = await create({ savedAmount: 20000 }, { "idempotency-key": "mk" });
+    expect((await replay.json()).data.id).toBe(data.id);
+    expect(await SinkingFund.countDocuments({ user: userId })).toBe(1);
+
+    const clash = await create({ name: "Other" }, { "idempotency-key": "mk" });
+    expect(clash.status).toBe(409);
+  });
+
+  it("POST rejects bad bodies and a missing key", async () => {
+    const { POST } = await import("@/app/api/integrations/sinking-funds/route");
+    expect((await create({ name: "" })).status).toBe(400);
+    expect((await create({ targetAmount: 0 })).status).toBe(400);
+    expect((await create({ targetAmount: 10.5 })).status).toBe(400);
+    expect((await create({ dueDate: "not a date" })).status).toBe(400);
+    expect((await create({ monthlyAmount: -1 })).status).toBe(400);
+    const noKey = new NextRequest("http://localhost/api/integrations/sinking-funds", {
+      method: "POST",
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
+      body: JSON.stringify(fundBody()),
+    });
+    expect((await POST(noKey, {})).status).toBe(400);
+  });
+
+  it("a fund created already at its target is done", async () => {
+    const res = await create({ savedAmount: 120000 });
+    expect((await res.json()).data).toMatchObject({ isCompleted: true, status: "done", remaining: 0, suggestedMonthly: 0 });
+  });
+
+  it("GET lists funds soonest due first with totals, and never another user's", async () => {
+    const { GET } = await import("@/app/api/integrations/sinking-funds/route");
+    const { default: SinkingFund } = await import("@/models/SinkingFund");
+    await create({ name: "Later", dueDate: inMonths(9) });
+    await create({ name: "Sooner", dueDate: inMonths(3), savedAmount: 30000 });
+    await SinkingFund.create({ user: otherUserId, name: "Theirs", targetAmount: 999, dueDate: new Date(), savedAmount: 0 });
+
+    const res = await GET(req("sinking-funds", "GET"), {});
+    expect(res.status).toBe(200);
+    const { data } = await res.json();
+    expect(data.funds.map((f: { name: string }) => f.name)).toEqual(["Sooner", "Later"]);
+    expect(data.totals).toMatchObject({ count: 2, targetAmount: 240000, savedAmount: 30000, remaining: 210000 });
+    expect(data.totals.monthlyNeeded).toBeGreaterThan(0);
+  });
+
+  it("GET one, PATCH, and ownership", async () => {
+    const { GET, PATCH } = await import("@/app/api/integrations/sinking-funds/[id]/route");
+    const { default: SinkingFund } = await import("@/models/SinkingFund");
+    const { data } = await (await create()).json();
+    const id = data.id as string;
+
+    const one = await GET(req(`sinking-funds/${id}`, "GET"), ctx(id));
+    expect((await one.json()).data.name).toBe("Insurance");
+
+    const edit = await PATCH(req(`sinking-funds/${id}`, "PATCH", { name: "Car insurance", monthlyAmount: 15000, targetAmount: 150000 }), ctx(id));
+    expect(edit.status).toBe(200);
+    expect((await edit.json()).data).toMatchObject({ name: "Car insurance", monthlyAmount: 15000, targetAmount: 150000, remaining: 150000 });
+    const cleared = await PATCH(req(`sinking-funds/${id}`, "PATCH", { monthlyAmount: null }), ctx(id));
+    expect((await cleared.json()).data.monthlyAmount).toBeNull();
+
+    expect((await PATCH(req(`sinking-funds/${id}`, "PATCH", {}), ctx(id))).status).toBe(400);
+    expect((await PATCH(req(`sinking-funds/${id}`, "PATCH", { savedAmount: 5 }), ctx(id))).status).toBe(400);
+    expect((await GET(req("sinking-funds/nope", "GET"), ctx("nope"))).status).toBe(400);
+
+    const theirs = await SinkingFund.create({ user: otherUserId, name: "Theirs", targetAmount: 999, dueDate: new Date(), savedAmount: 0 });
+    const tid = theirs._id.toString();
+    expect((await GET(req(`sinking-funds/${tid}`, "GET"), ctx(tid))).status).toBe(404);
+    expect((await PATCH(req(`sinking-funds/${tid}`, "PATCH", { name: "Mine now" }), ctx(tid))).status).toBe(404);
+    expect((await contribute(tid, 100)).status).toBe(404);
+    expect((await SinkingFund.findById(tid).lean<{ name: string }>())!.name).toBe("Theirs");
+  });
+
+  it("contribute adds once per key, takes money out down to 0, and rejects 0", async () => {
+    const { data } = await (await create({ savedAmount: 10000 })).json();
+    const id = data.id as string;
+
+    const add = await contribute(id, 25000, { "idempotency-key": "c1" });
+    expect(add.status).toBe(200);
+    expect((await add.json()).data).toMatchObject({ savedAmount: 35000, remaining: 85000, percent: 29 });
+    const replay = await contribute(id, 25000, { "idempotency-key": "c1" });
+    expect((await replay.json()).data.savedAmount).toBe(35000);
+
+    const take = await contribute(id, -5000);
+    expect((await take.json()).data.savedAmount).toBe(30000);
+    const floor = await contribute(id, -999999);
+    expect((await floor.json()).data.savedAmount).toBe(0);
+
+    expect((await contribute(id, 0)).status).toBe(400);
+    expect((await contribute(id, 1.5)).status).toBe(400);
+  });
+
+  it("reaching the target completes the fund and notifies once; taking money out reopens it", async () => {
+    const { default: Notification } = await import("@/models/Notification");
+    const { default: SinkingFund } = await import("@/models/SinkingFund");
+    const { data } = await (await create({ savedAmount: 100000 })).json();
+    const id = data.id as string;
+
+    const done = await contribute(id, 20000);
+    expect((await done.json()).data).toMatchObject({ isCompleted: true, status: "done", remaining: 0 });
+    expect(await Notification.countDocuments({ user: userId, "meta.sinkingFundId": id })).toBe(1);
+    expect((await SinkingFund.findById(id).lean<{ completedAt?: Date }>())!.completedAt).toBeInstanceOf(Date);
+
+    await contribute(id, 5000); // still done: no second notification
+    expect(await Notification.countDocuments({ user: userId, "meta.sinkingFundId": id })).toBe(1);
+
+    const reopened = await contribute(id, -50000);
+    expect((await reopened.json()).data).toMatchObject({ isCompleted: false, completedAt: null });
+    expect((await SinkingFund.findById(id).lean<{ completedAt?: Date }>())!.completedAt).toBeUndefined();
+  });
+
+  it("DELETE soft-deletes, replays, and the fund leaves the list", async () => {
+    const { DELETE } = await import("@/app/api/integrations/sinking-funds/[id]/route");
+    const { GET } = await import("@/app/api/integrations/sinking-funds/route");
+    const { default: SinkingFund } = await import("@/models/SinkingFund");
+    const { data } = await (await create()).json();
+    const id = data.id as string;
+
+    const del = await DELETE(req(`sinking-funds/${id}`, "DELETE", undefined, { "idempotency-key": "d1" }), ctx(id));
+    expect(del.status).toBe(200);
+    expect((await del.json()).data).toEqual({ id, deleted: true });
+    expect((await DELETE(req(`sinking-funds/${id}`, "DELETE", undefined, { "idempotency-key": "d1" }), ctx(id))).status).toBe(200);
+    expect((await DELETE(req(`sinking-funds/${id}`, "DELETE"), ctx(id))).status).toBe(404);
+    expect((await SinkingFund.findById(id).lean<{ isDeleted?: boolean }>())!.isDeleted).toBe(true);
+    expect((await (await GET(req("sinking-funds", "GET"), {})).json()).data.funds).toEqual([]);
+  });
+
+  it("announces itself on realtime: its collection maps to the sinkingFunds resource", async () => {
+    const { resourcesChangedSince } = await import("@/lib/realtime/changed-since");
+    const before = new Date(Date.now() - 1000);
+    await create();
+    expect(await resourcesChangedSince(userId, before)).toContain("sinkingFunds");
+    expect(await resourcesChangedSince(otherUserId, before)).not.toContain("sinkingFunds");
+  });
+
+  it("the browser routes list and create for the signed-in user", async () => {
+    const { GET, POST } = await import("@/app/api/sinking-funds/route");
+    sessionUser.current = { id: userId, name: "SF User", email: "sf@x.com", role: "user" };
+    const made = await POST(
+      new NextRequest("http://localhost/api/sinking-funds", { method: "POST", body: JSON.stringify(fundBody({ name: "Tax" })) })
+    );
+    expect(made.status).toBe(201);
+    const list = await (await GET()).json();
+    expect(list.data.funds.map((f: { name: string }) => f.name)).toEqual(["Tax"]);
+    const bad = await POST(new NextRequest("http://localhost/api/sinking-funds", { method: "POST", body: JSON.stringify({}) }));
+    expect(bad.status).toBe(400);
+    sessionUser.current = null;
+    expect((await GET()).status).toBe(401);
+  });
+});
+
+describe("integration savings rate", () => {
+  const KEY = "test-savings-rate-api-key";
+  let userId: string;
+  let otherUserId: string;
+  let accountId: string;
+  let otherAccountId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { default: Account } = await import("@/models/Account");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "SR User", email: `sr${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `sro${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    const account = await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 0, currency: "INR" });
+    const wallet = await Account.create({ user: user._id, name: "Wallet", type: "cash", balance: 0, currency: "INR" });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+    accountId = account._id.toString();
+    otherAccountId = wallet._id.toString();
+  });
+
+  const call = async (query = "") => {
+    n += 1;
+    const { GET } = await import("@/app/api/integrations/savings-rate/route");
+    return GET(
+      new NextRequest(`http://localhost/api/integrations/savings-rate${query}`, { headers: { authorization: `Bearer ${KEY}` } }),
+      {}
+    );
+  };
+  async function add(type: "income" | "expense" | "transfer", amount: number, monthsAgo: number, extra: Record<string, unknown> = {}, user = userId) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const now = new Date();
+    return Transaction.create({
+      user,
+      account: accountId,
+      type,
+      amount,
+      currency: "INR",
+      category: type === "income" ? "salary" : "food",
+      date: new Date(now.getFullYear(), now.getMonth() - monthsAgo, 10, 12),
+      ...extra,
+    });
+  }
+
+  it("answers one entry per month, oldest first, ending with this month", async () => {
+    const res = await call("?months=3");
+    expect(res.status).toBe(200);
+    const { data } = await res.json();
+    expect(data.months).toHaveLength(3);
+    const now = new Date();
+    expect(data.months[2]).toMatchObject({ year: now.getFullYear(), month: now.getMonth() + 1 });
+    expect(data.current).toEqual(data.months[2]);
+    expect(data.months.every((m: { rate: number | null }) => m.rate === null)).toBe(true);
+    expect(data.average).toEqual({ income: 0, expense: 0, saved: 0, rate: null });
+    expect(data.trend).toBeNull();
+  });
+
+  it("income minus spending over income, per month, with the average over the window", async () => {
+    await add("income", 100000, 0);
+    await add("expense", 40000, 0);
+    await add("income", 100000, 1);
+    await add("expense", 80000, 1);
+    await add("expense", 5000, 2); // spent with no income that month
+    const { data } = await (await call("?months=3")).json();
+    expect(data.months[2]).toMatchObject({ income: 100000, expense: 40000, saved: 60000, rate: 0.6 });
+    expect(data.months[1]).toMatchObject({ income: 100000, expense: 80000, saved: 20000, rate: 0.2 });
+    expect(data.months[0]).toMatchObject({ income: 0, expense: 5000, saved: -5000, rate: null });
+    expect(data.average).toEqual({ income: 200000, expense: 125000, saved: 75000, rate: 0.375 });
+    expect(data.trend).toBe("up");
+  });
+
+  it("transfers between accounts do not count, and a confirmed refund comes off spending", async () => {
+    await add("income", 100000, 0);
+    await add("expense", 30000, 0);
+    await add("transfer", 50000, 0, { transferTo: otherAccountId });
+    await add("income", 10000, 0, { refundStatus: "confirmed", category: "food" });
+    const { data } = await (await call("?months=1")).json();
+    expect(data.months[0]).toMatchObject({ income: 100000, expense: 20000, saved: 80000, rate: 0.8 });
+  });
+
+  it("is per user and validates months", async () => {
+    await add("income", 100000, 0, {}, otherUserId);
+    const { default: Account } = await import("@/models/Account");
+    expect(await Account.countDocuments({ user: otherUserId })).toBe(0); // the row above has no account of theirs: ignored by user
+    const { data } = await (await call("?months=1")).json();
+    expect(data.months[0].income).toBe(0);
+    expect((await call("?months=0")).status).toBe(400);
+    expect((await call("?months=25")).status).toBe(400);
+    expect((await call("?months=abc")).status).toBe(400);
+    expect((await call("?months=1.5")).status).toBe(400);
+    expect((await (await call()).json()).data.months).toHaveLength(6);
+  });
+
+  it("the browser route answers the same view", async () => {
+    const { GET } = await import("@/app/api/savings-rate/route");
+    await add("income", 100000, 0);
+    await add("expense", 25000, 0);
+    sessionUser.current = { id: userId, name: "SR User", email: "sr@x.com", role: "user" };
+    const res = await GET(new NextRequest("http://localhost/api/savings-rate?months=2"));
+    expect(res.status).toBe(200);
+    expect((await res.json()).data.current).toMatchObject({ income: 100000, expense: 25000, rate: 0.75 });
+    expect((await GET(new NextRequest("http://localhost/api/savings-rate?months=99"))).status).toBe(400);
+    sessionUser.current = null;
+    expect((await GET(new NextRequest("http://localhost/api/savings-rate"))).status).toBe(401);
+  });
+});

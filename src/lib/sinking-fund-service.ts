@@ -1,0 +1,291 @@
+import { z } from "zod";
+import connectDB from "@/lib/mongodb";
+import SinkingFund from "@/models/SinkingFund";
+import Notification from "@/models/Notification";
+
+// Sinking funds: money put aside each month for a cost with a due date.
+// Shared by the browser routes (/api/sinking-funds) and the integration
+// routes (/api/integrations/sinking-funds). Reads add computed fields (see
+// describeFund) so clients show the same numbers without redoing the maths.
+
+const dateString = z
+  .string()
+  .refine((v) => !Number.isNaN(new Date(v).getTime()), "Enter a valid date");
+
+export const sinkingFundCreateSchema = z.object({
+  name: z.string().min(1, "Name your fund").max(100),
+  targetAmount: z.number().int().positive("Enter a target greater than 0"),
+  savedAmount: z.number().int().min(0).default(0),
+  dueDate: dateString,
+  monthlyAmount: z.number().int().positive().optional(),
+  icon: z.string().max(16).optional(),
+});
+
+export const sinkingFundUpdateSchema = z
+  .object({
+    name: z.string().min(1).max(100).optional(),
+    targetAmount: z.number().int().positive().optional(),
+    dueDate: dateString.optional(),
+    // null clears the plan so the suggested amount applies again.
+    monthlyAmount: z.number().int().positive().nullable().optional(),
+    icon: z.string().max(16).optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, "Nothing to update");
+
+// Negative takes money out (a spend from the fund); the balance never goes
+// below zero.
+export const sinkingFundContributeSchema = z.object({
+  amount: z
+    .number()
+    .int()
+    .refine((v) => v !== 0, "Amount cannot be 0"),
+});
+
+export class SinkingFundError extends Error {
+  code: "FUND_NOT_FOUND";
+  constructor(message = "Sinking fund not found") {
+    super(message);
+    this.code = "FUND_NOT_FOUND";
+    this.name = "SinkingFundError";
+  }
+}
+
+export type FundStatus = "done" | "on_track" | "behind" | "overdue";
+
+export interface FundRecord {
+  _id: unknown;
+  name: string;
+  targetAmount: number;
+  savedAmount: number;
+  currency?: string;
+  dueDate: Date;
+  monthlyAmount?: number | null;
+  icon?: string | null;
+  isCompleted?: boolean;
+  completedAt?: Date | null;
+  createdAt: Date;
+  updatedAt?: Date;
+}
+
+export interface FundView {
+  id: string;
+  name: string;
+  targetAmount: number;
+  savedAmount: number;
+  currency: string;
+  dueDate: string;
+  monthlyAmount: number | null;
+  icon: string | null;
+  isCompleted: boolean;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+  /** Still to save, never below 0. */
+  remaining: number;
+  /** Whole percent saved, capped at 100. */
+  percent: number;
+  /** Whole months from the current month to the due month (0 in the due month or later). */
+  monthsLeft: number;
+  /** What would reach the target by the due date: remaining spread over the months left (all of it when none are left). */
+  suggestedMonthly: number;
+  status: FundStatus;
+}
+
+// Calendar months between "now" and the due date, counted month to month so
+// a fund due on the 5th of next month has 1 month left from the 20th of this
+// one, and 0 once the due month is reached.
+export function monthsUntil(due: Date, now: Date): number {
+  const diff = (due.getUTCFullYear() - now.getUTCFullYear()) * 12 + (due.getUTCMonth() - now.getUTCMonth());
+  return Math.max(0, diff);
+}
+
+// Pure: the same fund and clock always give the same view.
+//   done      saved >= target
+//   overdue   due date passed and not done
+//   on_track  saved >= what a straight line from creation to the due date
+//             would have by now
+//   behind    otherwise
+export function describeFund(fund: FundRecord, now: Date = new Date()): FundView {
+  const due = new Date(fund.dueDate);
+  const created = new Date(fund.createdAt);
+  const remaining = Math.max(0, fund.targetAmount - fund.savedAmount);
+  const percent = fund.targetAmount > 0 ? Math.min(100, Math.floor((fund.savedAmount / fund.targetAmount) * 100)) : 0;
+  const monthsLeft = monthsUntil(due, now);
+  const suggestedMonthly = remaining === 0 ? 0 : Math.ceil(remaining / Math.max(1, monthsLeft));
+
+  let status: FundStatus;
+  if (fund.savedAmount >= fund.targetAmount) {
+    status = "done";
+  } else if (due.getTime() < now.getTime()) {
+    status = "overdue";
+  } else {
+    const total = due.getTime() - created.getTime();
+    const elapsed = Math.min(Math.max(now.getTime() - created.getTime(), 0), Math.max(total, 0));
+    const expected = total > 0 ? Math.round(fund.targetAmount * (elapsed / total)) : fund.targetAmount;
+    status = fund.savedAmount >= expected ? "on_track" : "behind";
+  }
+
+  return {
+    id: String(fund._id),
+    name: fund.name,
+    targetAmount: fund.targetAmount,
+    savedAmount: fund.savedAmount,
+    currency: fund.currency ?? "INR",
+    dueDate: due.toISOString(),
+    monthlyAmount: fund.monthlyAmount ?? null,
+    icon: fund.icon ?? null,
+    isCompleted: fund.savedAmount >= fund.targetAmount,
+    completedAt: fund.completedAt ? new Date(fund.completedAt).toISOString() : null,
+    createdAt: created.toISOString(),
+    updatedAt: fund.updatedAt ? new Date(fund.updatedAt).toISOString() : null,
+    remaining,
+    percent,
+    monthsLeft,
+    suggestedMonthly,
+    status,
+  };
+}
+
+export interface FundTotals {
+  count: number;
+  targetAmount: number;
+  savedAmount: number;
+  remaining: number;
+  /** What to put aside this month across the funds that are not done: each fund's own plan, else its suggestion. */
+  monthlyNeeded: number;
+}
+
+export function totalFunds(funds: FundView[]): FundTotals {
+  const open = funds.filter((f) => f.status !== "done");
+  return {
+    count: funds.length,
+    targetAmount: funds.reduce((s, f) => s + f.targetAmount, 0),
+    savedAmount: funds.reduce((s, f) => s + f.savedAmount, 0),
+    remaining: funds.reduce((s, f) => s + f.remaining, 0),
+    monthlyNeeded: open.reduce((s, f) => s + (f.monthlyAmount ?? f.suggestedMonthly), 0),
+  };
+}
+
+const notDeleted = { isDeleted: { $ne: true } };
+
+export async function listSinkingFunds(userId: string, now: Date = new Date()) {
+  await connectDB();
+  const docs = await SinkingFund.find({ user: userId, ...notDeleted })
+    .sort({ dueDate: 1, createdAt: 1 })
+    .lean<FundRecord[]>();
+  const funds = docs.map((d) => describeFund(d, now));
+  return { funds, totals: totalFunds(funds) };
+}
+
+export async function getSinkingFund(userId: string, id: string, now: Date = new Date()) {
+  await connectDB();
+  const doc = await SinkingFund.findOne({ _id: id, user: userId, ...notDeleted }).lean<FundRecord>();
+  if (!doc) throw new SinkingFundError();
+  return describeFund(doc, now);
+}
+
+export type CreateSinkingFundInput = z.infer<typeof sinkingFundCreateSchema> & { userId: string };
+
+export async function createSinkingFund(input: CreateSinkingFundInput, now: Date = new Date()) {
+  const { userId, dueDate, ...rest } = input;
+  await connectDB();
+  const reached = rest.savedAmount >= rest.targetAmount;
+  const doc = await SinkingFund.create({
+    ...rest,
+    user: userId,
+    dueDate: new Date(dueDate),
+    isCompleted: reached,
+    completedAt: reached ? now : undefined,
+  });
+  return describeFund(doc.toObject() as FundRecord, now);
+}
+
+export type UpdateSinkingFundInput = z.infer<typeof sinkingFundUpdateSchema> & { userId: string; fundId: string };
+
+export async function updateSinkingFund(input: UpdateSinkingFundInput, now: Date = new Date()) {
+  const { userId, fundId, ...changes } = input;
+  await connectDB();
+  const filter = { _id: fundId, user: userId, ...notDeleted };
+  const before = await SinkingFund.findOne(filter).lean<FundRecord>();
+  if (!before) throw new SinkingFundError();
+
+  const set: Record<string, unknown> = {};
+  const unset: Record<string, 1> = {};
+  if (changes.name !== undefined) set.name = changes.name;
+  if (changes.targetAmount !== undefined) set.targetAmount = changes.targetAmount;
+  if (changes.dueDate !== undefined) set.dueDate = new Date(changes.dueDate);
+  if (changes.icon !== undefined) set.icon = changes.icon;
+  if (changes.monthlyAmount === null) unset.monthlyAmount = 1;
+  else if (changes.monthlyAmount !== undefined) set.monthlyAmount = changes.monthlyAmount;
+
+  // A new target can reach or reopen the fund.
+  const target = changes.targetAmount ?? before.targetAmount;
+  const reached = before.savedAmount >= target;
+  set.isCompleted = reached;
+  if (reached && !before.isCompleted) set.completedAt = now;
+
+  const update: Record<string, unknown> = { $set: set };
+  if (Object.keys(unset).length > 0) update.$unset = unset;
+  if (!reached && before.isCompleted) update.$unset = { ...(update.$unset as object), completedAt: 1 };
+
+  const doc = await SinkingFund.findOneAndUpdate(filter, update, { new: true }).lean<FundRecord>();
+  if (!doc) throw new SinkingFundError();
+  if (reached && !before.isCompleted) await notifyReached(userId, doc);
+  return describeFund(doc, now);
+}
+
+// Adds to (or takes from) the balance atomically, so two phones saving at once
+// both count. The balance is floored at 0 with a pipeline update, not a read
+// then write.
+export async function contributeToSinkingFund(
+  input: { userId: string; fundId: string; amount: number },
+  now: Date = new Date()
+) {
+  const { userId, fundId, amount } = input;
+  await connectDB();
+  const filter = { _id: fundId, user: userId, ...notDeleted };
+  const before = await SinkingFund.findOne(filter).lean<FundRecord>();
+  if (!before) throw new SinkingFundError();
+
+  const doc = await SinkingFund.findOneAndUpdate(
+    filter,
+    [
+      { $set: { savedAmount: { $max: [0, { $add: ["$savedAmount", amount] }] } } },
+      { $set: { isCompleted: { $gte: ["$savedAmount", "$targetAmount"] } } },
+    ],
+    { new: true, updatePipeline: true }
+  ).lean<FundRecord>();
+  if (!doc) throw new SinkingFundError();
+
+  // Stamp or clear the completion time to match the new state.
+  const reached = doc.savedAmount >= doc.targetAmount;
+  let final = doc;
+  if (reached && !before.isCompleted) {
+    final = (await SinkingFund.findOneAndUpdate(filter, { $set: { completedAt: now } }, { new: true }).lean<FundRecord>()) ?? doc;
+    await notifyReached(userId, final);
+  } else if (!reached && before.isCompleted) {
+    final = (await SinkingFund.findOneAndUpdate(filter, { $unset: { completedAt: 1 } }, { new: true }).lean<FundRecord>()) ?? doc;
+  }
+  return describeFund(final, now);
+}
+
+export async function deleteSinkingFund(userId: string, fundId: string) {
+  await connectDB();
+  const filter = { _id: fundId, user: userId, ...notDeleted };
+  const doc = await SinkingFund.findOneAndUpdate(
+    filter,
+    { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: userId } },
+    { new: true }
+  ).lean();
+  if (!doc) throw new SinkingFundError();
+}
+
+async function notifyReached(userId: string, fund: FundRecord) {
+  await Notification.create({
+    user: userId,
+    type: "goal_reached",
+    title: "Fund fully saved",
+    body: `Your "${fund.name}" fund has reached its target.`,
+    meta: { sinkingFundId: String(fund._id) },
+  });
+}
