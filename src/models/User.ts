@@ -23,6 +23,11 @@ const UserSchema = new Schema(
       // IANA zone that decides where a "day" starts for spend limits.
       timezone: { type: String, default: "Asia/Kolkata" },
       currency: { type: String, default: "INR" },
+      // Bill reminders (src/lib/bill-reminders.ts): off until the user turns them on.
+      billReminders: {
+        enabled: { type: Boolean, default: false },
+        leadDays: { type: Number, default: 3, min: 1, max: 14 },
+      },
     },
     passwordResetToken: { type: String },
     passwordResetExpires: { type: Date },

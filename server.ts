@@ -8,6 +8,7 @@ import { runReminderChecks } from "./src/lib/reminder-scheduler";
 import { topUpRecurringSeries } from "./src/lib/recurring-topup";
 import { promoteStalePendingSms } from "./src/lib/capture/ingest";
 import { sendSpendLimitSummaries } from "./src/lib/spend-limit";
+import { sendBillReminders } from "./src/lib/bill-reminders";
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = process.env.HOSTNAME ?? "localhost";
@@ -34,6 +35,7 @@ app.prepare().then(() => {
     // hold (src/lib/capture/ingest.ts). Also runs lazily on ingest/review reads.
     // End-of-day spend limit summaries: each user's 21:00 local, checked every 30 minutes.
     setInterval(() => void sendSpendLimitSummaries().catch((err) => console.error("sendSpendLimitSummaries failed", err)), 30 * 60 * 1000);
+    setInterval(() => void sendBillReminders().catch((err) => console.error("sendBillReminders failed", err)), 30 * 60 * 1000);
     setInterval(() => void promoteStalePendingSms().catch((err) => console.error("promoteStalePendingSms failed", err)), 5 * 60 * 1000);
   });
 });

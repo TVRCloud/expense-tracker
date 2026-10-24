@@ -4,6 +4,7 @@ import { getCardCycleBalances, type CardCycleBalances } from "@/lib/credit-balan
 import { type ICreditMeta } from "@/types/models";
 import logger from "@/lib/logger";
 import { sendPushToUser } from "@/lib/push";
+import { billRemindersOn } from "@/lib/bill-settings";
 
 const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -78,7 +79,8 @@ export async function checkCreditDueNotifications(
       const { daysUntilDue, isOverdue } = getDueDateStatus(nextPayable.dueDate);
       const payableKey = nextPayable.periodEnd.toISOString().slice(0, 7);
 
-      if (!isOverdue && daysUntilDue >= 0 && daysUntilDue <= 7) {
+      // Unified bill reminders (bill-reminders.ts) send the due-soon notice for users who turned them on.
+      if (!isOverdue && daysUntilDue >= 0 && daysUntilDue <= 7 && !(await billRemindersOn(userId))) {
         await createNotif(
           userId,
           "credit_due",

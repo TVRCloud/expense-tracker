@@ -2,7 +2,7 @@
 Purpose: Mongoose schemas, one file per collection. Field tables: [docs/database-schema.md](../../docs/database-schema.md).
 
 ## Files
-- User, Session (collection `userSession`), ApiKey: identity and access.
+- User (incl. `preferences.timezone` and `preferences.billReminders`), Session (collection `userSession`), ApiKey: identity and access.
 - Account, Transaction, TransactionCorrection, CreditStatement: money records and corrections.
 - Budget, SpendLimit (one doc per user: daily and weekly limit), SubscriptionDecision (confirm or dismiss choice per detected subscription), Goal, Loan, Repayment, Notification, PushSubscription: feature data.
 - CapturedMessage, IdempotencyRecord: bank message inbox; integration idempotency.

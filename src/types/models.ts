@@ -36,6 +36,8 @@ export interface UserPreferences {
   currency: string;
   /** IANA zone; decides where a day starts for spend limits. */
   timezone?: string;
+  /** Remind before a bill is due; off until turned on. */
+  billReminders?: { enabled: boolean; leadDays: number };
 }
 
 export interface IUser {
