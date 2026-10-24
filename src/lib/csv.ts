@@ -6,6 +6,11 @@ function escapeCsvCell(value: unknown): string {
   if (typeof value === "number") return Number.isFinite(value) ? String(value) : "";
   let str = String(value);
 
+  // A plain decimal ("-5.00", "1250.50", "125050") is a number, not a formula,
+  // and a negative one must stay readable as one: the amount columns arrive here
+  // as strings, formatted for the currency's own decimals.
+  if (/^-?\d+(\.\d+)?$/.test(str)) return str;
+
   // Neutralize formula injection: a cell starting with =, +, -, @, tab, or CR
   // is interpreted as a formula by Excel/Google Sheets when the file is
   // opened, letting a user-controlled field (description/note/tags) run
@@ -26,8 +31,13 @@ export function toCsv(rows: Record<string, unknown>[], columns: string[]): strin
   return [header, ...body].join("\n");
 }
 
+// Excel on Windows reads a CSV as the local code page unless the file starts
+// with a UTF-8 byte order mark, and shows ₹ or any non-ASCII text as mojibake.
+// Every CSV download starts with it; our importer strips it.
+export const CSV_BOM = "\uFEFF";
+
 export function csvResponse(csv: string, filename: string): Response {
-  return new Response(csv, {
+  return new Response(CSV_BOM + csv, {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
       "Content-Disposition": `attachment; filename="${filename}"`,

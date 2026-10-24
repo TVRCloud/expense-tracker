@@ -313,8 +313,8 @@ export function rowToCandidate(
   let type: "income" | "expense" | null = null;
 
   if (columns.debit !== undefined || columns.credit !== undefined) {
-    const debit = cell("debit") ? parseAmountCell(cell("debit"), opts.exponent) : null;
-    const credit = cell("credit") ? parseAmountCell(cell("credit"), opts.exponent) : null;
+    const debit = cell("debit") ? parseAmountCell(unquoteCell(cell("debit")), opts.exponent) : null;
+    const credit = cell("credit") ? parseAmountCell(unquoteCell(cell("credit")), opts.exponent) : null;
     if ((cell("debit") && debit === null) || (cell("credit") && credit === null)) return fail("amount", "Cannot read the amount");
     const d = Math.abs(debit ?? 0);
     const c = Math.abs(credit ?? 0);
@@ -325,7 +325,8 @@ export function rowToCandidate(
   } else {
     if (columns.amount === undefined) return fail("amount", "No amount column is mapped");
     const raw = cell("amount");
-    signed = parseAmountCell(raw, opts.exponent);
+    // An older export wrote a negative amount as '-5.00 (defanged); read it as -5.00.
+    signed = parseAmountCell(unquoteCell(raw), opts.exponent);
     if (signed === null) return fail("amount", raw ? `Cannot read the amount "${raw.slice(0, 40)}"` : "Amount is empty");
     if (signed === 0) return fail("amount", "Amount is zero");
     const typeCell = cell("type");

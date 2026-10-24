@@ -25,7 +25,7 @@ Purpose: server business logic shared by browser routes, integration routes, ser
 - realtime/ (changes, sse, invalidation, changed-since): resources: transactions, accounts, budgets, goals, loans, notifications, captures, repayments, statements, spendLimits, subscriptions, sinkingFunds; a new one goes in `RESOURCES`, `MODELS` and `INVALIDATION_MAP`, see [docs/realtime.md](../../docs/realtime.md).
 - realtime/ (changes, sse, invalidation, changed-since): resources: transactions, accounts, budgets, goals, loans, notifications, captures, repayments, statements, spendLimits, subscriptions, sinkingFunds, netWorth; a new one goes in `RESOURCES`, `MODELS` and `INVALIDATION_MAP`, see [docs/realtime.md](../../docs/realtime.md).
 - perf/: ttl-cache, session-cache, background (`runInBackground`).
-- Client or UI helpers: api-client.ts, query-client.ts, utils.ts (cents formatting), icons.tsx, category-colors.ts, route-titles.ts, csv.ts, regex.ts.
+- Client or UI helpers: api-client.ts, query-client.ts, utils.ts (cents formatting), icons.tsx, category-colors.ts, route-titles.ts, csv.ts (`toCsv` leaves plain decimals like `-5.00` unquoted and defangs other text starting `= + - @ ' tab CR`; `csvResponse` and the integrations export start the file with `CSV_BOM`, the UTF-8 byte order mark Excel needs; `parseCsv` strips it), regex.ts.
 
 ## Talks to
 - Models in src/models. Callers: src/app/api, src/app pages, server.ts, scripts/.

@@ -9121,6 +9121,83 @@ describe("integration export and import", () => {
     expect(majorUnits(1250, 3)).toBe("1.250");
     expect(majorUnits(5, 3)).toBe("0.005");
   });
+
+  it("writes plain numbers unquoted, negative ones too, and still defangs text", async () => {
+    const { toCsv } = await import("@/lib/csv");
+    const csv = toCsv(
+      [{ a: "-5.00", b: "1250.50", c: "125050", d: -7, e: "-5 off", f: "=1+1", g: "'-5", h: "-1e5", i: "-" }],
+      ["a", "b", "c", "d", "e", "f", "g", "h", "i"]
+    );
+    expect(csv.split("\n")[1]).toBe("-5.00,1250.50,125050,-7,'-5 off,'=1+1,''-5,'-1e5,'-");
+  });
+
+  it("reads a negative amount written plain, defanged by an older export, or in debit and credit columns", async () => {
+    const dated = (rows: string[]) => ["Date,Description,Amount", ...rows].join("\n");
+    const { data } = await (await preview({ csv: dated(["2026-10-05,Plain,-5.00", "2026-10-06,Older,'-12.50", "2026-10-07,Income,300.00", "2026-10-08,Older income,'+40.00"]) })).json();
+    expect(data.invalidCount).toBe(0);
+    expect(data.sample.map((s: { type: string; amount: number }) => [s.type, s.amount])).toEqual([
+      ["expense", 500], ["expense", 1250], ["income", 30000], ["income", 4000],
+    ]);
+    const dc = (await (await preview({ csv: "Date,Particulars,Debit,Credit\n2026-10-05,Rent,'-15000,\n2026-10-06,Refund,,'+300.50" })).json()).data;
+    expect(dc.invalidCount).toBe(0);
+    expect(dc.sample.map((s: { type: string; amount: number }) => [s.type, s.amount])).toEqual([["expense", 1500000], ["income", 30050]]);
+    const typed = (await (await preview({ csv: "Date,Amount,Type\n2026-10-05,'-9.00,Debit", amountSign: "signed" })).json()).data;
+    expect(typed.sample[0]).toMatchObject({ type: "expense", amount: 900 });
+  });
+
+  it("commits negative and positive rows from a plain and an older file, and they export and re-import", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { default: Account } = await import("@/models/Account");
+    const plain = "Date,Description,Amount\n2026-10-05,Coffee,-5.00\n2026-10-06,Pay,300.00";
+    const older = "Date,Description,Amount\n2026-10-07,Tea,'-6.00\n2026-10-08,Gift,'+20.00";
+    expect((await commit({ csv: plain })).status).toBe(201);
+    expect((await commit({ csv: older })).status).toBe(201);
+    const rows = await Transaction.find({ user: userId }).sort({ date: 1 }).lean();
+    expect(rows.map((r) => [r.type, r.amount])).toEqual([["expense", 500], ["income", 30000], ["expense", 600], ["income", 2000]]);
+    const exported = await (await exportCsv()).text();
+    const fresh = await Account.create({ user: userId, name: "Fresh", type: "bank", balance: 0, currency: "INR" });
+    const res = await commit({ csv: exported, accountId: fresh._id.toString() });
+    expect((await res.json()).data).toMatchObject({ imported: 4, invalidCount: 0 });
+  });
+
+  it("starts every CSV download with a UTF-8 byte order mark that import ignores", async () => {
+    const { csvResponse, CSV_BOM } = await import("@/lib/csv");
+    const head = async (res: Response) => Array.from(new Uint8Array(await res.arrayBuffer()).slice(0, 3));
+    expect(await head(csvResponse("a,b\n1,2", "x.csv"))).toEqual([0xef, 0xbb, 0xbf]);
+    expect(CSV_BOM).toBe("\uFEFF");
+
+    const { default: Transaction } = await import("@/models/Transaction");
+    await Transaction.create({ user: userId, account: accountId, type: "expense", amount: 12345, category: "food", description: "Café ₹ मसाला", date: new Date("2026-10-05T06:00:00Z") });
+    const res = await exportCsv();
+    const bytes = new Uint8Array(await res.clone().arrayBuffer());
+    expect(Array.from(bytes.slice(0, 3))).toEqual([0xef, 0xbb, 0xbf]);
+    expect(res.headers.get("content-type")).toContain("utf-8");
+    // The text itself decodes (a BOM is dropped by the decoder) and carries the non-ASCII intact.
+    expect(await res.text()).toContain("Café ₹ मसाला");
+
+    // The server's own parser takes a file that still has the mark, header and all.
+    const withBom = new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes);
+    expect(withBom.charCodeAt(0)).toBe(0xfeff);
+    const data = (await (await preview({ csv: withBom })).json()).data;
+    expect(data).toMatchObject({ validCount: 1, invalidCount: 0, mapping: { date: "date", amount: "amount", description: "description" } });
+    expect(data.sample[0]).toMatchObject({ description: "Café ₹ मसाला", amount: 12345 });
+    const done = await commit({ csv: withBom, accountId, includeDuplicates: true });
+    expect((await done.json()).data.imported).toBe(1);
+  });
+
+  it("every web CSV export goes through the same BOM", async () => {
+    const { default: Account } = await import("@/models/Account");
+    const { default: Transaction } = await import("@/models/Transaction");
+    await Transaction.create({ user: userId, account: accountId, type: "expense", amount: 100, category: "food", date: new Date() });
+    // The browser's transactions export, with the signed-in user mocked above.
+    sessionUser.current = { id: userId, name: "EI", email: "e@x.com", role: "user" };
+    const { GET } = await import("@/app/api/transactions/route");
+    const res = await GET(new NextRequest("http://localhost/api/transactions?format=csv"));
+    expect(res.headers.get("content-type")).toContain("text/csv");
+    expect(Array.from(new Uint8Array(await res.arrayBuffer()).slice(0, 3))).toEqual([0xef, 0xbb, 0xbf]);
+    sessionUser.current = null;
+    void Account;
+  });
 });
 
 describe("import body size", () => {
