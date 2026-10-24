@@ -78,6 +78,8 @@ Authorization: Bearer <YOUR_API_KEY>
 | DELETE | `/api/integrations/goals/[id]` | Soft delete a goal (needs `Idempotency-Key`) |
 | GET | `/api/integrations/credit-cards/summary` | Card dues, utilisation and totals for every card |
 | GET | `/api/integrations/credit-cards/[accountId]/statements` | Open cycle plus past statements for one card (`{statements, currentCycle}`) |
+| GET | `/api/integrations/credit-cards/rewards` | Every active card with its reward rule (or `null`) and the estimate for its current billing cycle; `currentValue` adds them up (paise) |
+| GET, PUT, DELETE | `/api/integrations/credit-cards/[accountId]/rewards` | GET: the rule and what each billing cycle earned (`cycles` 1 to 12, default 3, current first). PUT replaces the rule, DELETE removes it (both need `Idempotency-Key`) |
 | GET | `/api/integrations/stats` | Month totals, category breakdown, `daily` series; `months=2026-9,2026-10` adds `history` |
 | GET | `/api/integrations/notifications` | Inbox list (`unread`, `skip`, `limit` max 50) with `unreadCount` |
 | PATCH | `/api/integrations/notifications/[id]` | Mark read (default) or unread (needs `Idempotency-Key`) |
@@ -516,3 +518,18 @@ in exactly that shape. Release lookups are cached for 5 minutes.
 - `/pay` marks a recurring payment paid through the same code as the installment route (balance and ledger updated), or records a loan repayment (full amount left unless `amount` is sent; `accountId` also records the transaction). A card statement cannot be marked paid here: record the payment on the card.
 - Errors: 400 `VALIDATION_ERROR` with `error.reason` `INVALID_BILL`, `NOT_PAYABLE` or `ALREADY_PAID`; 404 `NOT_FOUND` for a bill that is not the user's.
 - Reminders: with `enabled`, a notification (and push) is created once per bill per due date when it comes within `leadDays`, from 09:00 on the user's clock, plus one more when it goes overdue. Types are `emi_due` (recurring), `credit_due` (card) and `loan_due`; `meta.kind` is `bill_reminder`. For these users the older EMI day-before and card due-soon pushes stand down so nothing arrives twice. The job runs every 30 minutes from `server.ts`; on Vercel call `GET /api/cron/bill-reminders` with `Authorization: Bearer $CRON_SECRET` from a scheduler every 30 minutes (safe to call often).
+
+## Card rewards
+
+A credit card can carry one reward rule. `PUT /api/integrations/credit-cards/[accountId]/rewards` replaces it:
+
+```json
+{ "kind": "cashback", "baseRate": 1.5, "categoryRates": [{ "category": "fuel", "rate": 5 }], "cap": 100000 }
+```
+
+- `kind` is `cashback` or `points`. `baseRate` and each category `rate` have at most two decimals: for cashback a percent of spend (0 to 100), for points the points earned per 100 rupees (0 to 1000). A category rate wins over the base rate (names are lowercased, matched case-insensitively against the transaction's category). At most 30 category rates, none listed twice.
+- `cap` (optional, `null` for none) is a whole number per billing cycle: paise for cashback, points for points. `pointValue` (points only, optional) is paise per point; without it a point is worth 25 paise.
+- Rounding: each transaction is rounded down on its own, in whole paise (cashback) or whole points. Only expenses on that card earn. A confirmed refund (see Refunds) takes back exactly what the same amount would have earned, so a full refund cancels its purchase. Transfers, card payments and unconfirmed refund suggestions are ignored. The cap applies to the net total of a billing cycle, and the total never goes below 0.
+- `GET .../[accountId]/rewards?cycles=3` answers `{accountId, name, lastFourDigits, rule, reason, cycles, total}`. `reason` is `no_rule` or `billing_cycle_not_set` when there is no estimate (then `cycles` is empty and `total` is `null`), otherwise `null`. Each cycle is `{label, periodStart, periodEnd, dueDate, isCurrent, unit: "paise" | "points", spend, refunded, uncapped, earned, capReached, value, byCategory: [{category, rate, spend, earned}]}`; `value` is always paise (points times the point value). Cycles are the card's billing cycles (the same ones as its statements), current first.
+- Errors: 400 `VALIDATION_ERROR` for an invalid rule, a missing `Idempotency-Key`, a bad `cycles`, or an account that is not a credit card; 404 `NOT_FOUND` for a card that is not the user's or is archived; 409 `IDEMPOTENCY_CONFLICT` for a key reused with a different rule.
+- The rule is a field on the account, so a change shows up on the `accounts` realtime resource. The browser has the same routes under `/api/credit-cards/rewards` and `/api/credit-cards/[accountId]/rewards` (session auth, bare JSON).

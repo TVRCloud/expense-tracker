@@ -26,6 +26,14 @@ export interface ICreditMeta {
   minPaymentPct?: number;
 }
 
+export interface IRewardRule {
+  kind: "cashback" | "points";
+  baseRate: number;        // cashback: percent of spend; points: points per 100 rupees
+  categoryRates?: { category: string; rate: number }[];
+  cap?: number;            // per billing cycle; cashback: cents, points: points
+  pointValue?: number;     // cents per point (points rules)
+}
+
 export interface UserPreferences {
   theme: "light" | "dark" | "system";
   glassIntensity: "subtle" | "full";
@@ -67,6 +75,7 @@ export interface IAccount {
   deletedAt?: string;
   deletedBy?: string;
   creditMeta?: ICreditMeta;
+  rewardRule?: IRewardRule;
   createdAt: string;
   updatedAt: string;
 }

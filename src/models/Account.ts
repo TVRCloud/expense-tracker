@@ -29,6 +29,22 @@ const AccountSchema = new Schema(
       cardholderName: { type: String, maxlength: 60 },
       minPaymentPct: { type: Number },
     },
+    // Credit cards only: what the card earns (src/lib/card-rewards.ts).
+    // cashback: rate is a percent of spend, cap is paise; points: rate is
+    // points per 100 rupees, cap is points, pointValue is paise per point.
+    rewardRule: {
+      kind: { type: String, enum: ["cashback", "points"] },
+      baseRate: { type: Number, min: 0 },
+      categoryRates: [
+        {
+          _id: false,
+          category: { type: String, required: true },
+          rate: { type: Number, min: 0, required: true },
+        },
+      ],
+      cap: { type: Number, min: 1 },
+      pointValue: { type: Number, min: 1 },
+    },
     // Last 4 digits of the bank account / card numbers as they appear in bank
     // SMS ("A/c XX1234"), used to match a captured message to this account.
     // Credit cards also match on creditMeta.lastFourDigits.

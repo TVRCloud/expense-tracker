@@ -1,11 +1,12 @@
 # API: credit-cards
-Purpose: credit-card summary and billing-cycle statements.
+Purpose: credit-card summary, billing-cycle statements and reward rules with the estimate they earn.
 
 ## Files
 - Both GET routes are thin wrappers over src/lib/credit-card-service.ts, also used by `integrations/credit-cards/*`.
 - summary/route.ts: per-card balances, utilization, due state for all cards; Redis cached 60s.
 - [accountId]/statements/route.ts: current open cycle plus past 12 cycles; lazily creates statement records.
 - [accountId]/statements/[statementId]/route.ts: `PATCH` to update a statement and pay it.
+- rewards/route.ts: `GET` every card with its rule and current-cycle estimate. [accountId]/rewards/route.ts: `GET` (estimate per billing cycle, `cycles` 1 to 12), `PUT` replaces the reward rule, `DELETE` removes it. Both call src/lib/card-rewards-service.ts, also used by `integrations/credit-cards/**/rewards`.
 
 ## Talks to
 - Libs: credit-card (cycle maths), credit-balance, credit-notifications, ledger, perf/background, redis.

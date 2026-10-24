@@ -104,6 +104,17 @@ An ATM withdrawal message (`withdrawn ... at ATM`, `cash withdrawal`, `ATM WDL`)
 
 A change to the daily or weekly amount applies from the start of the current day in the user's time zone; earlier days keep the limit they had. Every read (here, `/api/integrations/spend-limit`, and `spendLimit` in home and summary) carries `history`: `[{from, dailyAmount, weeklyAmount}]`, oldest first, newest last (equals the current amounts), `from` the ISO instant of a local midnight, amounts in paise or `null` for no limit. Empty for limits set before history existed (the current amounts then apply to every earlier day). To judge a past day use the last entry whose `from` is at or before that day's start (`limitOn` in `src/lib/spend-limit.ts`).
 
+## Card rewards
+
+Reward rule per credit card (`cashback` percent of spend or `points` per 100 rupees, category rates, optional cap per billing cycle) and the estimate it earns. Same data as `/api/integrations/credit-cards/**/rewards` (see [n8n-integration.md](n8n-integration.md#card-rewards)), session auth, bare JSON.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/credit-cards/rewards` | `{cards, currentValue}`: every active card with its rule and current-cycle estimate |
+| GET | `/api/credit-cards/:accountId/rewards?cycles=3` | `{accountId, name, lastFourDigits, rule, reason, cycles, total}`; 404 unknown or archived card, 400 not a credit card or bad `cycles` |
+| PUT | `/api/credit-cards/:accountId/rewards` | Replaces the rule: `{kind, baseRate, categoryRates?, cap?, pointValue?}`; 400 if invalid |
+| DELETE | `/api/credit-cards/:accountId/rewards` | Removes the rule |
+
 ## Subscriptions
 
 Repeating charges found in expense history (same merchant, similar amount, steady gap; weekly, monthly, quarterly or yearly). Detected on every read; only the confirm and dismiss choices are stored. Recurring series the user already tracks are left out.
