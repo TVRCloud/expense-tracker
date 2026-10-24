@@ -8,7 +8,7 @@ import Loan from "@/models/Loan";
 import SinkingFund from "@/models/SinkingFund";
 import ManualAsset from "@/models/ManualAsset";
 import SpendLimit from "@/models/SpendLimit";
-import { isSupportedCurrency, type CurrencyCode } from "@/lib/currency";
+import { BASE_CURRENCY_ONLY_TWO_DECIMALS, isSupportedAsBase, isSupportedCurrency, type CurrencyCode } from "@/lib/currency";
 
 // The base currency is `preferences.currency` (what the web app already uses
 // to format every amount). Every stored amount (transactions, balances,
@@ -25,7 +25,7 @@ import { isSupportedCurrency, type CurrencyCode } from "@/lib/currency";
 //    first setBaseCurrency finds the rows, sets the flag and refuses.
 
 export class BaseCurrencyError extends Error {
-  code: "UNSUPPORTED_CURRENCY" | "HAS_MONEY_DATA";
+  code: "UNSUPPORTED_CURRENCY" | "UNSUPPORTED_BASE_CURRENCY" | "HAS_MONEY_DATA";
   constructor(code: BaseCurrencyError["code"], message: string) {
     super(message);
     this.code = code;
@@ -107,6 +107,9 @@ export async function setBaseCurrency(userId: string, code: string): Promise<str
     .select("currency preferences.currency baseLocked")
     .lean<(PrefsDoc & { baseLocked?: boolean }) | null>();
   if (baseOf(user) === code) return code;
+  if (!isSupportedAsBase(code)) {
+    throw new BaseCurrencyError("UNSUPPORTED_BASE_CURRENCY", BASE_CURRENCY_ONLY_TWO_DECIMALS);
+  }
   if (user?.baseLocked) throw new BaseCurrencyError("HAS_MONEY_DATA", REFUSED);
 
   if (await hasMoneyData(userId)) {

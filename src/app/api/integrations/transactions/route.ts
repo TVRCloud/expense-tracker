@@ -148,7 +148,7 @@ export const POST = withIntegrationRoute("transactions", async ({ req, user, req
           // provider rate that moves daily. Only deterministic errors are stored.
           if (err instanceof TransactionServiceError && (err.code === "RATE_UNAVAILABLE" || err.code === "RATE_OUT_OF_BAND")) throw err;
           if (err instanceof TransactionServiceError) {
-            return { status: err.code === "CONVERSION_FAILED" || err.code === "CURRENCY_MISMATCH" ? 400 : 404, body: { errorCode: err.code, message: err.message } };
+            return { status: err.code === "CONVERSION_FAILED" || err.code === "CURRENCY_MISMATCH" || err.code === "UNSUPPORTED_BASE_CURRENCY" ? 400 : 404, body: { errorCode: err.code, message: err.message } };
           }
           throw err;
         }

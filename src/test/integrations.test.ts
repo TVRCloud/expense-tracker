@@ -10064,6 +10064,102 @@ describe("multi-currency", () => {
     });
   });
 
+  describe("only a two-decimal currency can be the base for now", () => {
+    const MESSAGE = /Only currencies with two decimals can be the base currency for now/;
+    const setStoredBase = async (code: string) => {
+      const { default: User } = await import("@/models/User");
+      await User.updateOne({ _id: userId }, { $set: { "preferences.currency": code } });
+    };
+
+    it("setBaseCurrency refuses JPY, KRW, VND, CLP, KWD, BHD, OMR and JOD with a clear error, and accepts two-decimal currencies", async () => {
+      const { setBaseCurrency, BaseCurrencyError } = await import("@/lib/base-currency");
+      for (const code of ["JPY", "KRW", "VND", "CLP", "KWD", "BHD", "OMR", "JOD"]) {
+        const err = await setBaseCurrency(userId, code).catch((e) => e);
+        expect(err).toBeInstanceOf(BaseCurrencyError);
+        expect(err.code).toBe("UNSUPPORTED_BASE_CURRENCY");
+        expect(err.message).toMatch(MESSAGE);
+      }
+      expect(await baseOfUser()).toBe("INR");
+      expect(await setBaseCurrency(userId, "USD")).toBe("USD");
+    });
+
+    it("PATCH /currencies answers 400 with the error code", async () => {
+      const { PATCH } = await import("@/app/api/integrations/currencies/route");
+      const res = await PATCH(req("currencies", "PATCH", { base: "JPY" }), {});
+      expect(res.status).toBe(400);
+      const { error } = await res.json();
+      expect(error.message).toMatch(MESSAGE);
+      expect(error.details.errorCode).toBe("UNSUPPORTED_BASE_CURRENCY");
+      expect(await baseOfUser()).toBe("INR");
+    });
+
+    it("PATCH /api/me/preferences refuses it too, and still saves the rest", async () => {
+      const { PATCH } = await import("@/app/api/me/preferences/route");
+      const call = (body: unknown) =>
+        PATCH(new NextRequest("http://localhost/api/me/preferences", { method: "PATCH", body: JSON.stringify(body) }));
+      sessionUser.current = { id: userId, name: "FX", email: "fx@x.com", role: "user" };
+      const res = await call({ currency: "KWD" });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "UNSUPPORTED_BASE_CURRENCY", error: expect.stringMatching(MESSAGE) });
+      expect((await call({ currency: "INR", theme: "dark" })).status).toBe(200);
+      sessionUser.current = null;
+    });
+
+    it("GET /currencies marks supportedAsBase per entry", async () => {
+      const { GET } = await import("@/app/api/integrations/currencies/route");
+      const { data } = await (await GET(req("currencies", "GET"), {})).json();
+      const by = Object.fromEntries((data.currencies as { code: string; supportedAsBase: boolean }[]).map((c) => [c.code, c.supportedAsBase]));
+      expect(by.INR).toBe(true);
+      expect(by.USD).toBe(true);
+      for (const code of ["JPY", "KRW", "VND", "CLP", "KWD", "BHD", "OMR", "JOD"]) expect(by[code]).toBe(false);
+      expect(data.currencies.every((c: { supportedAsBase: unknown }) => typeof c.supportedAsBase === "boolean")).toBe(true);
+    });
+
+    it("a user whose stored base has the wrong exponent cannot add transactions: plain, same-currency original or foreign original", async () => {
+      await setStoredBase("JPY");
+      const { default: Transaction } = await import("@/models/Transaction");
+      for (const body of [
+        { amount: 1000 },
+        { originalAmount: 1000, originalCurrency: "JPY" },
+        { originalAmount: 1000, originalCurrency: "USD" },
+      ]) {
+        const res = await post(body);
+        expect(res.status).toBe(400);
+        const { error } = await res.json();
+        expect(error.message).toMatch(MESSAGE);
+        expect(error.details.errorCode).toBe("UNSUPPORTED_BASE_CURRENCY");
+      }
+      expect(await Transaction.countDocuments({ user: userId })).toBe(0);
+      // The refusal comes before the lock: nothing was written, the base is not pinned.
+      const { default: User } = await import("@/models/User");
+      expect((await User.findById(userId).lean<{ baseLocked?: boolean }>())!.baseLocked).toBeUndefined();
+      expect(providerCalls.count).toBe(0);
+    });
+
+    it("a transfer for such a user is a 400, not a 500", async () => {
+      await setStoredBase("KWD");
+      const { default: Account } = await import("@/models/Account");
+      const other = await Account.create({ user: userId, name: "Savings", type: "savings", balance: 0, currency: "INR" });
+      const { POST } = await import("@/app/api/integrations/transfers/route");
+      const res = await POST(req("transfers", "POST", { fromAccountId: accountId, toAccountId: String(other._id), amount: 1000 }), {});
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.message).toMatch(MESSAGE);
+    });
+
+    it("saving the unchanged stored base does not fail, and other currencies stay fine as originals", async () => {
+      await setStoredBase("JPY");
+      const { setBaseCurrency } = await import("@/lib/base-currency");
+      expect(await setBaseCurrency(userId, "JPY")).toBe("JPY");
+      await setStoredBase("INR");
+      const res = await post({ originalAmount: 1500, originalCurrency: "KWD" });
+      expect(res.status).toBe(201);
+      expect((await res.json()).data).toMatchObject({ originalCurrency: "KWD", originalExponent: 3, amount: 40541 });
+      const jpy = await post({ originalAmount: 1000, originalCurrency: "JPY" });
+      expect(jpy.status).toBe(201);
+      expect((await jpy.json()).data).toMatchObject({ originalExponent: 0 });
+    });
+  });
+
   describe("bank messages (rupees) on a base currency that is not INR", () => {
     const SMS = "Rs.250.00 debited from A/c XX1234 on 26-09-26 to VPA swiggy@icici. UPI Ref 426912345678. Not you? Call 18002586161";
     const RECEIVED = new Date("2026-09-26T06:30:00Z");

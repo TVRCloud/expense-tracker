@@ -16,7 +16,7 @@ import logger from "@/lib/logger";
 import { isReservedTag, MAX_TAGS, mergeUserTags, normaliseTags, tagListSchema } from "@/lib/tags";
 import { deleteReceiptsOfTransaction } from "@/lib/receipt-service";
 import { getBaseState, lockBaseCurrency, type BaseState } from "@/lib/base-currency";
-import { convertMinor, CurrencyError, isSupportedCurrency, MAX_MINOR_AMOUNT, minorExponent } from "@/lib/currency";
+import { BASE_CURRENCY_ONLY_TWO_DECIMALS, isSupportedAsBase, convertMinor, CurrencyError, isSupportedCurrency, MAX_MINOR_AMOUNT, minorExponent } from "@/lib/currency";
 import { getRate, RateUnavailableError } from "@/lib/exchange-rate-service";
 
 // Shared transaction-creation business logic, used by both the browser-facing
@@ -169,6 +169,7 @@ export type TransactionServiceErrorCode =
   | "CONVERSION_FAILED"
   | "RATE_OUT_OF_BAND"
   | "CURRENCY_MISMATCH"
+  | "UNSUPPORTED_BASE_CURRENCY"
   | "TRANSACTION_NOT_FOUND"
   | "TRANSACTION_LOCKED"
   | "INSTALLMENT_NOT_FOUND"
@@ -258,6 +259,11 @@ async function resolveAmount(
   input: { amount?: number; currency?: string; originalAmount?: number; originalCurrency?: string; rate?: number }
 ): Promise<ResolvedAmount> {
   const baseCurrency = state.base;
+  // A base with other than two decimals (set before this rule existed) cannot
+  // be written to: the app and parts of the server read base money as hundredths.
+  if (!isSupportedAsBase(baseCurrency)) {
+    throw new TransactionServiceError("UNSUPPORTED_BASE_CURRENCY", BASE_CURRENCY_ONLY_TWO_DECIMALS);
+  }
   if (input.originalAmount === undefined || input.originalCurrency === undefined) {
     if (input.amount === undefined) throw new Error("createTransaction needs amount or originalAmount");
     if (input.currency !== undefined && input.currency !== baseCurrency) {
