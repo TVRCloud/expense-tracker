@@ -4,7 +4,7 @@ Purpose: browser CRUD, stats, recurring series and reconcile actions for transac
 ## Files
 - route.ts: list (`GET`, filters, `?format=csv`, `?splitGroupId=`) and create.
 - [id]/route.ts: get, patch, delete. [id]/confirm, [id]/corrections: reconcile actions.
-- tags (GET), [id]/splits (GET, PUT), [id]/receipts (GET, POST raw image): over tags.ts, split-service, receipt-service. ../receipts/[id]: receipt image GET, DELETE.
+- tags (GET), [id]/splits (GET, PUT), [id]/receipts (GET, POST raw image: preflight before the body is read, then a bounded read: 429 busy, 408 slow, 413 big): over tags.ts, split-service, receipt-service. ../receipts/[id]: receipt image GET, DELETE.
 - stats, stats/range: month totals and multi-month totals (range logic is `getRangeStats` in stats-service, shared with `/api/integrations/stats`).
 - recurring/*: series list (`?upcoming=`), series get and delete, installment status patch (list, get and cancel logic is in `src/lib/recurring-series.ts`).
 
