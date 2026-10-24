@@ -87,10 +87,34 @@ Authorization: Bearer <YOUR_API_KEY>
 | GET, POST | `/api/integrations/loans/[id]/repayments` | List and record repayments (POST needs `Idempotency-Key`) |
 | POST | `/api/integrations/transfers` | Move money between two own accounts: `{fromAccountId, toAccountId, amount (paise, int), date?, note?, description?}` (needs `Idempotency-Key`). Not income or spending |
 | GET, PATCH, DELETE | `/api/integrations/transfers/[id]` | Read, edit (amount, accounts, date, notes; both balances are corrected) and delete a transfer, which puts both balances back (writes need `Idempotency-Key`) |
+| GET | `/api/integrations/subscriptions` | Detected repeating charges (`status`, `includeLapsed`), with `totals`; see below |
+| PATCH | `/api/integrations/subscriptions/[id]` | Confirm, dismiss or restore one (`{status}`, needs `Idempotency-Key`) |
 | GET | `/api/integrations/spend-limit` | Daily and weekly limit settings, today and week progress, safe to spend |
 | PUT | `/api/integrations/spend-limit` | Set, change or clear the limits (needs `Idempotency-Key`) |
 | GET | `/api/integrations/summary` | Snapshot: accounts, monthly stats, budgets |
 | POST | `/api/integrations/sms` | Parse a bank/NBFC SMS and create a transaction or loan repayment |
+
+### GET /api/integrations/subscriptions
+
+Repeating charges found in the user's expense history. Query: `status` (`detected`, `confirmed`, `dismissed`, `all`; default hides dismissed) and `includeLapsed=true`.
+
+```json
+{ "success": true, "data": {
+  "subscriptions": [{
+    "id": "9f2c4a1b7d3e8a60", "merchant": "Netflix", "category": "entertainment",
+    "accountId": "...", "cadence": "monthly",
+    "amount": 64900, "lastAmount": 64900,
+    "firstDate": "2026-07-05T00:00:00.000Z", "lastDate": "2026-10-05T00:00:00.000Z", "nextDate": "2026-11-05T00:00:00.000Z",
+    "occurrences": 4, "monthlyCost": 64900, "yearlyCost": 778800,
+    "active": true, "status": "detected"
+  }],
+  "totals": { "count": 1, "monthly": 64900, "yearly": 778800 }
+}, "requestId": "..." }
+```
+
+Amounts are cents. `cadence` is `weekly`, `monthly`, `quarterly` or `yearly`. `active` is false once the next charge is more than a quarter of a cycle overdue (hidden unless `includeLapsed=true`). `totals` count active, non-dismissed ones. A charge needs 4 repeats weekly, 3 monthly or quarterly, 2 yearly, with at least 75% of gaps and amounts fitting.
+
+`PATCH /api/integrations/subscriptions/{id}` with `{"status":"confirmed"|"dismissed"|"detected"}` and an `Idempotency-Key` returns the updated item. `400 VALIDATION_ERROR` for a bad id, status or missing key, `404 NOT_FOUND` if the id is not a current detection of this user. Realtime resource: `subscriptions`.
 
 ### GET /api/integrations/transactions
 

@@ -7,12 +7,13 @@ Purpose: API-key surface for n8n and the Android companion app. Contracts: [docs
 - loans (+ `[id]`, `[id]/repayments`): loan CRUD and repayments over loan-service.
 - transfers (POST, `[id]` GET PATCH DELETE): money between own accounts over transfer-service. `transactions` GET also takes `includeIncomingTransfers`.
 - captures, sms: bank message ingest (phone app, n8n). review/*: phone review inbox, confirm, correct, resolve, discard, history.
+- subscriptions (GET detected repeating charges, `[id]` PATCH confirm or dismiss) over subscription-service.
 - stats (month totals, daily, history) and notifications (list, `[id]` PATCH, read-all POST).
 - events (SSE), changes (`?since=` polling): realtime for the app.
 - app-update, app-update/download: newest Android release and a signed APK URL.
 
 ## Talks to
-- Libs: src/lib/integrations/* (auth, handler, idempotency, rate-limit, response), capture/ingest, reconcile/*, transaction-service, stats-service, budget-service, goal-service, app-update, realtime/*.
+- Libs: src/lib/integrations/* (auth, handler, idempotency, rate-limit, response), capture/ingest, reconcile/*, transaction-service, stats-service, budget-service, goal-service, subscription-service, app-update, realtime/*.
 - Models: ApiKey, IdempotencyRecord, CapturedMessage, Transaction and the rest via services.
 - Mobile: lib/core/api/review_api.dart calls these routes.
 

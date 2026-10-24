@@ -3029,3 +3029,162 @@ describe("integration transfers between accounts", () => {
     expect((await expense.json()).data.transferToId).toBeNull();
   });
 });
+
+// ── subscription detector routes ───────────────────────────────────────────
+
+describe("integration subscriptions", () => {
+  const KEY = "test-subscriptions-api-key";
+  let userId: string;
+  let otherUserId: string;
+  let accountId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Sub User", email: `sub${Date.now()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `subo${Date.now()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    const account = await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 100000, currency: "INR" });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+    accountId = account._id.toString();
+  });
+
+  function get(query = "", headers: Record<string, string> = { authorization: `Bearer ${KEY}` }) {
+    return new NextRequest(`http://localhost/api/integrations/subscriptions${query}`, { headers });
+  }
+  function patch(id: string, body: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/subscriptions/${id}`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json", "idempotency-key": `sub-key-${n}`, ...headers },
+      body: JSON.stringify(body),
+    });
+  }
+  const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+
+  // Four monthly charges ending five days ago.
+  async function seedMonthly(user: string, description: string, amount: number, extra: Record<string, unknown> = {}) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { subMonths, subDays } = await import("date-fns");
+    const last = subDays(new Date(), 5);
+    for (let i = 0; i < 4; i++) {
+      await Transaction.create({
+        user, account: accountId, type: "expense", amount, category: "entertainment", description,
+        date: subMonths(last, i), ...extra,
+      });
+    }
+  }
+
+  it("GET returns detected subscriptions with costs and totals, newest data only for this user", async () => {
+    const { GET } = await import("@/app/api/integrations/subscriptions/route");
+    await seedMonthly(userId, "Netflix", 64900);
+    await seedMonthly(otherUserId, "Hotstar", 29900);
+
+    const res = await GET(get(), {} as never);
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json.data.subscriptions).toHaveLength(1);
+    const s = json.data.subscriptions[0];
+    expect(s).toMatchObject({ merchant: "Netflix", cadence: "monthly", amount: 64900, monthlyCost: 64900, yearlyCost: 778800, status: "detected", active: true, occurrences: 4 });
+    expect(s.key).toBeUndefined();
+    expect(json.data.totals).toEqual({ count: 1, monthly: 64900, yearly: 778800 });
+  });
+
+  it("GET with no history returns an empty list, and needs the API key", async () => {
+    const { GET } = await import("@/app/api/integrations/subscriptions/route");
+    const res = await GET(get(), {} as never);
+    expect((await res.json()).data).toEqual({ subscriptions: [], totals: { count: 0, monthly: 0, yearly: 0 } });
+    expect((await GET(get("", {}), {} as never)).status).toBe(401);
+  });
+
+  it("ignores recurring series the user already tracks and deleted rows", async () => {
+    const { GET } = await import("@/app/api/integrations/subscriptions/route");
+    await seedMonthly(userId, "Rent", 2000000, { isRecurring: true });
+    await seedMonthly(userId, "Gym", 50000, { isDeleted: true });
+    const json = await (await GET(get(), {} as never)).json();
+    expect(json.data.subscriptions).toEqual([]);
+  });
+
+  it("PATCH confirms, dismisses and restores; the list follows the status filter", async () => {
+    const { GET } = await import("@/app/api/integrations/subscriptions/route");
+    const { PATCH } = await import("@/app/api/integrations/subscriptions/[id]/route");
+    await seedMonthly(userId, "Netflix", 64900);
+    const id = (await (await GET(get(), {} as never)).json()).data.subscriptions[0].id as string;
+
+    const confirmed = await PATCH(patch(id, { status: "confirmed" }), ctx(id));
+    expect(confirmed.status).toBe(200);
+    expect((await confirmed.json()).data.status).toBe("confirmed");
+    expect((await (await GET(get("?status=confirmed"), {} as never)).json()).data.subscriptions).toHaveLength(1);
+
+    await PATCH(patch(id, { status: "dismissed" }), ctx(id));
+    const hidden = (await (await GET(get(), {} as never)).json()).data;
+    expect(hidden.subscriptions).toEqual([]);
+    expect(hidden.totals.count).toBe(0);
+    expect((await (await GET(get("?status=dismissed"), {} as never)).json()).data.subscriptions).toHaveLength(1);
+    expect((await (await GET(get("?status=all"), {} as never)).json()).data.subscriptions).toHaveLength(1);
+
+    await PATCH(patch(id, { status: "detected" }), ctx(id));
+    const back = (await (await GET(get(), {} as never)).json()).data.subscriptions;
+    expect(back).toHaveLength(1);
+    expect(back[0].status).toBe("detected");
+  });
+
+  it("PATCH replays on the same Idempotency-Key and rejects the same key with a different body", async () => {
+    const { GET } = await import("@/app/api/integrations/subscriptions/route");
+    const { PATCH } = await import("@/app/api/integrations/subscriptions/[id]/route");
+    const { default: SubscriptionDecision } = await import("@/models/SubscriptionDecision");
+    await seedMonthly(userId, "Netflix", 64900);
+    const id = (await (await GET(get(), {} as never)).json()).data.subscriptions[0].id as string;
+
+    const first = await PATCH(patch(id, { status: "confirmed" }, { "idempotency-key": "same" }), ctx(id));
+    const replay = await PATCH(patch(id, { status: "confirmed" }, { "idempotency-key": "same" }), ctx(id));
+    expect(first.status).toBe(200);
+    expect(replay.status).toBe(200);
+    expect(await SubscriptionDecision.countDocuments({ user: userId })).toBe(1);
+
+    const clash = await PATCH(patch(id, { status: "dismissed" }, { "idempotency-key": "same" }), ctx(id));
+    expect(clash.status).toBe(409);
+  });
+
+  it("PATCH rejects a bad status, a bad id and a missing key; 404 for someone else's or an unknown subscription", async () => {
+    const { GET } = await import("@/app/api/integrations/subscriptions/route");
+    const { PATCH } = await import("@/app/api/integrations/subscriptions/[id]/route");
+    await seedMonthly(otherUserId, "Hotstar", 29900);
+    await seedMonthly(userId, "Netflix", 64900);
+    const mine = (await (await GET(get(), {} as never)).json()).data.subscriptions[0].id as string;
+
+    expect((await PATCH(patch(mine, { status: "paid" }), ctx(mine))).status).toBe(400);
+    expect((await PATCH(patch("nope", { status: "confirmed" }), ctx("nope"))).status).toBe(400);
+    const noKey = new NextRequest(`http://localhost/api/integrations/subscriptions/${mine}`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
+      body: JSON.stringify({ status: "confirmed" }),
+    });
+    expect((await PATCH(noKey, ctx(mine))).status).toBe(400);
+
+    const { subscriptionId } = await import("@/lib/subscription-detector");
+    const unknown = subscriptionId("hotstar|monthly"); // only the other user has it
+    expect((await PATCH(patch(unknown, { status: "confirmed" }), ctx(unknown))).status).toBe(404);
+  });
+
+  it("a decision for one user does not change another user's list", async () => {
+    const { setSubscriptionStatus, listSubscriptions } = await import("@/lib/subscription-service");
+    await seedMonthly(userId, "Netflix", 64900);
+    const { default: Account } = await import("@/models/Account");
+    const otherAccount = await Account.create({ user: otherUserId, name: "Bank", type: "bank", balance: 1, currency: "INR" });
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { subMonths, subDays } = await import("date-fns");
+    for (let i = 0; i < 4; i++) {
+      await Transaction.create({ user: otherUserId, account: otherAccount._id, type: "expense", amount: 64900, category: "entertainment", description: "Netflix", date: subMonths(subDays(new Date(), 5), i) });
+    }
+    const mine = (await listSubscriptions(userId)).subscriptions[0];
+    await setSubscriptionStatus(userId, mine.id, "dismissed");
+    expect((await listSubscriptions(userId)).subscriptions).toHaveLength(0);
+    expect((await listSubscriptions(otherUserId)).subscriptions).toHaveLength(1);
+  });
+});

@@ -110,6 +110,19 @@ One document per user. Separate from `budgets` so the budgets list is unchanged 
 | `rollover` | Boolean | yesterday's unspent or overspend moves today's limit (one day back) |
 | `pausedUntil` | Date | limit suspended until then |
 
+## subscription_decisions
+
+What the user chose about a detected subscription. Detections are never stored; they are worked out from `transactions` on every read.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | |
+| `key` | String | merchant key plus cadence, e.g. `netflix|monthly` |
+| `merchant` | String | display name when decided |
+| `status` | String | `detected`, `confirmed`, `dismissed` (a row is updated, not deleted, when the user restores one) |
+
+Unique index: `{user, key}`
+
 ## loans
 
 | Field | Type | Notes |
