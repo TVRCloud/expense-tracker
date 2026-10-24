@@ -17,6 +17,9 @@ export const spendLimitUpdateSchema = z.object({
 
 export type SpendLimitUpdate = z.infer<typeof spendLimitUpdateSchema>;
 
+/** The amounts in force from `from` (a local midnight, ISO) until the next entry. */
+export type LimitHistoryEntry = { from: string; dailyAmount: number | null; weeklyAmount: number | null };
+
 export type LimitBar = { spent: number; limit: number | null; left: number | null; percent: number | null };
 
 // Shape of GET and PUT /api/spend-limit (src/lib/spend-limit.ts).
@@ -34,6 +37,9 @@ export type SpendLimitStatus = {
   today: LimitBar;
   week: LimitBar;
   safeToSpend: number | null;
+  // Oldest first, newest last (equals the current amounts). Empty for limits set
+  // before history existed: the current amounts then apply to every earlier day.
+  history: LimitHistoryEntry[];
 };
 
 /** "250" or "250.5" rupees to integer cents; null for blank, NaN for anything else. */

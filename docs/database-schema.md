@@ -115,6 +115,7 @@ One document per user. Separate from `budgets` so the budgets list is unchanged 
 | `excludeCategories` | String[] | never count against the limit |
 | `rollover` | Boolean | yesterday's unspent or overspend moves today's limit (one day back) |
 | `pausedUntil` | Date | limit suspended until then |
+| `limitHistory` | `{from, dailyAmount?, weeklyAmount?}[]` | the amounts over time, oldest first. A change to `dailyAmount` or `weeklyAmount` applies from the start of that local day (a second change the same day replaces the entry). The first change writes a baseline entry at the epoch holding what was in force before. Empty for limits set before history existed: the current amounts then count for every earlier day |
 
 ## subscription_decisions
 
