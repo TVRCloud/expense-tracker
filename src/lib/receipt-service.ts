@@ -78,11 +78,13 @@ export function sniffImageType(b: Buffer): ReceiptContentType | null {
 }
 
 // An upload body is read under three limits, like the backup routes (integrations/backup-http.ts):
-// at most four reads at once in the process, one at a time per person (so one person cannot hold
-// every slot), and a deadline (a total time, and a longest wait for the next chunk). A read that
+// at most 16 reads at once in the process (3 MB each, 48 MB in flight at most), one at a time per
+// person (so one person cannot hold a slot for long), and a deadline: a total time, a longest wait
+// for the next chunk, and a minimum speed (after a short grace a read that averages less than
+// `minBytesPerSec` is dropped, so a trickle cannot sit on a slot for the whole total). A read that
 // runs out is cancelled without waiting for the cancel, and its slot is freed.
-const MAX_BODY_READS = 4;
-export const RECEIPT_READ_LIMITS = { totalMs: 60_000, idleMs: 15_000 };
+const MAX_BODY_READS = 16;
+export const RECEIPT_READ_LIMITS = { totalMs: 30_000, idleMs: 10_000, graceMs: 3_000, minBytesPerSec: 20 * 1024 };
 let bodyReads = 0;
 const readersNow = new Set<string>();
 
@@ -109,12 +111,17 @@ export async function readBodyCapped(req: Request, max: number): Promise<BodyRea
   const reader = req.body.getReader();
   const chunks: Buffer[] = [];
   let total = 0;
-  const deadline = Date.now() + RECEIPT_READ_LIMITS.totalMs;
+  const startedAt = Date.now();
+  const deadline = startedAt + RECEIPT_READ_LIMITS.totalMs;
+  const tooSlow = () => {
+    const elapsed = Date.now() - startedAt;
+    return elapsed > RECEIPT_READ_LIMITS.graceMs && (total * 1000) / elapsed < RECEIPT_READ_LIMITS.minBytesPerSec;
+  };
   // Never wait for a cancel to finish: a stream that will not cancel must not hold a slot.
   const drop = () => void reader.cancel().catch(() => undefined);
   for (;;) {
     const wait = Math.min(RECEIPT_READ_LIMITS.idleMs, deadline - Date.now());
-    if (wait <= 0) {
+    if (wait <= 0 || tooSlow()) {
       drop();
       return { ok: false, reason: "timeout" };
     }
@@ -141,6 +148,10 @@ export async function readBodyCapped(req: Request, max: number): Promise<BodyRea
       return { ok: false, reason: "too_large" };
     }
     chunks.push(Buffer.from(next.value));
+    if (tooSlow()) {
+      drop();
+      return { ok: false, reason: "timeout" };
+    }
   }
   return { ok: true, bytes: Buffer.concat(chunks, total) };
 }

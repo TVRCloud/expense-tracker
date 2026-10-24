@@ -7511,6 +7511,7 @@ describe("tags, split edits and receipts", () => {
       const saved = { ...RECEIPT_READ_LIMITS };
       RECEIPT_READ_LIMITS.idleMs = 1000;
       RECEIPT_READ_LIMITS.totalMs = 120;
+      RECEIPT_READ_LIMITS.minBytesPerSec = 0;
       try {
         const stream = new ReadableStream<Uint8Array>({
           async pull(c) {
@@ -7525,22 +7526,64 @@ describe("tags, split edits and receipts", () => {
       }
     });
 
-    it("one person reads one body at a time, and the process reads at most four", async () => {
+    it("one person reads one body at a time, and the process reads at most sixteen", async () => {
       const { readReceiptBody, RECEIPT_READ_LIMITS } = await import("@/lib/receipt-service");
       const saved = { ...RECEIPT_READ_LIMITS };
-      RECEIPT_READ_LIMITS.idleMs = 150;
+      RECEIPT_READ_LIMITS.idleMs = 250;
       try {
         const slow = (u: string) => readReceiptBody(new Request("http://localhost/x", { method: "POST", body: stalledBody().stream, duplex: "half" } as never), u, 1000);
         const fast = (u: string) => readReceiptBody(new Request("http://localhost/x", { method: "POST", body: new Uint8Array(JPEG) }), u, 1000);
         const first = slow("u1");
         expect(await fast("u1")).toEqual({ ok: false, reason: "busy" });
-        const others = [slow("u2"), slow("u3"), slow("u4")];
-        expect(await fast("u5")).toEqual({ ok: false, reason: "busy" });
+        const others = Array.from({ length: 15 }, (_, i) => slow(`u${i + 2}`));
+        expect(await fast("u99")).toEqual({ ok: false, reason: "busy" });
         await Promise.all([first, ...others]);
-        expect((await fast("u5")).ok).toBe(true);
+        expect((await fast("u99")).ok).toBe(true);
       } finally {
         Object.assign(RECEIPT_READ_LIMITS, saved);
       }
+    });
+
+    it("a trickle that stays under the minimum speed is dropped after the grace, long before the total", async () => {
+      const { readReceiptBody, RECEIPT_READ_LIMITS } = await import("@/lib/receipt-service");
+      const saved = { ...RECEIPT_READ_LIMITS };
+      RECEIPT_READ_LIMITS.graceMs = 60;
+      RECEIPT_READ_LIMITS.totalMs = 20_000;
+      RECEIPT_READ_LIMITS.idleMs = 5_000;
+      try {
+        // A byte every 20 ms is 50 bytes a second: well under 20 KB/s, and no gap is long enough for the idle wait.
+        const trickle = new ReadableStream<Uint8Array>({
+          async pull(c) {
+            await new Promise((r) => setTimeout(r, 20));
+            c.enqueue(new Uint8Array([1]));
+          },
+        }, { highWaterMark: 0 });
+        const started = Date.now();
+        const res = await readReceiptBody(new Request("http://localhost/x", { method: "POST", body: trickle, duplex: "half" } as never), userId, 1_000_000);
+        expect(res).toEqual({ ok: false, reason: "timeout" });
+        expect(Date.now() - started).toBeLessThan(2000);
+
+        // A sender at a fair speed is not dropped, even after the grace.
+        const body = Buffer.alloc(200_000, 1);
+        const fair = new ReadableStream<Uint8Array>({
+          async pull(c) {
+            await new Promise((r) => setTimeout(r, 20));
+            const sent = (fair as unknown as { sent?: number }).sent ?? 0;
+            c.enqueue(new Uint8Array(body.subarray(sent, sent + 50_000)));
+            (fair as unknown as { sent?: number }).sent = sent + 50_000;
+            if (sent + 50_000 >= body.length) c.close();
+          },
+        }, { highWaterMark: 0 });
+        const ok = await readReceiptBody(new Request("http://localhost/x", { method: "POST", body: fair, duplex: "half" } as never), userId, 1_000_000);
+        expect(ok.ok && ok.bytes.length).toBe(200_000);
+      } finally {
+        Object.assign(RECEIPT_READ_LIMITS, saved);
+      }
+    });
+
+    it("the receipt read limits are 16 reads, 30 s in total, 10 s idle, 20 KB/s after a 3 s grace", async () => {
+      const { RECEIPT_READ_LIMITS } = await import("@/lib/receipt-service");
+      expect(RECEIPT_READ_LIMITS).toEqual({ totalMs: 30_000, idleMs: 10_000, graceMs: 3_000, minBytesPerSec: 20 * 1024 });
     });
 
     it("a refused upload is refused before its body is read", async () => {
