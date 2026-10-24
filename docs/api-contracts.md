@@ -158,6 +158,19 @@ What the user owns minus what they owe. Owned: positive account balances, a card
 | GET, POST | `/api/net-worth/assets` | List and add manual assets: `{name (1 to 60), kind?: property\|vehicle\|gold\|investment\|other, value (cents, int, 0 or more), note? (200)}` |
 | PATCH, DELETE | `/api/net-worth/assets/:id` | Edit any of name, kind, value, note (`null` clears it); DELETE archives the asset. 404 for an unknown or other user's id |
 
+## Tax
+
+The financial year runs 1 April to 31 March in the user's time zone and is named by the year it starts in: `fy=2025` is 2025-26. Only income and spending count: transfers between own accounts (and ATM withdrawals to cash), voided rows, deleted rows and recurring instalments not yet paid are left out, and a confirmed refund comes off spending in its category. An expense is deductible when its own `deductible` flag is `true`, or the flag is unset and its category is in the user's list; `false` wins over the list. Amounts are cents.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/tax?fy=2025` | `{fy, label, start, end, timeZone, income, expense, saved, count, deductible: {total, byCategory: [{category,total}]}, incomeByCategory, expenseByCategory, byMonth: [{month: "YYYY-MM", income, expense, deductible}] (12, April first), deductibleCategories, availableYears}`. `fy` is a four digit year, 2000 to 2100, default the current year; anything else is 400. `expense` is net of refunds; `saved` is `income - expense` and can be negative; `count` is the income, expense and refund rows counted; `start` and `end` are ISO instants, end excluded |
+| GET | `/api/tax/export?fy=2025` | The same figures as `text/csv` (`section,name,amount`, amounts in rupees), file name `tax-summary-2025-26.csv`. A name that starts with `=`, `+`, `-`, `@`, tab or CR is quoted with a leading `'` |
+| GET, PUT | `/api/tax/settings` | `{deductibleCategories: string[]}`. PUT replaces the list (up to 50 names of 1 to 40 characters; stored trimmed and lower case, matched without regard to case) |
+| PATCH | `/api/tax/transactions/:id` | `{deductible: true \| false \| null}` for one expense: `true` or `false` overrides the list, `null` goes back to it. Answers `{id, deductible}`. 404 for another user's row, a deleted row or a row that is not an expense |
+
+n8n and the app use `/api/integrations/tax`, `/api/integrations/tax/export` (CSV, not the envelope), `/api/integrations/tax/settings` and `/api/integrations/tax/transactions/:id` with the integration envelope; PUT and PATCH need `Idempotency-Key`. There is no PDF: the web page `/tax` has a Print button (save as PDF from the print dialog).
+
 ## Weekly review
 
 | Method | Path | Notes |

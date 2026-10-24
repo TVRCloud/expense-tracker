@@ -34,6 +34,11 @@ const UserSchema = new Schema(
         enabled: { type: Boolean, default: false },
         day: { type: Number, default: 1, min: 0, max: 6 },
       },
+      // Tax helper (src/lib/tax-settings.ts): lower-case category names whose
+      // spending counts as deductible in the financial-year summary.
+      tax: {
+        deductibleCategories: [{ type: String }],
+      },
     },
     passwordResetToken: { type: String },
     passwordResetExpires: { type: Date },

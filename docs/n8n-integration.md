@@ -96,6 +96,10 @@ Authorization: Bearer <YOUR_API_KEY>
 | GET, PATCH, DELETE | `/api/integrations/transfers/[id]` | Read, edit (amount, accounts, date, notes; both balances are corrected) and delete a transfer, which puts both balances back (writes need `Idempotency-Key`) |
 | GET | `/api/integrations/subscriptions` | Detected repeating charges (`status`, `includeLapsed`), with `totals`; see below |
 | PATCH | `/api/integrations/subscriptions/[id]` | Confirm, dismiss or restore one (`{status}`, needs `Idempotency-Key`) |
+| GET | `/api/integrations/tax?fy=2025` | Financial-year summary (April to March, user time zone): income, spending, saved, deductible spending by category, per month totals; see [api-contracts.md](api-contracts.md#tax) |
+| GET | `/api/integrations/tax/export?fy=2025` | The same as a CSV file |
+| GET, PUT | `/api/integrations/tax/settings` | The deductible category list; PUT needs `Idempotency-Key` |
+| PATCH | `/api/integrations/tax/transactions/[id]` | `{deductible: true\|false\|null}` on one expense (needs `Idempotency-Key`) |
 | GET | `/api/integrations/net-worth` | What the user owns minus what they owe, the rows behind it, a daily trend and the change (`range`); see below |
 | GET, POST | `/api/integrations/net-worth/assets` | List and add manual assets (property, vehicle, gold, ...); POST needs `Idempotency-Key` |
 | PATCH, DELETE | `/api/integrations/net-worth/assets/[id]` | Edit or archive one (needs `Idempotency-Key`) |
