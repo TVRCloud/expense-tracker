@@ -31,7 +31,8 @@ export async function GET(req: NextRequest) {
           alertAt: b.alertAt,
           rollover: b.rollover ?? false,
         })),
-        ["category", "month", "year", "limitAmount", "effectiveLimit", "spent", "remaining", "currency", "alertAt", "rollover"]
+        ["category", "month", "year", "limitAmount", "effectiveLimit", "spent", "remaining", "currency", "alertAt", "rollover"],
+        { numericColumns: ["month", "year", "limitAmount", "effectiveLimit", "spent", "remaining", "alertAt"] }
       );
       return csvResponse(csv, `budgets-${year}-${String(month).padStart(2, "0")}.csv`);
     }

@@ -6,6 +6,11 @@ import { importRequestSchema, previewImport, TransactionImportError } from "@/li
 // The 1 MB csv plus its JSON wrapper and the other fields.
 const MAX_BODY_BYTES = 1_100_000;
 
+// The same limit as commit: a preview reads the file and the account's rows, and
+// a file near the caps is not instant on a loaded database. Next needs the
+// literal here.
+export const maxDuration = 60;
+
 // POST /api/integrations/import/preview — dry run of a CSV import. Nothing is
 // written, so no Idempotency-Key. Without `mapping` the columns are guessed
 // from the header; the answer carries the guess so the app can show it.

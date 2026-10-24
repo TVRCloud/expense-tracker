@@ -1,15 +1,18 @@
 // Minimal CSV serializer for export endpoints — good enough for flat rows of
 // strings/numbers, escapes quotes/commas/newlines per RFC 4180.
-function escapeCsvCell(value: unknown): string {
+function escapeCsvCell(value: unknown, numeric = false): string {
   if (value === null || value === undefined) return "";
   // A real number is never a formula, and a negative one must stay numeric.
   if (typeof value === "number") return Number.isFinite(value) ? String(value) : "";
   let str = String(value);
 
-  // A plain decimal ("-5.00", "1250.50", "125050") is a number, not a formula,
-  // and a negative one must stay readable as one: the amount columns arrive here
-  // as strings, formatted for the currency's own decimals.
-  if (/^-?\d+(\.\d+)?$/.test(str)) return str;
+  // In a column the caller declared numeric, a plain decimal ("-5.00",
+  // "1250.50", "125050") is a number, not a formula, and a negative one must
+  // stay readable as one: amounts arrive as strings formatted for the
+  // currency's own decimals. Any other column is text: "007", "1250" or "-5" in
+  // a description or note must not turn into a number (leading zeros lost), so
+  // it gets the defanging below and the import strips it again.
+  if (numeric && /^-?\d+(\.\d+)?$/.test(str)) return str;
 
   // Neutralize formula injection: a cell starting with =, +, -, @, tab, or CR
   // is interpreted as a formula by Excel/Google Sheets when the file is
@@ -25,9 +28,16 @@ function escapeCsvCell(value: unknown): string {
   return str;
 }
 
-export function toCsv(rows: Record<string, unknown>[], columns: string[]): string {
+export function toCsv(
+  rows: Record<string, unknown>[],
+  columns: string[],
+  // Columns whose string values are plain decimals (amounts, counts): written
+  // as numbers. Real JS numbers are numbers in any column.
+  options: { numericColumns?: string[] } = {}
+): string {
   const header = columns.join(",");
-  const body = rows.map((row) => columns.map((col) => escapeCsvCell(row[col])).join(","));
+  const numeric = new Set(options.numericColumns ?? []);
+  const body = rows.map((row) => columns.map((col) => escapeCsvCell(row[col], numeric.has(col))).join(","));
   return [header, ...body].join("\n");
 }
 

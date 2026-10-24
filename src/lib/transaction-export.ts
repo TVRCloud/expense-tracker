@@ -129,5 +129,5 @@ export async function exportTransactionsCsv(params: ExportParams) {
     source: t.source ?? "manual",
   }));
 
-  return { csv: toCsv(rows, EXPORT_COLUMNS), rowCount: rows.length, truncated };
+  return { csv: toCsv(rows, EXPORT_COLUMNS, { numericColumns: ["amount"] }), rowCount: rows.length, truncated };
 }
