@@ -65,6 +65,9 @@ const TransactionSchema = new Schema(
     refundOf: { type: Schema.Types.ObjectId, ref: "Transaction" },
     refundStatus: { type: String, enum: ["suggested", "confirmed", "rejected", null], default: null },
     refundPriorCategory: { type: String },
+    // Tax helper override (src/lib/tax-service.ts). Unset follows the user's
+    // deductible categories; true or false wins over them for this row.
+    deductible: { type: Boolean },
     isDeleted: { type: Boolean, default: false },
     deletedAt: { type: Date },
     deletedBy: { type: Schema.Types.ObjectId, ref: "User" },

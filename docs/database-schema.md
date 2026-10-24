@@ -22,6 +22,7 @@ All monetary fields are stored as **integers (cents)** — divide by 100 for dis
 | `preferences.currency` | String | ISO 4217 |
 | `preferences.billReminders.enabled` | Boolean | default false; turns on bill due reminders |
 | `preferences.billReminders.leadDays` | Number | 1 to 14, default 3; how many days ahead to remind |
+| `preferences.tax.deductibleCategories` | [String] | lower-case category names that count as deductible in the tax summary, up to 50 |
 | `preferences.weeklyReview.enabled` | Boolean | default false; turns on the weekly review notification |
 | `preferences.weeklyReview.day` | Number | 0 (Sunday) to 6, default 1 (Monday); the weekday it arrives, from 09:00 on the user's clock |
 | `passwordResetToken` | String | hashed, single-use |
@@ -85,6 +86,7 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `refundStatus` | String | `suggested\|confirmed\|rejected`, null otherwise. Only `confirmed` nets the pair out of stats and budgets |
 | `refundPriorCategory` | String | The category before the expense's was carried over; restored when a confirmed refund is unlinked |
 | `reviewedAt` / `reviewedBy` | Date / ObjectId | |
+| `deductible` | Boolean | Tax helper override on an expense: `true` or `false` wins over the user's deductible categories, unset follows them |
 | `isDeleted` | Boolean | soft delete |
 | `deletedAt` | Date | |
 | `deletedBy` | ObjectId | ref: User |

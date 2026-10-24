@@ -20,6 +20,7 @@ export const INVALIDATION_MAP: Readonly<Record<RealtimeResource, readonly (reado
     ["subscriptions"],
     ["savings-rate"],
     ["net-worth"],
+    ["tax"],
   ],
   accounts: [["accounts"], ["credit-summary"], ["credit-statements"], ["net-worth"]],
   budgets: [["budgets"], ["notifications"]],

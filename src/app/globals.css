@@ -605,3 +605,12 @@ body {
 :root[data-large-title="visible"] .topbar-title {
   opacity: 0;
 }
+
+/* Tax page: print the summary alone, no navigation around it. */
+@media print {
+  html[data-print="tax"] aside,
+  html[data-print="tax"] header,
+  html[data-print="tax"] nav {
+    display: none !important;
+  }
+}

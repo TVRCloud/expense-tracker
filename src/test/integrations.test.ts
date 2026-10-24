@@ -6535,3 +6535,517 @@ describe("weekly review", () => {
     sessionUser.current = null;
   });
 });
+
+describe("tax helper", () => {
+  const KEY = "test-tax-api-key";
+  let userId: string;
+  let otherUserId: string;
+  let accountId: string;
+  let walletId: string;
+  let otherAccountId: string;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { default: Account } = await import("@/models/Account");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Tax User", email: `tax${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `taxo${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    accountId = (await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 0, currency: "INR" }))._id.toString();
+    walletId = (await Account.create({ user: user._id, name: "Wallet", type: "cash", balance: 0, currency: "INR" }))._id.toString();
+    otherAccountId = (await Account.create({ user: other._id, name: "Theirs", type: "bank", balance: 0, currency: "INR" }))._id.toString();
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+  });
+
+  const headers = (extra: Record<string, string> = {}) => ({ authorization: `Bearer ${KEY}`, ...extra });
+  async function summary(query = "") {
+    const { GET } = await import("@/app/api/integrations/tax/route");
+    return GET(new NextRequest(`http://localhost/api/integrations/tax${query}`, { headers: headers() }), {});
+  }
+  async function add(type: "income" | "expense" | "transfer", amount: number, date: string, extra: Record<string, unknown> = {}, who = userId) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    return Transaction.create({
+      user: who,
+      account: who === userId ? accountId : otherAccountId,
+      type,
+      amount,
+      currency: "INR",
+      category: type === "income" ? "Salary" : "Food",
+      date: new Date(date),
+      ...extra,
+    });
+  }
+  async function setCategories(names: string[]) {
+    const { default: User } = await import("@/models/User");
+    await User.updateOne({ _id: userId }, { $set: { "preferences.tax.deductibleCategories": names } });
+  }
+
+  it("starts a year at 1 April in the user's zone and ends it at 31 March", async () => {
+    await add("expense", 1000, "2025-03-31T18:29:00Z"); // 23:59 IST on 31 March 2025: previous year
+    await add("expense", 2000, "2025-03-31T18:31:00Z"); // 00:01 IST on 1 April 2025: first minute of 2025-26
+    await add("expense", 4000, "2026-03-31T18:29:00Z"); // 23:59 IST on 31 March 2026: last minute
+    await add("expense", 8000, "2026-03-31T18:31:00Z"); // 2026-27
+    const { data } = await (await summary("?fy=2025")).json();
+    expect(data).toMatchObject({ fy: 2025, label: "2025-26", expense: 6000, count: 2 });
+    expect(data.start).toBe("2025-03-31T18:30:00.000Z");
+    expect(data.byMonth).toHaveLength(12);
+    expect(data.byMonth[0]).toMatchObject({ month: "2025-04", expense: 2000 });
+    expect(data.byMonth[11]).toMatchObject({ month: "2026-03", expense: 4000 });
+    const next = (await (await summary("?fy=2026")).json()).data;
+    expect(next.expense).toBe(8000);
+  });
+
+  it("buckets months in the user's zone", async () => {
+    const { default: User } = await import("@/models/User");
+    await User.updateOne({ _id: userId }, { $set: { "preferences.timezone": "America/New_York" } });
+    // 02:00 UTC on 1 May is still 30 April in New York.
+    await add("expense", 500, "2025-05-01T02:00:00Z");
+    const { data } = await (await summary("?fy=2025")).json();
+    expect(data.timeZone).toBe("America/New_York");
+    expect(data.byMonth[0]).toMatchObject({ month: "2025-04", expense: 500 });
+    expect(data.byMonth[1].expense).toBe(0);
+  });
+
+  it("counts income and spending, leaving out transfers, voided and deleted rows", async () => {
+    await add("income", 100000, "2025-06-10T06:00:00Z");
+    await add("expense", 30000, "2025-06-11T06:00:00Z");
+    await add("transfer", 50000, "2025-06-12T06:00:00Z", { transferTo: walletId });
+    await add("expense", 9999, "2025-06-13T06:00:00Z", { reviewStatus: "voided" });
+    await add("expense", 8888, "2025-06-14T06:00:00Z", { isDeleted: true });
+    const { data } = await (await summary("?fy=2025")).json();
+    expect(data).toMatchObject({ income: 100000, expense: 30000, saved: 70000, count: 2 });
+    expect(data.incomeByCategory).toEqual([{ category: "Salary", total: 100000 }]);
+  });
+
+  it("counts a recurring instalment only once paid, on the day it was paid", async () => {
+    const rid = new mongoose.Types.ObjectId();
+    await add("expense", 700, "2025-04-05T06:00:00Z", { recurringId: rid, installmentStatus: "upcoming" });
+    await add("expense", 900, "2025-04-20T06:00:00Z", { recurringId: rid, installmentStatus: "paid", paidAt: new Date("2026-04-02T06:00:00Z") });
+    expect((await (await summary("?fy=2025")).json()).data.expense).toBe(0);
+    expect((await (await summary("?fy=2026")).json()).data.expense).toBe(900);
+  });
+
+  it("takes a confirmed refund off spending and off the deductible total", async () => {
+    await setCategories(["food"]);
+    await add("expense", 10000, "2025-07-01T06:00:00Z");
+    await add("income", 2500, "2025-07-05T06:00:00Z", { category: "Food", refundStatus: "confirmed" });
+    await add("income", 700, "2025-07-06T06:00:00Z", { category: "Food", refundStatus: "suggested" }); // a suggestion is plain income
+    const { data } = await (await summary("?fy=2025")).json();
+    expect(data.income).toBe(700);
+    expect(data.expense).toBe(7500);
+    expect(data.deductible.total).toBe(7500);
+    expect(data.deductible.byCategory).toEqual([{ category: "Food", total: 7500 }]);
+  });
+
+  describe("refunds follow the expense they refund", () => {
+    const refund = (orig: { _id: unknown }, amount: number, date: string, category = "Food") =>
+      add("income", amount, date, { category, refundStatus: "confirmed", refundOf: orig._id });
+
+    it("not deductible when the expense was flagged false, even in a listed category", async () => {
+      await setCategories(["food"]);
+      const exp = await add("expense", 10000, "2025-07-01T06:00:00Z", { deductible: false });
+      await refund(exp, 2500, "2025-07-05T06:00:00Z");
+      const { data } = await (await summary("?fy=2025")).json();
+      expect(data.expense).toBe(7500);
+      expect(data.deductible.total).toBe(0);
+    });
+
+    it("deductible when the expense was flagged true, even in an unlisted category", async () => {
+      const exp = await add("expense", 10000, "2025-07-01T06:00:00Z", { category: "Gifts", deductible: true });
+      await refund(exp, 2500, "2025-07-05T06:00:00Z", "Gifts");
+      const { data } = await (await summary("?fy=2025")).json();
+      expect(data.deductible.total).toBe(7500);
+      expect(data.byMonth[3].deductible).toBe(7500);
+    });
+
+    it("counts in the year it arrived, so a later year's spending goes down", async () => {
+      await setCategories(["food"]);
+      const exp = await add("expense", 10000, "2025-08-01T06:00:00Z");
+      await refund(exp, 2500, "2026-04-02T06:00:00Z");
+      const first = (await (await summary("?fy=2025")).json()).data;
+      expect(first).toMatchObject({ expense: 10000 });
+      expect(first.deductible.total).toBe(10000);
+      const next = (await (await summary("?fy=2026")).json()).data;
+      expect(next.expense).toBe(-2500);
+      expect(next.deductible.total).toBe(-2500);
+      expect(next.saved).toBe(2500);
+    });
+
+    it("is skipped when the expense is voided or deleted", async () => {
+      const voided = await add("expense", 10000, "2025-07-01T06:00:00Z", { reviewStatus: "voided" });
+      const gone = await add("expense", 6000, "2025-07-02T06:00:00Z", { isDeleted: true });
+      await refund(voided, 2500, "2025-07-05T06:00:00Z");
+      await refund(gone, 1000, "2025-07-06T06:00:00Z");
+      const { data } = await (await summary("?fy=2025")).json();
+      expect(data).toMatchObject({ expense: 0, income: 0, count: 0 });
+    });
+  });
+
+  describe("more refund cases", () => {
+    const refund = (orig: { _id: unknown }, amount: number, date: string, category = "Food", extra: Record<string, unknown> = {}) =>
+      add("income", amount, date, { category, refundStatus: "confirmed", refundOf: orig._id, ...extra });
+
+    it("a refund in a later year follows its expense's flag, per year", async () => {
+      await setCategories(["food"]);
+      const yes = await add("expense", 10000, "2025-08-01T06:00:00Z", { category: "Gifts", deductible: true });
+      const no = await add("expense", 8000, "2025-08-02T06:00:00Z", { deductible: false });
+      await refund(yes, 2000, "2026-05-01T06:00:00Z", "Gifts");
+      await refund(no, 500, "2026-05-02T06:00:00Z");
+      const first = (await (await summary("?fy=2025")).json()).data;
+      expect(first.deductible.total).toBe(10000);
+      const next = (await (await summary("?fy=2026")).json()).data;
+      expect(next.expense).toBe(-2500);
+      expect(next.deductible.total).toBe(-2000);
+    });
+
+    it("a split refund takes deductibility from the one line it is linked to (known limit)", async () => {
+      await setCategories(["health"]);
+      const group = new mongoose.Types.ObjectId();
+      const medical = await add("expense", 6000, "2025-09-01T06:00:00Z", { category: "Health", splitGroupId: group });
+      await add("expense", 4000, "2025-09-01T06:00:00Z", { category: "Food", splitGroupId: group });
+      await refund(medical, 1000, "2025-09-10T06:00:00Z", "Health");
+      const { data } = await (await summary("?fy=2025")).json();
+      expect(data.deductible.total).toBe(5000);
+      expect(data.expense).toBe(9000);
+    });
+
+    it("a refund pointing at another user's expense does not read it", async () => {
+      await setCategories(["food"]);
+      const theirs = await add("expense", 5000, "2025-09-01T06:00:00Z", { reviewStatus: "voided", deductible: false }, otherUserId);
+      await refund(theirs, 700, "2025-09-05T06:00:00Z");
+      const { data } = await (await summary("?fy=2025")).json();
+      // not skipped as "voided", and the other user's flag does not apply: its own category does
+      expect(data.expense).toBe(-700);
+      expect(data.deductible.total).toBe(-700);
+    });
+  });
+
+  it("totals every refund when they span more than one chunk of expense ids", async () => {
+    const { ID_CHUNK } = await import("@/lib/tax-service");
+    const { default: Transaction } = await import("@/models/Transaction");
+    await setCategories(["food"]);
+    const count = ID_CHUNK + 150;
+    const ids = Array.from({ length: count }, () => new mongoose.Types.ObjectId());
+    const base = { user: userId, account: accountId, currency: "INR", category: "Food" };
+    await Transaction.insertMany(ids.map((_id, i) => ({ ...base, _id, type: "expense", amount: 100, date: new Date(Date.UTC(2025, 5, 1 + (i % 20), 6)) })));
+    await Transaction.insertMany(
+      ids.map((refundOf, i) => ({ ...base, type: "income", amount: 30, refundStatus: "confirmed", refundOf, date: new Date(Date.UTC(2025, 6, 1 + (i % 20), 6)) }))
+    );
+    // one of them was voided after: its refund must drop out, wherever it sits in the id list
+    await Transaction.updateOne({ _id: ids[count - 1] }, { $set: { reviewStatus: "voided" } });
+    const { data } = await (await summary("?fy=2025")).json();
+    expect(data.expense).toBe((count - 1) * 70);
+    expect(data.deductible.total).toBe((count - 1) * 70);
+    expect(data.count).toBe((count - 1) * 2);
+  });
+
+  it("a refund whose expense no longer exists still counts, in its own category", async () => {
+    await setCategories(["food"]);
+    await add("income", 700, "2025-09-05T06:00:00Z", { category: "Food", refundStatus: "confirmed", refundOf: new mongoose.Types.ObjectId() });
+    const { data } = await (await summary("?fy=2025")).json();
+    expect(data.expense).toBe(-700);
+    expect(data.deductible.total).toBe(-700);
+  });
+
+  it("years include paid instalments with no paidAt and rows from before isDeleted existed", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const rid = new mongoose.Types.ObjectId();
+    await add("expense", 900, "2019-06-10T06:00:00Z", { recurringId: rid, isRecurring: true, installmentStatus: "paid" });
+    // raw insert: no isDeleted field at all, as an old document would be
+    await Transaction.collection.insertOne({
+      user: new mongoose.Types.ObjectId(userId),
+      account: new mongoose.Types.ObjectId(accountId),
+      type: "expense",
+      amount: 400,
+      currency: "INR",
+      category: "Food",
+      date: new Date("2018-06-10T06:00:00Z"),
+    });
+    const { data } = await (await summary("?fy=2025")).json();
+    expect(data.availableYears).toEqual(expect.arrayContaining([2025, 2019, 2018]));
+    expect(data.availableYears.at(-1)).toBe(2018);
+    // and the 2019 instalment is counted, by its date
+    expect((await (await summary("?fy=2019")).json()).data.expense).toBe(900);
+    expect((await (await summary("?fy=2018")).json()).data.expense).toBe(400);
+  });
+
+  it("the year reads stop at the first row on the indexes", async () => {
+    const { yearRangeReads } = await import("@/lib/tax-service");
+    const { default: Transaction } = await import("@/models/Transaction");
+    await Transaction.syncIndexes();
+    const rid = new mongoose.Types.ObjectId();
+    const rows = Array.from({ length: 300 }, (_, i) => ({
+      user: userId,
+      account: accountId,
+      type: "expense",
+      amount: 100,
+      currency: "INR",
+      category: "Food",
+      date: new Date(Date.UTC(2023, 0, 1 + (i % 28), 6)),
+      isDeleted: i % 5 === 0 ? undefined : false,
+    }));
+    await Transaction.insertMany(rows);
+    // many paid recurring rows with a stamp: the paidAt reads must stop at the first, not walk them all
+    await Transaction.insertMany(
+      Array.from({ length: 40 }, (_, i) => ({
+        user: userId,
+        account: accountId,
+        type: "expense",
+        amount: 100,
+        currency: "INR",
+        category: "Food",
+        isRecurring: true,
+        recurringId: rid,
+        installmentStatus: "paid",
+        isDeleted: false,
+        date: new Date(Date.UTC(2023, 1, 1 + (i % 20), 6)),
+        paidAt: new Date(Date.UTC(2023, 1, 1 + (i % 20), 8)),
+      }))
+    );
+    await Transaction.collection.insertOne({
+      user: new mongoose.Types.ObjectId(userId),
+      account: new mongoose.Types.ObjectId(accountId),
+      type: "expense",
+      amount: 100,
+      currency: "INR",
+      category: "Food",
+      date: new Date(Date.UTC(2023, 0, 1, 5)),
+    });
+    await add("expense", 100, "2023-03-01T06:00:00Z", { recurringId: rid, isRecurring: true, installmentStatus: "paid" });
+    const reads = yearRangeReads(new mongoose.Types.ObjectId(userId));
+    for (const q of Object.values(reads)) {
+      const plan = (await (q as unknown as { explain: (v: string) => Promise<Record<string, unknown>> }).explain("executionStats")) as {
+        executionStats: { totalDocsExamined: number };
+      };
+      expect(plan.executionStats.totalDocsExamined).toBeLessThanOrEqual(5);
+    }
+    const { data } = await (await summary("?fy=2022")).json();
+    // every row falls in 2022-23 (January to March 2023)
+    expect(data.availableYears).toEqual([2022]);
+  });
+
+  it("matches category names beyond ASCII, the same way on both sides", async () => {
+    const { PUT } = await import("@/app/api/integrations/tax/settings/route");
+    await PUT(
+      new NextRequest("http://localhost/api/integrations/tax/settings", {
+        method: "PUT",
+        headers: headers({ "idempotency-key": "tax-unicode", "content-type": "application/json" }),
+        body: JSON.stringify({ deductibleCategories: ["ÉDUCATION"] }),
+      }),
+      {}
+    );
+    await add("expense", 3000, "2025-09-01T06:00:00Z", { category: "Éducation" });
+    await add("expense", 2000, "2025-09-02T06:00:00Z", { category: "éducation" });
+    const { data } = await (await summary("?fy=2025")).json();
+    expect(data.deductibleCategories).toEqual(["éducation"]);
+    expect(data.deductible.total).toBe(5000);
+    expect(data.deductible.byCategory).toHaveLength(1);
+  });
+
+  it("lists the years from the first row to the last, gaps included, without scanning every row", async () => {
+    await add("expense", 100, "2022-06-01T06:00:00Z");
+    await add("expense", 100, "2024-06-01T06:00:00Z");
+    const rid = new mongoose.Types.ObjectId();
+    await add("expense", 100, "2024-06-02T06:00:00Z", { recurringId: rid, installmentStatus: "paid", paidAt: new Date("2027-05-01T06:00:00Z") });
+    const { data } = await (await summary("?fy=2024")).json();
+    expect(data.availableYears).toEqual([2027, 2026, 2025, 2024, 2023, 2022]);
+    // an empty account still offers the year asked for
+    const { default: Transaction } = await import("@/models/Transaction");
+    await Transaction.deleteMany({});
+    expect((await (await summary("?fy=2020")).json()).data.availableYears).toEqual([2020]);
+  });
+
+  it("settings: change the list by what moved, atomically, within 50 names", async () => {
+    const { PATCH } = await import("@/app/api/integrations/tax/settings/route");
+    const patch = (body: unknown, key = `d-${Math.random().toString(36).slice(2)}`) =>
+      PATCH(
+        new NextRequest("http://localhost/api/integrations/tax/settings", {
+          method: "PATCH",
+          headers: headers(key ? { "idempotency-key": key, "content-type": "application/json" } : {}),
+          body: JSON.stringify(body),
+        }),
+        {}
+      );
+    expect((await patch({ add: ["x"] }, "")).status).toBe(400);
+    expect((await patch({})).status).toBe(400);
+    expect((await patch({ add: [""] })).status).toBe(400);
+    expect((await patch({ add: ["a"], other: 1 })).status).toBe(400);
+    expect((await (await patch({ add: [" Health ", "Rent"] })).json()).data.deductibleCategories).toEqual(["health", "rent"]);
+    // two changes in a row both stick
+    await patch({ add: ["travel"] });
+    expect((await (await patch({ remove: ["RENT"] })).json()).data.deductibleCategories).toEqual(["health", "travel"]);
+    // removing wins over adding the same name
+    expect((await (await patch({ add: ["gifts"], remove: ["gifts"] })).json()).data.deductibleCategories).toEqual(["health", "travel"]);
+    // removing a name that is not there changes nothing
+    expect((await (await patch({ remove: ["nothing"] })).json()).data.deductibleCategories).toEqual(["health", "travel"]);
+    await setCategories(Array.from({ length: 49 }, (_, i) => `c${String(i).padStart(2, "0")}`));
+    expect((await (await patch({ add: ["last"] })).json()).data.deductibleCategories).toHaveLength(50);
+    expect((await patch({ add: ["one-too-many"] }, "cap-retry")).status).toBe(400);
+    // the 400 is not remembered: free a slot and the same key and body now work
+    await patch({ remove: ["c01"] });
+    const retry = await patch({ add: ["one-too-many"] }, "cap-retry");
+    expect(retry.status).toBe(200);
+    expect((await retry.json()).data.deductibleCategories).toContain("one-too-many");
+    expect((await (await patch({ add: ["c00"] })).json()).data.deductibleCategories).toHaveLength(50); // already there
+    const { PATCH: browserPatch } = await import("@/app/api/tax/settings/route");
+    sessionUser.current = { id: userId, name: "Tax User", email: "t@x.com", role: "user" };
+    const res = await browserPatch(new NextRequest("http://localhost/api/tax/settings", { method: "PATCH", body: JSON.stringify({ remove: ["last"] }) }));
+    expect((await res.json()).data.deductibleCategories).toHaveLength(49);
+    expect((await browserPatch(new NextRequest("http://localhost/api/tax/settings", { method: "PATCH", body: "{}" }))).status).toBe(400);
+    sessionUser.current = null;
+    expect((await browserPatch(new NextRequest("http://localhost/api/tax/settings", { method: "PATCH", body: "{}" }))).status).toBe(401);
+  });
+
+  it("deductible follows the category list, and a flag on the row wins", async () => {
+    await setCategories(["health"]);
+    await add("expense", 4000, "2025-08-01T06:00:00Z", { category: "Health" });
+    await add("expense", 1500, "2025-08-02T06:00:00Z", { category: "health", deductible: false });
+    await add("expense", 600, "2025-08-03T06:00:00Z", { category: "Food", deductible: true });
+    await add("expense", 300, "2025-08-04T06:00:00Z", { category: "Food" });
+    await add("income", 99999, "2025-08-05T06:00:00Z", { category: "Health" }); // income is never deductible
+    const { data } = await (await summary("?fy=2025")).json();
+    expect(data.deductible.total).toBe(4600);
+    expect(data.deductible.byCategory).toEqual([
+      { category: "Health", total: 4000 },
+      { category: "Food", total: 600 },
+    ]);
+    expect(data.byMonth[4].deductible).toBe(4600);
+    expect(data.expense).toBe(6400);
+  });
+
+  it("defaults to the current year, validates fy and lists the years with data", async () => {
+    await add("expense", 100, "2023-05-01T06:00:00Z");
+    await add("expense", 100, "2024-02-01T06:00:00Z");
+    const { data } = await (await summary()).json();
+    const { currentFy } = await import("@/lib/tax-year");
+    expect(data.fy).toBe(currentFy(new Date(), "Asia/Kolkata"));
+    expect(data.availableYears).toEqual(expect.arrayContaining([data.fy, 2023]));
+    expect(data.availableYears.filter((y: number) => y === 2023)).toHaveLength(1);
+    for (const bad of ["?fy=abc", "?fy=25", "?fy=1999", "?fy=2025.5", "?fy="]) {
+      expect((await summary(bad)).status).toBe(400);
+    }
+  });
+
+  it("is per user", async () => {
+    await add("expense", 4000, "2025-08-01T06:00:00Z", {}, otherUserId);
+    await add("expense", 100, "2025-08-01T06:00:00Z");
+    const { data } = await (await summary("?fy=2025")).json();
+    expect(data.expense).toBe(100);
+    expect(data.count).toBe(1);
+  });
+
+  it("settings: save the category list, trimmed and lower case, needs an Idempotency-Key", async () => {
+    const { GET, PUT } = await import("@/app/api/integrations/tax/settings/route");
+    const put = (body: unknown, key = "tax-set-1") =>
+      PUT(
+        new NextRequest("http://localhost/api/integrations/tax/settings", {
+          method: "PUT",
+          headers: headers(key ? { "idempotency-key": key, "content-type": "application/json" } : {}),
+          body: JSON.stringify(body),
+        }),
+        {}
+      );
+    expect((await put({ deductibleCategories: ["x"] }, "")).status).toBe(400);
+    expect((await put({ deductibleCategories: [""] })).status).toBe(400);
+    expect((await put({ deductibleCategories: ["a".repeat(41)] })).status).toBe(400);
+    expect((await put({ deductibleCategories: Array.from({ length: 51 }, (_, i) => `c${i}`) })).status).toBe(400);
+    expect((await put({ deductibleCategories: ["x"], extra: 1 })).status).toBe(400);
+    const res = await put({ deductibleCategories: [" Health ", "health", "Rent"] }, "tax-set-2");
+    expect(res.status).toBe(200);
+    expect((await res.json()).data.deductibleCategories).toEqual(["health", "rent"]);
+    const got = await GET(new NextRequest("http://localhost/api/integrations/tax/settings", { headers: headers() }), {});
+    expect((await got.json()).data).toEqual({ deductibleCategories: ["health", "rent"] });
+    // replaying the same key and body returns the first answer
+    const replay = await put({ deductibleCategories: [" Health ", "health", "Rent"] }, "tax-set-2");
+    expect(replay.status).toBe(200);
+    const clash = await put({ deductibleCategories: ["other"] }, "tax-set-2");
+    expect(clash.status).toBe(409);
+  });
+
+  it("flag one expense, clear it, and reject other users, transfers and bad ids", async () => {
+    const { PATCH } = await import("@/app/api/integrations/tax/transactions/[id]/route");
+    const patch = (id: string, body: unknown, key = `k-${Math.random().toString(36).slice(2)}`) =>
+      PATCH(
+        new NextRequest(`http://localhost/api/integrations/tax/transactions/${id}`, {
+          method: "PATCH",
+          headers: headers({ "idempotency-key": key, "content-type": "application/json" }),
+          body: JSON.stringify(body),
+        }),
+        { params: Promise.resolve({ id }) }
+      );
+    const mine = await add("expense", 4000, "2025-09-01T06:00:00Z");
+    const theirs = await add("expense", 4000, "2025-09-01T06:00:00Z", {}, otherUserId);
+    const move = await add("transfer", 4000, "2025-09-01T06:00:00Z", { transferTo: walletId });
+    const res = await patch(mine._id.toString(), { deductible: true });
+    expect(res.status).toBe(200);
+    expect((await res.json()).data).toEqual({ id: mine._id.toString(), deductible: true });
+    expect((await (await summary("?fy=2025")).json()).data.deductible.total).toBe(4000);
+    expect((await patch(mine._id.toString(), { deductible: null })).status).toBe(200);
+    expect((await (await summary("?fy=2025")).json()).data.deductible.total).toBe(0);
+    expect((await patch(theirs._id.toString(), { deductible: true })).status).toBe(404);
+    expect((await patch(move._id.toString(), { deductible: true })).status).toBe(404);
+    expect((await patch("not-an-id", { deductible: true })).status).toBe(400);
+    expect((await patch(mine._id.toString(), { deductible: "yes" })).status).toBe(400);
+    expect((await patch(mine._id.toString(), {})).status).toBe(400);
+  });
+
+  it("csv: the summary as a file, text starting with a formula character is quoted, negatives stay numbers", async () => {
+    await add("expense", 5000, "2025-06-01T06:00:00Z", { category: "=HYPERLINK(1)" });
+    await add("expense", 300, "2025-06-02T06:00:00Z", { category: "Food" });
+    const { GET } = await import("@/app/api/integrations/tax/export/route");
+    const res = await GET(new NextRequest("http://localhost/api/integrations/tax/export?fy=2025", { headers: headers() }), {});
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/csv");
+    expect(res.headers.get("content-disposition")).toContain("tax-summary-2025-26.csv");
+    const text = await res.text();
+    const lines = text.split("\n");
+    expect(lines[0]).toBe("section,name,amount");
+    expect(lines).toContain("Summary,Saved,-53");
+    expect(lines).toContain("Summary,Financial year,2025-26");
+    expect(text).toContain("Spending by category,'=HYPERLINK(1),50");
+    expect(text).not.toContain(",=HYPERLINK");
+    const bad = await GET(new NextRequest("http://localhost/api/integrations/tax/export?fy=zzz", { headers: headers() }), {});
+    expect(bad.status).toBe(400);
+  });
+
+  it("browser routes answer the same summary, settings and csv", async () => {
+    await add("expense", 2000, "2025-06-01T06:00:00Z", { category: "Health" });
+    sessionUser.current = { id: userId, name: "Tax User", email: "t@x.com", role: "user" };
+    const { GET } = await import("@/app/api/tax/route");
+    const { PUT } = await import("@/app/api/tax/settings/route");
+    const { GET: exportCsv } = await import("@/app/api/tax/export/route");
+    const put = await PUT(new NextRequest("http://localhost/api/tax/settings", { method: "PUT", body: JSON.stringify({ deductibleCategories: ["Health"] }) }));
+    expect(put.status).toBe(200);
+    const res = await GET(new NextRequest("http://localhost/api/tax?fy=2025"));
+    expect((await res.json()).data.deductible.total).toBe(2000);
+    expect((await GET(new NextRequest("http://localhost/api/tax?fy=nope"))).status).toBe(400);
+    const csv = await exportCsv(new NextRequest("http://localhost/api/tax/export?fy=2025"));
+    expect(csv.status).toBe(200);
+    expect(await csv.text()).toContain("Deductible by category,Health,20");
+    sessionUser.current = null;
+    expect((await GET(new NextRequest("http://localhost/api/tax"))).status).toBe(401);
+  });
+});
+
+describe("budgets csv", () => {
+  it("remaining stays a number when over budget", async () => {
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const { default: Budget } = await import("@/models/Budget");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const user = await User.create({ name: "B", email: `bc${Date.now()}@x.com`, password: "hash", isActive: true });
+    const account = await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 0, currency: "INR" });
+    const now = new Date();
+    await Budget.create({ user: user._id, category: "Food", month: now.getMonth() + 1, year: now.getFullYear(), limitAmount: 10000 });
+    await Transaction.create({ user: user._id, account: account._id, type: "expense", amount: 25000, currency: "INR", category: "Food", date: new Date(now.getFullYear(), now.getMonth(), 2, 12) });
+    sessionUser.current = { id: user._id.toString(), name: "B", email: "b@x.com", role: "user" };
+    const { GET } = await import("@/app/api/budgets/route");
+    const res = await GET(new NextRequest(`http://localhost/api/budgets?format=csv&month=${now.getMonth() + 1}&year=${now.getFullYear()}`));
+    const row = (await res.text()).split("\n")[1].split(",");
+    expect(row[6]).toBe("-150");
+    sessionUser.current = null;
+  });
+});

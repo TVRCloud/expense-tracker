@@ -2,6 +2,8 @@
 // strings/numbers, escapes quotes/commas/newlines per RFC 4180.
 function escapeCsvCell(value: unknown): string {
   if (value === null || value === undefined) return "";
+  // A real number is never a formula, and a negative one must stay numeric.
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "";
   let str = String(value);
 
   // Neutralize formula injection: a cell starting with =, +, -, @, tab, or CR

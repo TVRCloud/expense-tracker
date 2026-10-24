@@ -29,6 +29,9 @@ describe("INVALIDATION_MAP", () => {
       expect(INVALIDATION_MAP[r].map((k) => k[0])).toContain("net-worth");
     }
   });
+  it("spending refreshes the tax summary", () => {
+    expect(INVALIDATION_MAP.transactions.map((k) => k[0])).toContain("tax");
+  });
   it("captures touch reconcile and notifications", () => {
     expect(INVALIDATION_MAP.captures).toEqual([["reconcile"], ["notifications"]]);
   });
