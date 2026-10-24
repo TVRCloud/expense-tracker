@@ -226,7 +226,10 @@ export async function getNetWorth(userId: string, range: NetWorthRange = "90d", 
   };
 }
 
-let snapshotsRunning = false;
+// A pass that has been going for this long is treated as hung, so one stuck database call cannot block every
+// later run until the process restarts.
+const RUN_STALE_AFTER_MS = 10 * 60 * 1000;
+let snapshotsStartedAt: number | null = null;
 
 /**
  * Cron: record today's point for every active user that has something to count. A user who had a point
@@ -235,8 +238,13 @@ let snapshotsRunning = false;
  * cursor and handled one by one.
  */
 export async function recordSnapshotsForAllUsers(now = new Date()): Promise<{ checked: number; recorded: number; skipped?: true }> {
-  if (snapshotsRunning) return { checked: 0, recorded: 0, skipped: true };
-  snapshotsRunning = true;
+  const startedAt = Date.now();
+  if (snapshotsStartedAt !== null && startedAt - snapshotsStartedAt < RUN_STALE_AFTER_MS) {
+    logger.warn({ runningForMs: startedAt - snapshotsStartedAt }, "Net worth snapshots skipped: a pass is still running");
+    return { checked: 0, recorded: 0, skipped: true };
+  }
+  if (snapshotsStartedAt !== null) logger.warn({ runningForMs: startedAt - snapshotsStartedAt }, "Net worth snapshots: an earlier pass looks hung, starting a new one");
+  snapshotsStartedAt = startedAt;
   try {
     await connectDB();
     let checked = 0;
@@ -256,7 +264,8 @@ export async function recordSnapshotsForAllUsers(now = new Date()): Promise<{ ch
     }
     return { checked, recorded };
   } finally {
-    snapshotsRunning = false;
+    // Only release our own claim: a hung pass that finishes late must not clear a newer pass's.
+    if (snapshotsStartedAt === startedAt) snapshotsStartedAt = null;
   }
 }
 

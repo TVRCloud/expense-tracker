@@ -32,7 +32,10 @@ export const POST = withIntegrationRoute("sinking-funds", async ({ req, user, re
         const fund = await contributeToSinkingFund({ userId: user.id, fundId: id, amount: parsed.data.amount });
         return { status: 200, body: fund as unknown as Record<string, unknown> };
       } catch (err) {
-        if (err instanceof SinkingFundError) return { status: 404, body: { errorCode: err.code, message: err.message } };
+        if (err instanceof SinkingFundError) {
+          // 404 for a fund that is not the user's; 400 for a deposit past the limit.
+          return { status: err.code === "FUND_NOT_FOUND" ? 404 : 400, body: { errorCode: err.code, message: err.message } };
+        }
         throw err;
       }
     },
@@ -41,6 +44,7 @@ export const POST = withIntegrationRoute("sinking-funds", async ({ req, user, re
     return integrationError("IDEMPOTENCY_CONFLICT", conflictMessage(outcome.reason), requestId);
   }
   const body = outcome.body as { errorCode?: string; message?: string } & Record<string, unknown>;
+  if (body.errorCode === "FUND_LIMIT") return integrationError("VALIDATION_ERROR", body.message ?? "Amount is too large", requestId);
   if (body.errorCode) return integrationError("NOT_FOUND", body.message ?? "Sinking fund not found", requestId);
   return integrationOk(body, requestId, { status: outcome.status });
 });

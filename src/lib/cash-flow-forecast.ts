@@ -112,9 +112,9 @@ export async function getCashFlowForecast(
           account: { $in: liquidIds },
           date: { $gte: lookbackFrom, $lte: now },
         })
-          .select("amount description type")
+          .select("amount description type refundOf")
           .limit(5000)
-          .lean<Array<{ amount: number; description?: string; type: string }>>()
+          .lean<Array<{ _id: Types.ObjectId; amount: number; description?: string; type: string; refundOf?: Types.ObjectId }>>()
       : Promise.resolve([]),
   ]);
 
@@ -145,8 +145,16 @@ export async function getCashFlowForecast(
 
   // Everyday spending that the subscriptions above do not already explain.
   const subKeys = new Set(activeSubs.map((s) => merchantKey(s.merchant)));
-  const variable = recentSpend.filter((t) => !subKeys.has(merchantKey(t.description))).reduce((sum, t) => sum + (t.type === "income" ? -t.amount : t.amount), 0);
-  const dailyAverageSpend = Math.round(variable / SPEND_LOOKBACK_DAYS);
+  const counted = recentSpend.filter((t) => t.type === "expense" && !subKeys.has(merchantKey(t.description)));
+  const countedIds = new Set(counted.map((t) => String(t._id)));
+  // A confirmed refund comes off spending only when the expense it refunds is itself in this count: a card
+  // purchase refunded to a bank account, or a purchase from before the window, must not lower the average.
+  const refunded = recentSpend
+    .filter((t) => t.type === "income" && t.refundOf && countedIds.has(String(t.refundOf)))
+    .reduce((sum, t) => sum + t.amount, 0);
+  const variable = counted.reduce((sum, t) => sum + t.amount, 0) - refunded;
+  // Reported as applied: never below zero, the same floor buildForecast uses.
+  const dailyAverageSpend = Math.max(Math.round(variable / SPEND_LOOKBACK_DAYS), 0);
 
   const forecast = buildForecast({ startingBalance, now, days, timeZone, events, dailySpend: dailyAverageSpend });
 

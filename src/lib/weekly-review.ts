@@ -424,7 +424,10 @@ export async function sendWeeklyReviewForUser(
   return 1;
 }
 
-let reviewsRunning = false;
+// A run that has been going for this long is treated as hung, so one stuck database call cannot block every
+// later run until the process restarts.
+const RUN_STALE_AFTER_MS = 10 * 60 * 1000;
+let reviewsStartedAt: number | null = null;
 
 /**
  * Timer and cron entry. One run at a time per process (the timer and the cron route can overlap). The user
@@ -432,8 +435,13 @@ let reviewsRunning = false;
  * up costs no further query.
  */
 export async function sendWeeklyReviews(now = new Date()): Promise<{ checked: number; sent: number; skipped?: true }> {
-  if (reviewsRunning) return { checked: 0, sent: 0, skipped: true };
-  reviewsRunning = true;
+  const startedAt = Date.now();
+  if (reviewsStartedAt !== null && startedAt - reviewsStartedAt < RUN_STALE_AFTER_MS) {
+    logger.warn({ runningForMs: startedAt - reviewsStartedAt }, "Weekly reviews skipped: a run is still going");
+    return { checked: 0, sent: 0, skipped: true };
+  }
+  if (reviewsStartedAt !== null) logger.warn({ runningForMs: startedAt - reviewsStartedAt }, "Weekly reviews: an earlier run looks hung, starting a new one");
+  reviewsStartedAt = startedAt;
   try {
     await connectDB();
     const users = await User.find({ "preferences.weeklyReview.enabled": true, isActive: { $ne: false } })
@@ -453,6 +461,7 @@ export async function sendWeeklyReviews(now = new Date()): Promise<{ checked: nu
     }
     return { checked: users.length, sent };
   } finally {
-    reviewsRunning = false;
+    // Only release our own claim: a hung run that finishes late must not clear a newer run's.
+    if (reviewsStartedAt === startedAt) reviewsStartedAt = null;
   }
 }

@@ -21,7 +21,10 @@ export async function POST(req: NextRequest, { params }: { params: Params }) {
       data: await contributeToSinkingFund({ userId: user.id, fundId: id, amount: parsed.data.amount }),
     });
   } catch (err) {
-    if (err instanceof SinkingFundError) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (err instanceof SinkingFundError) {
+      if (err.code === "FUND_LIMIT") return NextResponse.json({ error: err.message }, { status: 400 });
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
     logger.error({ err }, "POST /api/sinking-funds/[id]/contribute failed");
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }

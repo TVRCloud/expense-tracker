@@ -4949,13 +4949,43 @@ describe("cash flow forecast", () => {
     expect(f.events.map((e) => e.label)).not.toContain("Phantom rent");
   });
 
-  it("takes a confirmed refund off the daily average", async () => {
+  async function refundOf(expense: { _id: unknown }, amount: number, account = bankId, daysAgo = 8) {
     const { default: Transaction } = await import("@/models/Transaction");
-    await spend(600_000, 10, "Amazon");
-    await Transaction.create({ user: userId, account: bankId, type: "income", amount: 300_000, category: "Shopping", description: "Amazon", date: at(-8), refundStatus: "confirmed" });
+    return Transaction.create({
+      user: userId, account, type: "income", amount, category: "Shopping", description: "Amazon", date: at(-daysAgo),
+      refundOf: expense._id, refundStatus: "confirmed",
+    });
+  }
+
+  it("takes a confirmed refund off the daily average when the expense it refunds is in the count", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const amazon = await spend(600_000, 10, "Amazon");
+    await refundOf(amazon, 300_000);
     await Transaction.create({ user: userId, account: bankId, type: "income", amount: 500_000, category: "Salary", description: "Pay", date: at(-7) }); // ordinary income is not a refund
     const f = await forecast(5);
     expect(f.inputs.dailyAverageSpend).toBe(10_000); // (6,000 - 3,000) / 30 days
+  });
+
+  it("a refund into this account for a card purchase, or for a purchase older than the window, does not lower the average", async () => {
+    const { default: Account } = await import("@/models/Account");
+    const card = await Account.create({ user: userId, name: "Card", type: "credit_card", balance: 0, currency: "INR" });
+    const { default: Transaction } = await import("@/models/Transaction");
+    await spend(300_000, 10, "Groceries");
+    const onCard = await Transaction.create({ user: userId, account: card._id, type: "expense", amount: 900_000, category: "Shopping", description: "TV", date: at(-9) });
+    await refundOf(onCard, 900_000); // the refund lands in the bank account
+    const old = await spend(900_000, 45, "Sofa"); // before the 30 day window
+    await refundOf(old, 900_000, bankId, 5);
+    const f = await forecast(5);
+    expect(f.inputs.dailyAverageSpend).toBe(10_000); // only the groceries count
+  });
+
+  it("the reported daily average is the one applied, and is never negative", async () => {
+    const small = await spend(100_000, 10, "Amazon");
+    await refundOf(small, 900_000); // a refund larger than the spend
+    const f = await forecast(5);
+    expect(f.inputs.dailyAverageSpend).toBe(0);
+    expect(f.totals.dailySpendTotal).toBe(0);
+    expect(f.points.map((p) => p.balance)).toEqual([1_000_000, 1_000_000, 1_000_000, 1_000_000, 1_000_000]);
   });
 
   it("takes the daily average from ordinary spending of the last 30 days, from tomorrow on", async () => {
@@ -5333,9 +5363,59 @@ describe("integration sinking funds", () => {
     const id = data.id as string;
     expect((await contribute(id, 1e15)).status).toBe(400);
     expect((await contribute(id, -1e15)).status).toBe(400);
-    await contribute(id, 1e14);
+    expect((await contribute(id, 1e14)).status).toBe(200);
     const second = await contribute(id, 1e14);
-    expect((await second.json()).data.savedAmount).toBe(1e14); // capped, not 2e14
+    expect(second.status).toBe(400); // refused, not quietly capped
+    const { default: SinkingFund } = await import("@/models/SinkingFund");
+    expect((await SinkingFund.findById(id).lean<{ savedAmount: number }>())!.savedAmount).toBe(1e14);
+    const small = await contribute(id, 1);
+    expect(small.status).toBe(400); // even one paise over
+    expect((await contribute(id, -1)).status).toBe(200); // taking money out still works
+  });
+
+  it("a deposit on a fund that is not yours is a 404, not a limit error", async () => {
+    const { default: SinkingFund } = await import("@/models/SinkingFund");
+    const theirs = await SinkingFund.create({ user: otherUserId, name: "Theirs", targetAmount: 100, savedAmount: 0, dueDate: new Date() });
+    expect((await contribute(theirs._id.toString(), 50)).status).toBe(404);
+  });
+
+  it("a failed goal_reached alert does not fail or repeat the contribution", async () => {
+    const { default: Notification } = await import("@/models/Notification");
+    const { default: SinkingFund } = await import("@/models/SinkingFund");
+    const { data } = await (await create({ targetAmount: 100000, savedAmount: 90000 })).json();
+    const id = data.id as string;
+    const spy = vi.spyOn(Notification, "create").mockRejectedValueOnce(new Error("notifications are down") as never);
+    try {
+      const first = await contribute(id, 10000, { "idempotency-key": "reach-1" });
+      expect(first.status).toBe(200);
+      expect((await first.json()).data).toMatchObject({ savedAmount: 100000, isCompleted: true, status: "done" });
+      const replay = await contribute(id, 10000, { "idempotency-key": "reach-1" });
+      expect((await replay.json()).data.savedAmount).toBe(100000);
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await SinkingFund.findById(id).lean<{ savedAmount: number }>())!.savedAmount).toBe(100000); // added once
+  });
+
+  it("the answer to a write does not depend on a read after it", async () => {
+    const { default: SinkingFund } = await import("@/models/SinkingFund");
+    const { PATCH } = await import("@/app/api/integrations/sinking-funds/[id]/route");
+    const { data } = await (await create({ savedAmount: 5000 })).json();
+    const id = data.id as string;
+    const spy = vi.spyOn(SinkingFund, "findOne").mockImplementation((() => {
+      throw new Error("no read allowed after the write");
+    }) as never);
+    try {
+      const saved = await contribute(id, 100);
+      expect(saved.status).toBe(200);
+      expect((await saved.json()).data).toMatchObject({ savedAmount: 5100 });
+      const edited = await PATCH(req(`sinking-funds/${id}`, "PATCH", { name: "Renamed", monthlyAmount: 700 }), ctx(id));
+      expect(edited.status).toBe(200);
+      expect((await edited.json()).data).toMatchObject({ name: "Renamed", monthlyAmount: 700, savedAmount: 5100 });
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await SinkingFund.findById(id).lean<{ name: string; savedAmount: number }>())).toMatchObject({ name: "Renamed", savedAmount: 5100 });
   });
 
   it("an edit and a contribution move updatedAt forward", async () => {
@@ -6015,6 +6095,26 @@ describe("net worth", () => {
       expect((await recordSnapshotsForAllUsers()).skipped).toBeUndefined(); // the guard is released afterwards
     });
 
+    it("a hung pass stops blocking new ones after ten minutes", async () => {
+      const { default: User } = await import("@/models/User");
+      const { recordSnapshotsForAllUsers } = await import("@/lib/net-worth");
+      const hang = vi.spyOn(User, "find").mockImplementationOnce((() => ({
+        select: () => ({ lean: () => ({ cursor: () => ({ [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }) }) }) }),
+      })) as never);
+      void recordSnapshotsForAllUsers(); // hangs on its first read of the cursor, and never finishes
+      await new Promise((r) => setTimeout(r, 25));
+      expect((await recordSnapshotsForAllUsers()).skipped).toBe(true); // still within the deadline
+      hang.mockRestore();
+      const later = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 11 * 60 * 1000);
+      try {
+        const out = await recordSnapshotsForAllUsers();
+        expect(out.skipped).toBeUndefined(); // treated as stale: a new pass runs
+        expect(out.checked).toBeGreaterThan(0);
+      } finally {
+        later.mockRestore();
+      }
+    });
+
     it("an account saved before the archived flag existed still counts", async () => {
       const { default: Account } = await import("@/models/Account");
       const old = await Account.create({ user: userId, name: "Legacy", type: "bank", balance: 7000 });
@@ -6024,18 +6124,59 @@ describe("net worth", () => {
 
     it("a point written at the same moment by another request does not fail the read", async () => {
       const { default: NetWorthSnapshot } = await import("@/models/NetWorthSnapshot");
+      const { Types } = await import("mongoose");
+      const { recordSnapshot } = await import("@/lib/net-worth");
+      await NetWorthSnapshot.init(); // the unique (user, day) index must exist for a real duplicate
+      const first = await recordSnapshot(userId); // today's row now exists
       const real = NetWorthSnapshot.updateOne.bind(NetWorthSnapshot);
       let calls = 0;
       const spy = vi.spyOn(NetWorthSnapshot, "updateOne").mockImplementation(((...args: Parameters<typeof real>) => {
         calls += 1;
-        if (calls === 1) return Promise.reject(Object.assign(new Error("E11000 duplicate key"), { code: 11000 })) as never;
-        return real(...args);
+        if (calls > 1) return real(...args);
+        // A genuine duplicate-key error from MongoDB: insert the same (user, day) a second time.
+        return NetWorthSnapshot.collection.insertOne({ user: new Types.ObjectId(userId), day: first.date }) as never;
       }) as never);
       try {
-        const { recordSnapshot } = await import("@/lib/net-worth");
-        const point = await recordSnapshot(userId);
-        expect(calls).toBe(2);
-        expect(point.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+        const again = await recordSnapshot(userId);
+        expect(calls).toBe(2); // the duplicate was hit, then the write was retried once
+        expect(again.date).toBe(first.date);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(await NetWorthSnapshot.countDocuments({ user: userId })).toBe(1);
+    });
+
+    it("an error that is not a duplicate key is not retried and reaches the caller", async () => {
+      const { default: NetWorthSnapshot } = await import("@/models/NetWorthSnapshot");
+      const { recordSnapshot } = await import("@/lib/net-worth");
+      for (const code of [undefined, 11001, 12345]) {
+        let calls = 0;
+        const boom = Object.assign(new Error("write failed"), code === undefined ? {} : { code });
+        const spy = vi.spyOn(NetWorthSnapshot, "updateOne").mockImplementation((() => {
+          calls += 1;
+          return Promise.reject(boom) as never;
+        }) as never);
+        try {
+          await expect(recordSnapshot(userId)).rejects.toBe(boom);
+          expect(calls).toBe(1); // no second attempt
+        } finally {
+          spy.mockRestore();
+        }
+      }
+    });
+
+    it("a second duplicate-key error is not swallowed either", async () => {
+      const { default: NetWorthSnapshot } = await import("@/models/NetWorthSnapshot");
+      const { recordSnapshot } = await import("@/lib/net-worth");
+      const dup = Object.assign(new Error("E11000 duplicate key"), { code: 11000 });
+      let calls = 0;
+      const spy = vi.spyOn(NetWorthSnapshot, "updateOne").mockImplementation((() => {
+        calls += 1;
+        return Promise.reject(dup) as never;
+      }) as never);
+      try {
+        await expect(recordSnapshot(userId)).rejects.toBe(dup);
+        expect(calls).toBe(2); // one retry, then it gives up
       } finally {
         spy.mockRestore();
       }
@@ -6315,6 +6456,27 @@ describe("weekly review", () => {
       expect([a.skipped, b.skipped].filter(Boolean)).toHaveLength(1);
       expect(a.sent + b.sent).toBe(1);
       expect((await sendWeeklyReviews(new Date(now.getTime() + 30 * 60_000))).skipped).toBeUndefined();
+    });
+
+    it("a hung run stops blocking new ones after ten minutes", async () => {
+      const { default: User } = await import("@/models/User");
+      const { sendWeeklyReviews } = await import("@/lib/weekly-review");
+      const hang = vi.spyOn(User, "find").mockImplementationOnce((() => ({
+        select: () => ({ lean: () => new Promise(() => {}) }),
+      })) as never);
+      void sendWeeklyReviews(now); // hangs on its user query and never finishes
+      await new Promise((r) => setTimeout(r, 25));
+      expect((await sendWeeklyReviews(now)).skipped).toBe(true); // still within the deadline
+      hang.mockRestore();
+      await enable();
+      const later = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 11 * 60 * 1000);
+      try {
+        const out = await sendWeeklyReviews(now);
+        expect(out.skipped).toBeUndefined(); // treated as stale: a new run goes ahead
+        expect(out.checked).toBe(1);
+      } finally {
+        later.mockRestore();
+      }
     });
 
     it("waits for the chosen weekday and skips an empty week", async () => {

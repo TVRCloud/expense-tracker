@@ -2,6 +2,7 @@ import { z } from "zod";
 import connectDB from "@/lib/mongodb";
 import SinkingFund from "@/models/SinkingFund";
 import Notification from "@/models/Notification";
+import logger from "@/lib/logger";
 
 // Sinking funds: money put aside each month for a cost with a due date.
 // Shared by the browser routes (/api/sinking-funds) and the integration
@@ -47,10 +48,10 @@ export const sinkingFundContributeSchema = z.object({
 });
 
 export class SinkingFundError extends Error {
-  code: "FUND_NOT_FOUND";
-  constructor(message = "Sinking fund not found") {
+  code: "FUND_NOT_FOUND" | "FUND_LIMIT";
+  constructor(message = "Sinking fund not found", code: "FUND_NOT_FOUND" | "FUND_LIMIT" = "FUND_NOT_FOUND") {
     super(message);
-    this.code = "FUND_NOT_FOUND";
+    this.code = code;
     this.name = "SinkingFundError";
   }
 }
@@ -216,6 +217,9 @@ const completionStages = (now: Date) => [
   { $set: { completedAt: { $cond: ["$isCompleted", { $ifNull: ["$completedAt", now] }, "$$REMOVE"] } } },
 ];
 
+// The answer to a write is built from the document the update saw plus what the update applied, so nothing that
+// can fail runs after the money or the edit is stored: a retry under the same Idempotency-Key must not repeat a
+// write that already happened.
 export async function updateSinkingFund(input: UpdateSinkingFundInput, now: Date = new Date()) {
   const { userId, fundId, ...changes } = input;
   await connectDB();
@@ -237,20 +241,30 @@ export async function updateSinkingFund(input: UpdateSinkingFundInput, now: Date
   // decided by the same atomic step that completed it: two writers cannot both see "not complete yet".
   const before = await SinkingFund.findOneAndUpdate(filter, stages, { returnDocument: "before", updatePipeline: true }).lean<FundRecord>();
   if (!before) throw new SinkingFundError();
-  const target = changes.targetAmount ?? before.targetAmount;
-  const completedNow = !before.isCompleted && before.savedAmount >= target;
 
-  const doc = await SinkingFund.findOne(filter).lean<FundRecord>();
-  if (!doc) throw new SinkingFundError();
-  if (completedNow) await notifyReached(userId, doc);
-  return describeFund(doc, now);
+  const target = changes.targetAmount ?? before.targetAmount;
+  const isCompleted = before.savedAmount >= target;
+  const after: FundRecord = {
+    ...before,
+    name: changes.name ?? before.name,
+    targetAmount: target,
+    dueDate: changes.dueDate !== undefined ? new Date(changes.dueDate) : before.dueDate,
+    icon: changes.icon ?? before.icon,
+    monthlyAmount: changes.monthlyAmount === undefined ? before.monthlyAmount : (changes.monthlyAmount ?? undefined),
+    isCompleted,
+    completedAt: isCompleted ? (before.completedAt ?? now) : undefined,
+    updatedAt: now,
+  };
+  if (!before.isCompleted && isCompleted) await notifyReached(userId, after);
+  return describeFund(after, now);
 }
 
 // Adds to (or takes from) the balance atomically, so two phones saving at once
-// both count. The balance is floored at 0 and capped at MAX_FUND_AMOUNT in a
-// pipeline update, not a read then write, and the update hands back the
-// document as it was, so the alert for reaching the target is sent by exactly
-// the contribution that crossed it.
+// both count. The balance is floored at 0. A deposit that would pass
+// MAX_FUND_AMOUNT is refused (the guard sits in the update's filter, so it
+// holds under concurrency) rather than quietly capped. The update hands back
+// the document as it was, so the alert for reaching the target is sent by
+// exactly the contribution that crossed it.
 export async function contributeToSinkingFund(
   input: { userId: string; fundId: string; amount: number },
   now: Date = new Date()
@@ -259,22 +273,28 @@ export async function contributeToSinkingFund(
   await connectDB();
   const filter = { _id: fundId, user: userId, ...notDeleted };
   const before = await SinkingFund.findOneAndUpdate(
-    filter,
-    [
-      { $set: { savedAmount: { $min: [MAX_FUND_AMOUNT, { $max: [0, { $add: ["$savedAmount", amount] }] }] } } },
-      ...completionStages(now),
-    ],
+    { ...filter, $expr: { $lte: [{ $add: ["$savedAmount", amount] }, MAX_FUND_AMOUNT] } },
+    [{ $set: { savedAmount: { $max: [0, { $add: ["$savedAmount", amount] }] } } }, ...completionStages(now)],
     { returnDocument: "before", updatePipeline: true }
   ).lean<FundRecord>();
-  if (!before) throw new SinkingFundError();
+  if (!before) {
+    // Nothing matched: either there is no such fund, or the deposit would pass the limit.
+    const exists = await SinkingFund.exists(filter);
+    if (exists) throw new SinkingFundError(`A fund can hold at most ${MAX_FUND_AMOUNT / 100} rupees`, "FUND_LIMIT");
+    throw new SinkingFundError();
+  }
 
-  const doc = await SinkingFund.findOne(filter).lean<FundRecord>();
-  if (!doc) throw new SinkingFundError();
-  // Worked out from the document the update saw, not from a later read another writer may have changed.
-  const savedAfter = Math.min(MAX_FUND_AMOUNT, Math.max(0, before.savedAmount + amount));
-  const completedNow = !before.isCompleted && savedAfter >= before.targetAmount;
-  if (completedNow) await notifyReached(userId, doc);
-  return describeFund(doc, now);
+  const savedAmount = Math.max(0, before.savedAmount + amount);
+  const isCompleted = savedAmount >= before.targetAmount;
+  const after: FundRecord = {
+    ...before,
+    savedAmount,
+    isCompleted,
+    completedAt: isCompleted ? (before.completedAt ?? now) : undefined,
+    updatedAt: now,
+  };
+  if (!before.isCompleted && isCompleted) await notifyReached(userId, after);
+  return describeFund(after, now);
 }
 
 export async function deleteSinkingFund(userId: string, fundId: string) {
@@ -288,12 +308,17 @@ export async function deleteSinkingFund(userId: string, fundId: string) {
   if (!doc) throw new SinkingFundError();
 }
 
+// Best effort: the fund is already saved, so a failed alert is logged and never undoes or fails the write.
 async function notifyReached(userId: string, fund: FundRecord) {
-  await Notification.create({
-    user: userId,
-    type: "goal_reached",
-    title: "Fund fully saved",
-    body: `Your "${fund.name}" fund has reached its target.`,
-    meta: { sinkingFundId: String(fund._id) },
-  });
+  try {
+    await Notification.create({
+      user: userId,
+      type: "goal_reached",
+      title: "Fund fully saved",
+      body: `Your "${fund.name}" fund has reached its target.`,
+      meta: { sinkingFundId: String(fund._id) },
+    });
+  } catch (err) {
+    logger.error({ err, fundId: String(fund._id) }, "sinking fund goal_reached alert failed");
+  }
 }

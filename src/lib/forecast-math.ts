@@ -143,7 +143,14 @@ function occurrenceAt(cadence: string, anchor: Date, k: number): Date {
   }
 }
 
-/** Charges of one subscription inside the window: an overdue one counts once today, then the cadence repeats. */
+/**
+ * Charges of one subscription inside the window.
+ *
+ * An overdue charge counts once, today. If the scheduled charge that follows it falls on today as well (the
+ * charge was exactly one cadence step late), it is the same payment arriving late, not a second one, so the two
+ * are merged into that single charge today. The cadence then resumes strictly after today. A charge dated today
+ * that is not overdue counts once, today.
+ */
 export function subscriptionOccurrences(nextDate: Date, cadence: string, now: Date, days: number, timeZone: string): Date[] {
   if (Number.isNaN(nextDate.getTime())) return [];
   const todayDay = keyToUtcDay(localDateKey(now, timeZone));

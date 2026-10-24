@@ -5,8 +5,8 @@ Purpose: scheduler hooks for jobs that also run from server.ts.
 - promote-captures/route.ts: turns held notifications whose SMS never came into transactions.
 - recurring-topup/route.ts: refills open-ended recurring series.
 - bill-reminders/route.ts: reminders for bills inside each opted-in user's lead time, from 09:00 on their clock, once per bill per due date.
-- net-worth-snapshot/route.ts: stores today's net worth point for every active user that has something or already had a point (every 3 hours from server.ts; last write of the day wins; one run at a time per process, an overlapping call answers `skipped: true`).
-- weekly-review/route.ts: the weekly review notification for opted-in users, on their chosen weekday from 09:00 on their clock, once per week.
+- net-worth-snapshot/route.ts: stores today's net worth point for every active user that has something or already had a point (every 3 hours from server.ts; last write of the day wins; one run at a time per process, an overlapping call answers `skipped: true`; a run older than 10 minutes counts as hung and no longer blocks).
+- weekly-review/route.ts: the weekly review notification for opted-in users, on their chosen weekday from 09:00 on their clock, once per week (claimed through a unique partial index; one run at a time per process, a run older than 10 minutes counts as hung).
 - spend-limit-summary/route.ts: end-of-day spend limit notice, once per user per local day from 21:00 in their time zone.
 
 ## Talks to
