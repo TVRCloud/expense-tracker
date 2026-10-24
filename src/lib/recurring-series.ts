@@ -136,13 +136,12 @@ export async function cancelRecurringSeries(userId: string, recurringId: string,
 
   const accountObjectId = toDelete[0].account;
 
-  // Private images first: if this fails nothing else has changed and the cancel can be retried.
-  await deleteReceiptsOfTransactions(userId, toDelete.map((t) => t._id));
-
   await Transaction.updateMany(
     { _id: { $in: toDelete.map((t) => t._id) } },
     { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: userId } }
   );
+  // Private images go once the rows are deleted (a failure is logged and swept later).
+  await deleteReceiptsOfTransactions(userId, toDelete.map((t) => t._id));
   // Stop the background top-up job from regenerating this series if it was open-ended.
   await Transaction.updateMany(
     { user: userId, recurringId: new Types.ObjectId(recurringId) },

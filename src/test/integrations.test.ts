@@ -6885,7 +6885,7 @@ describe("tags, split edits and receipts", () => {
       const t = await addTxn();
       await Receipt.insertMany(
         Array.from({ length: MAX_RECEIPTS_PER_USER }, () => ({
-          user: userId, transaction: new mongoose.Types.ObjectId(), contentType: "image/jpeg", size: 10,
+          user: userId, transaction: t._id, contentType: "image/jpeg", size: 10,
           iv: Buffer.alloc(12), tag: Buffer.alloc(16), data: Buffer.alloc(10),
         }))
       );
@@ -7041,7 +7041,7 @@ describe("tags, split edits and receipts", () => {
       const txns = await Promise.all([addTxn(), addTxn(), addTxn()]);
       await Receipt.insertMany(
         Array.from({ length: MAX_RECEIPTS_PER_USER - 2 }, () => ({
-          user: userId, transaction: new mongoose.Types.ObjectId(), contentType: "image/jpeg", size: 10,
+          user: userId, transaction: txns[0]._id, contentType: "image/jpeg", size: 10,
           iv: Buffer.alloc(12), tag: Buffer.alloc(16), data: Buffer.alloc(10),
         }))
       );
@@ -7068,32 +7068,186 @@ describe("tags, split edits and receipts", () => {
       await expect(getReceiptImage(userId, rb.id)).rejects.toMatchObject({ code: "RECEIPT_NOT_FOUND" });
     });
 
-    it("deleting a transaction retries a failed receipt clean-up once, then fails without deleting anything", async () => {
+    it("deleting a transaction retries a failed receipt clean-up once; if it still fails the delete stands, the receipt is hidden and a later sweep removes it", async () => {
       const { vi } = await import("vitest");
-      const { addReceipt } = await import("@/lib/receipt-service");
+      const { addReceipt, getReceiptImage } = await import("@/lib/receipt-service");
       const { deleteTransaction } = await import("@/lib/transaction-service");
       const { default: Receipt } = await import("@/models/Receipt");
       const { default: Transaction } = await import("@/models/Transaction");
       const t = await addTxn({ amount: 1000 });
-      const id = t._id.toString();
-      await addReceipt({ userId, transactionId: id, bytes: JPEG });
-      const before = await balance();
+      await addReceipt({ userId, transactionId: t._id.toString(), bytes: JPEG });
 
       const once = vi.spyOn(Receipt, "deleteMany").mockRejectedValueOnce(new Error("boom"));
-      await deleteTransaction(userId, id, actor);
+      await deleteTransaction(userId, t._id.toString(), actor);
       once.mockRestore();
-      expect(await Receipt.countDocuments({ transaction: id })).toBe(0);
+      expect(await Receipt.countDocuments({ transaction: t._id })).toBe(0);
 
       const t2 = await addTxn({ amount: 1000 });
-      await addReceipt({ userId, transactionId: t2._id.toString(), bytes: JPEG });
-      const mid = await balance();
+      const r2 = await addReceipt({ userId, transactionId: t2._id.toString(), bytes: JPEG });
       const always = vi.spyOn(Receipt, "deleteMany").mockRejectedValue(new Error("boom"));
-      await expect(deleteTransaction(userId, t2._id.toString(), actor)).rejects.toThrow("boom");
+      await expect(deleteTransaction(userId, t2._id.toString(), actor)).resolves.toBeTruthy();
       always.mockRestore();
-      expect((await Transaction.findById(t2._id).lean<{ isDeleted?: boolean }>())!.isDeleted).toBeFalsy();
+      expect((await Transaction.findById(t2._id).lean<{ isDeleted?: boolean }>())!.isDeleted).toBe(true);
       expect(await Receipt.countDocuments({ transaction: t2._id })).toBe(1);
-      expect(await balance()).toBe(mid);
-      expect(before).toBeDefined();
+      await expect(getReceiptImage(userId, r2.id)).rejects.toMatchObject({ code: "RECEIPT_NOT_FOUND" });
+
+      // The next upload sweeps it (and it never counted against the quota).
+      const t3 = await addTxn();
+      await addReceipt({ userId, transactionId: t3._id.toString(), bytes: JPEG });
+      expect(await Receipt.countDocuments({ transaction: t2._id })).toBe(0);
+    });
+
+    it("a failure while reversing the balance leaves the receipts alone", async () => {
+      const { vi } = await import("vitest");
+      const { addReceipt } = await import("@/lib/receipt-service");
+      const { deleteTransaction } = await import("@/lib/transaction-service");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const { default: Account } = await import("@/models/Account");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const t = await addTxn({ amount: 1000 });
+      await addReceipt({ userId, transactionId: t._id.toString(), bytes: JPEG });
+      const spy = vi.spyOn(Account, "findOneAndUpdate").mockRejectedValueOnce(new Error("boom"));
+      await expect(deleteTransaction(userId, t._id.toString(), actor)).rejects.toThrow("boom");
+      spy.mockRestore();
+      expect(await Receipt.countDocuments({ transaction: t._id })).toBe(1);
+      expect((await Transaction.findById(t._id).lean<{ isDeleted?: boolean }>())!.isDeleted).toBeFalsy();
+    });
+
+    it("deleting a loan removes receipts of its rows after they are deleted, and a failed balance step leaves them", async () => {
+      const { vi } = await import("vitest");
+      const { addReceipt } = await import("@/lib/receipt-service");
+      const { deleteLoan } = await import("@/lib/loan-service");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const { default: Loan } = await import("@/models/Loan");
+      const { default: Account } = await import("@/models/Account");
+      const loan = await Loan.create({ user: userId, direction: "given", counterparty: "Ravi", principalAmount: 5000, remainingAmount: 5000, startDate: new Date() });
+      const row = await addTxn({ amount: 5000, tags: [`loan:${loan._id}`, "loan_principal"] });
+      await addReceipt({ userId, transactionId: row._id.toString(), bytes: JPEG });
+      const spy = vi.spyOn(Account, "findOneAndUpdate").mockRejectedValueOnce(new Error("boom"));
+      await expect(deleteLoan(userId, loan._id.toString(), actor)).rejects.toThrow("boom");
+      spy.mockRestore();
+      expect(await Receipt.countDocuments({ transaction: row._id })).toBe(1);
+      await deleteLoan(userId, loan._id.toString(), actor);
+      expect(await Receipt.countDocuments({ transaction: row._id })).toBe(0);
+    });
+
+    it("cancelling a series removes receipts of its installments after they are deleted, and a failed delete leaves them", async () => {
+      const { vi } = await import("vitest");
+      const { addReceipt } = await import("@/lib/receipt-service");
+      const { createTransaction } = await import("@/lib/transaction-service");
+      const { cancelRecurringSeries } = await import("@/lib/recurring-series");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const { default: Transaction } = await import("@/models/Transaction");
+      await createTransaction({
+        userId, actor, accountId, type: "expense", amount: 2000, currency: "INR", category: "Rent", tags: [],
+        isRecurring: true, recurrenceFrequency: "monthly", recurrenceCount: 3, date: new Date(Date.now() + 86400000).toISOString(),
+      });
+      const rows = await Transaction.find({ user: userId, recurringId: { $exists: true } }).lean<{ _id: { toString(): string }; recurringId: unknown }[]>();
+      await addReceipt({ userId, transactionId: rows[0]._id.toString(), bytes: JPEG });
+      const seriesId = String(rows[0].recurringId);
+      const spy = vi.spyOn(Transaction, "updateMany").mockRejectedValueOnce(new Error("boom"));
+      await expect(cancelRecurringSeries(userId, seriesId, actor)).rejects.toThrow("boom");
+      spy.mockRestore();
+      expect(await Receipt.countDocuments({ user: userId })).toBe(1);
+      await cancelRecurringSeries(userId, seriesId, actor);
+      expect(await Receipt.countDocuments({ user: userId })).toBe(0);
+    });
+
+    it("a split edit that fails part way is rolled back, and a retry then works", async () => {
+      const { vi } = await import("vitest");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const t = await addTxn({ amount: 9000, category: "food", description: "Mart" });
+      const id = t._id.toString();
+      const lines = [{ category: "a", amount: 3000 }, { category: "b", amount: 3000 }, { category: "c", amount: 3000 }];
+      const spy = vi.spyOn(Transaction, "insertMany").mockRejectedValueOnce(new Error("boom"));
+      await expect((await import("@/lib/split-service")).replaceSplits({ userId, transactionId: id, splits: lines, actor })).rejects.toThrow("boom");
+      spy.mockRestore();
+      const rows = await Transaction.find({ user: userId, isDeleted: { $ne: true } }).lean<{ category: string; amount: number; splitGroupId?: unknown; splitBusyUntil?: unknown; description?: string }[]>();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ category: "food", amount: 9000, description: "Mart" });
+      expect(rows[0].splitGroupId).toBeUndefined();
+      expect(rows[0].splitBusyUntil).toBeUndefined();
+      expect((await putSplits(id, lines)).status).toBe(200);
+    });
+
+    it("a failure while merging lines puts the lines and their receipts back", async () => {
+      const { vi } = await import("vitest");
+      const { addReceipt } = await import("@/lib/receipt-service");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const { id, groupId } = await splitOf(["a", "b", "c"]);
+      const before = await live(groupId);
+      const r = await addReceipt({ userId, transactionId: before[2]._id.toString(), bytes: JPEG });
+      const spy = vi.spyOn(Receipt, "updateMany").mockRejectedValueOnce(new Error("boom"));
+      const merged = [{ category: "x", amount: 1500 }, { category: "y", amount: 1500 }];
+      await expect((await import("@/lib/split-service")).replaceSplits({ userId, transactionId: id, splits: merged, actor })).rejects.toThrow("boom");
+      spy.mockRestore();
+      const after = await live(groupId);
+      expect(after.map((x) => [x._id.toString(), x.amount])).toEqual(before.map((x) => [x._id.toString(), x.amount]));
+      expect(after[0].attachments ?? []).toEqual([]);
+      expect(after[2].attachments).toEqual([r.id]);
+      expect((await Receipt.findById(r.id).lean<{ transaction: { toString(): string } }>())!.transaction.toString()).toBe(before[2]._id.toString());
+      expect((await putSplits(id, merged)).status).toBe(200);
+      expect((await Transaction.findById(before[0]._id).lean<{ attachments: string[] }>())!.attachments).toEqual([r.id]);
+    });
+
+    it("an edit that starts while another is half-written is refused, and a stale marker is ignored", async () => {
+      const { default: Transaction } = await import("@/models/Transaction");
+      const { id, groupId } = await splitOf(["a", "b"]);
+      const rows = await live(groupId);
+      const lines = [{ category: "x", amount: 1000 }, { category: "y", amount: 1000 }];
+      await Transaction.updateOne({ _id: rows[0]._id }, { $set: { splitBusyUntil: new Date(Date.now() + 60_000) } });
+      expect((await putSplits(id, lines)).status).toBe(409);
+      await Transaction.updateOne({ _id: rows[0]._id }, { $set: { splitBusyUntil: new Date(Date.now() - 1000) } });
+      expect((await putSplits(id, lines)).status).toBe(200);
+      expect((await Transaction.findById(rows[0]._id).lean<{ splitBusyUntil?: unknown }>())!.splitBusyUntil).toBeUndefined();
+    });
+
+    it("a receipt whose link step fails is taken back out", async () => {
+      const { vi } = await import("vitest");
+      const { addReceipt } = await import("@/lib/receipt-service");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const t = await addTxn();
+      const spy = vi.spyOn(Transaction, "updateOne").mockRejectedValueOnce(new Error("boom"));
+      await expect(addReceipt({ userId, transactionId: t._id.toString(), bytes: JPEG })).rejects.toThrow("boom");
+      spy.mockRestore();
+      expect(await Receipt.countDocuments({ user: userId })).toBe(0);
+    });
+
+    it("the list shows only what the transaction lists; a failed delete after the unlink leaves nothing reachable and a stray old receipt is swept", async () => {
+      const { vi } = await import("vitest");
+      const { addReceipt, deleteReceipt, listReceipts } = await import("@/lib/receipt-service");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const t = await addTxn();
+      const id = t._id.toString();
+      const kept = await addReceipt({ userId, transactionId: id, bytes: JPEG });
+      const gone = await addReceipt({ userId, transactionId: id, bytes: PNG });
+      const spy = vi.spyOn(Receipt, "deleteOne").mockRejectedValueOnce(new Error("boom"));
+      await expect(deleteReceipt(userId, gone.id)).rejects.toThrow("boom");
+      spy.mockRestore();
+      expect((await listReceipts(userId, id)).map((r) => r.id)).toEqual([kept.id]);
+      await Receipt.collection.updateOne({ _id: new mongoose.Types.ObjectId(gone.id) }, { $set: { createdAt: new Date(Date.now() - 3600_000) } });
+      await listReceipts(userId, id);
+      expect(await Receipt.countDocuments({ _id: gone.id })).toBe(0);
+    });
+
+    it("the tag filter matches a tag with inner double spaces the way it was stored", async () => {
+      const { GET } = await import("@/app/api/integrations/transactions/route");
+      const { transactionCreateSchema } = await import("@/lib/transaction-service");
+      const parsed = transactionCreateSchema.parse({ accountId, type: "expense", amount: 100, category: "food", date: "2026-10-05", tags: ["Work   Lunch"] });
+      await addTxn({ tags: parsed.tags });
+      const list = await (await GET(req("transactions?tag=WORK%20%20%20lunch"), undefined as never)).json();
+      expect(list.data.total).toBe(1);
+    });
+
+    it("the browser split route answers 400 to a body that is not JSON", async () => {
+      const { PUT } = await import("@/app/api/transactions/[id]/splits/route");
+      const t = await addTxn();
+      sessionUser.current = { id: userId, name: "TR User", email: "tr@x.com", role: "user" };
+      const res = await PUT(new NextRequest(`http://localhost/api/transactions/${t._id}/splits`, { method: "PUT", body: "{nope" }), ctx(t._id.toString()));
+      sessionUser.current = null;
+      expect(res.status).toBe(400);
     });
 
     it("deleting the account purges the user's receipts, and the export lists receipt metadata only", async () => {

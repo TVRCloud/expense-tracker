@@ -127,9 +127,47 @@ async function ownTransaction(userId: string, transactionId: string) {
     isDeleted: { $ne: true },
     reviewStatus: { $ne: "voided" },
   })
-    .select("_id")
-    .lean();
+    .select("attachments")
+    .lean<{ attachments?: string[] }>();
   if (!txn) throw new ReceiptServiceError("TRANSACTION_NOT_FOUND", "Transaction not found");
+  return txn.attachments ?? [];
+}
+
+const LIVE_PARENT = { isDeleted: { $ne: true }, reviewStatus: { $ne: "voided" } };
+// A receipt that never got linked (a crash between the two writes) is given this long before it is swept.
+const UNLINKED_GRACE_MS = 10 * 60 * 1000;
+
+/**
+ * Removes a user's receipts that nothing can reach: the transaction is gone or voided (a clean-up
+ * that failed after the delete), or the transaction does not list it and it is not brand new.
+ * Cheap (at most 200 receipts per user); run before a list and before the quota is worked out.
+ * Failures are logged, never raised: a sweep must not block the caller.
+ */
+export async function sweepOrphanReceipts(userId: string): Promise<number> {
+  try {
+    await connectDB();
+    const rows = await Receipt.find({ user: userId }).select("transaction createdAt").lean<{ _id: Types.ObjectId; transaction: Types.ObjectId; createdAt: Date }[]>();
+    if (!rows.length) return 0;
+    const parents = await Transaction.find({
+      _id: { $in: [...new Set(rows.map((r) => r.transaction.toString()))] },
+      user: userId,
+      ...LIVE_PARENT,
+    })
+      .select("attachments")
+      .lean<{ _id: Types.ObjectId; attachments?: string[] }[]>();
+    const live = new Map(parents.map((p) => [p._id.toString(), new Set(p.attachments ?? [])]));
+    const cutoff = Date.now() - UNLINKED_GRACE_MS;
+    const orphans = rows.filter((r) => {
+      const listed = live.get(r.transaction.toString());
+      if (!listed) return true;
+      return !listed.has(r._id.toString()) && new Date(r.createdAt).getTime() < cutoff;
+    });
+    if (orphans.length) await Receipt.deleteMany({ _id: { $in: orphans.map((r) => r._id) }, user: userId });
+    return orphans.length;
+  } catch (err) {
+    logger.error({ err, userId }, "receipt sweep failed");
+    return 0;
+  }
 }
 
 export async function addReceipt(input: { userId: string; transactionId: string; bytes: Buffer }): Promise<ReceiptMeta> {
@@ -145,10 +183,22 @@ export async function addReceipt(input: { userId: string; transactionId: string;
 
   await connectDB();
   await ownTransaction(userId, transactionId);
+  await sweepOrphanReceipts(userId);
 
   const overQuota = async (extra: number) => {
     const [usage] = await Receipt.aggregate<{ n: number; bytes: number }>([
       { $match: { user: new Types.ObjectId(userId) } },
+      // Only receipts whose transaction is alive count.
+      {
+        $lookup: {
+          from: "transactions",
+          localField: "transaction",
+          foreignField: "_id",
+          pipeline: [{ $match: LIVE_PARENT }, { $project: { _id: 1 } }],
+          as: "parent",
+        },
+      },
+      { $match: { "parent.0": { $exists: true } } },
       { $group: { _id: null, n: { $sum: 1 }, bytes: { $sum: "$size" } } },
     ]);
     return Boolean(usage && (usage.n + (extra ? 1 : 0) > MAX_RECEIPTS_PER_USER || usage.bytes + extra > MAX_RECEIPT_BYTES_PER_USER));
@@ -180,15 +230,22 @@ export async function addReceipt(input: { userId: string; transactionId: string;
 
   // The cap and the "still alive" check sit in the same atomic update, so two
   // uploads at once cannot pass the cap and a delete in between leaves nothing behind.
-  const linked = await Transaction.updateOne(
-    {
-      _id: transactionId,
-      user: userId,
-      isDeleted: { $ne: true },
-      [`attachments.${MAX_RECEIPTS_PER_TRANSACTION - 1}`]: { $exists: false },
-    },
-    { $addToSet: { attachments: id.toString() } }
-  );
+  let linked;
+  try {
+    linked = await Transaction.updateOne(
+      {
+        _id: transactionId,
+        user: userId,
+        isDeleted: { $ne: true },
+        [`attachments.${MAX_RECEIPTS_PER_TRANSACTION - 1}`]: { $exists: false },
+      },
+      { $addToSet: { attachments: id.toString() } }
+    );
+  } catch (err) {
+    // Not linked, so nothing could ever show it: take it back out.
+    await Receipt.deleteOne({ _id: id, user: userId }).catch(() => undefined);
+    throw err;
+  }
   if (linked.modifiedCount !== 1) {
     await Receipt.deleteOne({ _id: id, user: userId });
     const still = await Transaction.exists({ _id: transactionId, user: userId, isDeleted: { $ne: true } });
@@ -200,8 +257,10 @@ export async function addReceipt(input: { userId: string; transactionId: string;
 
 export async function listReceipts(userId: string, transactionId: string): Promise<ReceiptMeta[]> {
   await connectDB();
-  await ownTransaction(userId, transactionId);
-  const rows = await Receipt.find({ user: userId, transaction: transactionId })
+  const listed = await ownTransaction(userId, transactionId);
+  await sweepOrphanReceipts(userId);
+  // What the transaction lists and exists: a stray receipt never shows.
+  const rows = await Receipt.find({ user: userId, transaction: transactionId, _id: { $in: listed.filter((x) => Types.ObjectId.isValid(x)) } })
     .select("transaction contentType size createdAt")
     .sort({ createdAt: 1, _id: 1 })
     .lean<{ _id: Types.ObjectId; transaction: Types.ObjectId; contentType: string; size: number; createdAt: Date }[]>();
@@ -239,17 +298,20 @@ export async function getReceiptImage(userId: string, receiptId: string): Promis
 export async function deleteReceipt(userId: string, receiptId: string): Promise<void> {
   if (!Types.ObjectId.isValid(receiptId)) throw new ReceiptServiceError("RECEIPT_NOT_FOUND", "Receipt not found");
   await connectDB();
-  const doc = await Receipt.findOneAndDelete({ _id: receiptId, user: userId }).select("transaction").lean<{ transaction: Types.ObjectId }>();
+  const doc = await Receipt.findOne({ _id: receiptId, user: userId }).select("transaction").lean<{ transaction: Types.ObjectId }>();
   if (!doc) throw new ReceiptServiceError("RECEIPT_NOT_FOUND", "Receipt not found");
+  // Unlink first. If the delete then fails the receipt is unlisted, so it is unreachable,
+  // stops counting against the transaction's cap and is swept later.
   await Transaction.updateOne({ _id: doc.transaction, user: userId }, { $pull: { attachments: receiptId } });
+  await Receipt.deleteOne({ _id: receiptId, user: userId });
 }
 
 /**
  * Gone with the transaction: nothing keeps a private image after its row is deleted.
- * Tried twice, then the error goes to the caller. Callers run this BEFORE they
- * delete, void or cancel anything, so a failure leaves the row and its receipts
- * as they were and the person can simply retry. Reads also check the parent
- * transaction, so a receipt left behind by a crash between steps is unreachable.
+ * Callers run this AFTER the delete, void or cancel has been done. Tried twice; if it
+ * still fails the error is logged and the caller carries on: a receipt of a deleted or
+ * voided transaction cannot be read (getReceiptImage checks the parent), does not count
+ * toward the quota, and sweepOrphanReceipts removes it the next time the user lists or adds one.
  */
 export async function deleteReceiptsOfTransactions(userId: string, transactionIds: unknown[]): Promise<void> {
   if (!transactionIds.length) return;
@@ -261,7 +323,11 @@ export async function deleteReceiptsOfTransactions(userId: string, transactionId
     await run();
   } catch (err) {
     logger.warn({ err, userId, count: transactionIds.length }, "deleting receipts failed, retrying once");
-    await run();
+    try {
+      await run();
+    } catch (err2) {
+      logger.error({ err: err2, userId, count: transactionIds.length }, "deleting receipts failed; the sweep will remove them");
+    }
   }
 }
 

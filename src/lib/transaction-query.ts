@@ -1,6 +1,7 @@
 import { type PipelineStage, Types } from "mongoose";
 import connectDB from "@/lib/mongodb";
 import Transaction from "@/models/Transaction";
+import { normaliseTag } from "@/lib/tags";
 import { activityDateAddFields } from "@/lib/transaction-activity";
 
 // Shared transaction-listing query logic, used by both GET /api/transactions
@@ -54,7 +55,7 @@ export async function listTransactions(params: ListTransactionsParams) {
   const query: Record<string, unknown> = { user: userId, isDeleted: { $ne: true } };
   if (type) query.type = type;
   if (category) query.category = category;
-  if (tag) query.tags = tag.trim().toLowerCase();
+  if (tag) query.tags = normaliseTag(tag);
   const incoming = Boolean(accountId && includeIncomingTransfers);
   if (accountId && !incoming) query.account = accountId;
   if (accountId && incoming) {

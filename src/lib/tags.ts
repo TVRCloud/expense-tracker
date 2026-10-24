@@ -13,11 +13,16 @@ export function isReservedTag(tag: string) {
   return tag.includes(":") || RESERVED_TAGS.has(tag);
 }
 
+/** One tag the way normaliseTags writes it (also used to match a filter). */
+export function normaliseTag(raw: string): string {
+  return raw.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
 /** Trim, lowercase, collapse inner spaces, drop empties and repeats. */
 export function normaliseTags(tags: readonly string[]): string[] {
   const out: string[] = [];
   for (const raw of tags) {
-    const tag = raw.trim().toLowerCase().replace(/\s+/g, " ");
+    const tag = normaliseTag(raw);
     if (tag && !out.includes(tag)) out.push(tag);
   }
   return out;

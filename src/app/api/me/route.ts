@@ -68,9 +68,6 @@ export async function DELETE() {
     await connectDB();
     const existing = await User.findById(user.id).select("email").lean<{ email: string }>();
     if (!existing) return NextResponse.json({ error: "User not found" }, { status: 404 });
-    // Transactions are only soft-deleted, but the private receipt images go for good.
-    // Done first: if it fails the account is untouched and the person can retry.
-    await deleteAllReceiptsOfUser(user.id);
     // Tombstone the email so the same address can register a fresh account.
     await User.findByIdAndUpdate(user.id, {
       $set: {
@@ -86,6 +83,9 @@ export async function DELETE() {
     await Session.updateMany({ user: user.id, isActive: true }, { $set: { isActive: false } });
     forgetUserSessions(user.id);
     forgetUserKeys(user.id);
+    // The account is only deactivated (its rows stay), but the private receipt images go for
+    // good. Last, and safe to run again: the account is already locked, so nothing can add more.
+    await deleteAllReceiptsOfUser(user.id);
 
     return NextResponse.json({ data: { message: "Account deleted" } });
   } catch (err) {

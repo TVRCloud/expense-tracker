@@ -8,6 +8,7 @@ import { appendLedgerBlock } from "@/lib/ledger";
 import { checkBudgetAlert } from "@/lib/budget-alert";
 import { isReservedTag } from "@/lib/tags";
 import { MAX_RECEIPTS_PER_TRANSACTION } from "@/lib/receipt-service";
+import logger from "@/lib/logger";
 import {
   getLinkedTransactionBlocker,
   invalidateStatsCacheMany,
@@ -21,6 +22,9 @@ import {
 // (created by createTransaction), so stats and budgets already count each line
 // under its own category. The lines always add up to the same total, so no
 // account balance moves here. Receipts follow the first line.
+
+// How long an edit holds the first line before another may take over (the process died).
+const BUSY_MS = 30_000;
 
 export const splitUpdateSchema = z
   .object({ splits: z.array(splitLineSchema).min(2).max(MAX_SPLIT_LINES) })
@@ -146,93 +150,183 @@ export async function replaceSplits(input: {
     }
   }
 
-  // Compare and set on the first line: of two edits made at once, only one gets past here.
+  // Claim the first line: a compare on `splitRev` (an edit that read the group before this one) and a
+  // busy marker (an edit that reads it while this one is half-written). Of edits made at once only
+  // one gets past here. The marker clears when this edit ends and goes stale after BUSY_MS if the
+  // process dies.
+  const now = new Date();
   const claimed = await Transaction.updateOne(
-    { _id: base._id, user: userId, isDeleted: { $ne: true }, splitRev: base.splitRev ?? null },
-    { $inc: { splitRev: 1 } }
+    {
+      _id: base._id,
+      user: userId,
+      isDeleted: { $ne: true },
+      splitRev: base.splitRev ?? null,
+      $or: [{ splitBusyUntil: null }, { splitBusyUntil: { $lt: now } }],
+    },
+    { $inc: { splitRev: 1 }, $set: { splitBusyUntil: new Date(now.getTime() + BUSY_MS) } }
   );
   if (claimed.modifiedCount !== 1) {
     throw new TransactionServiceError("SPLIT_CONFLICT", "This purchase was just changed somewhere else. Reload and try again.");
   }
 
   const groupId = base.splitGroupId ?? new Types.ObjectId();
-  const dates = [new Date(base.date)];
   const changed: SplitLine[] = [];
   const kept = Math.min(rows.length, splits.length);
+  // What a rollback needs: the rows as they were, the clones made, the receipts moved.
+  const touched: Row[] = [];
+  const written = new Map<string, unknown>();
+  const insertedIds: Types.ObjectId[] = [];
+  const movedReceipts: { id: Types.ObjectId; from: Types.ObjectId }[] = [];
 
-  // Reuse existing rows in order, so ids stay stable for the lines that remain.
-  for (let i = 0; i < kept; i++) {
-    const row = rows[i];
-    const line = splits[i];
-    // A line keeps its own description unless the new line gives one.
-    const description = line.description !== undefined ? line.description : row.description;
-    const before = row;
-    const sameLine = row.category === line.category && row.amount === line.amount;
-    const after = await Transaction.findOneAndUpdate(
-      { _id: row._id, user: userId, isDeleted: { $ne: true } },
-      {
-        $set: {
-          category: line.category,
-          amount: line.amount,
-          splitGroupId: groupId,
-          ...(description !== undefined ? { description } : {}),
+  try {
+    // Reuse existing rows in order, so ids stay stable for the lines that remain.
+    for (let i = 0; i < kept; i++) {
+      const row = rows[i];
+      const line = splits[i];
+      // A line keeps its own description unless the new line gives one.
+      const description = line.description !== undefined ? line.description : row.description;
+      const sameLine = row.category === line.category && row.amount === line.amount;
+      touched.push(row);
+      const after = await Transaction.findOneAndUpdate(
+        { _id: row._id, user: userId, isDeleted: { $ne: true } },
+        {
+          $set: {
+            category: line.category,
+            amount: line.amount,
+            splitGroupId: groupId,
+            ...(description !== undefined ? { description } : {}),
+          },
         },
-      },
-      { new: true }
-    ).lean<Row>();
-    if (!after) throw new TransactionServiceError("TRANSACTION_NOT_FOUND", "Transaction not found");
-    await appendLedgerBlock({ userId, scope: "transaction", entityId: row._id.toString(), action: "update", before, after, actor });
-    if (!sameLine) changed.push(line);
-  }
-
-  // More lines than rows: clone the shared fields into new rows.
-  if (splits.length > rows.length) {
-    const docs = splits.slice(rows.length).map((line) => ({
-      user: userId,
-      account: base.account,
-      type: "expense" as const,
-      currency: base.currency,
-      subcategory: base.subcategory,
-      note: base.note,
-      date: base.date,
-      // Link tags (loan:, repayment:, credit_statement:) belong to one row; never copied.
-      tags: (base.tags ?? []).filter((t) => !isReservedTag(t)),
-      source: base.source,
-      reviewStatus: base.reviewStatus ?? null,
-      reviewedAt: base.reviewedAt,
-      reviewedBy: base.reviewedBy,
-      category: line.category,
-      amount: line.amount,
-      description: line.description ?? base.description,
-      splitGroupId: groupId,
-    }));
-    const inserted = await Transaction.insertMany(docs);
-    for (const t of inserted) {
-      await appendLedgerBlock({ userId, scope: "transaction", entityId: t._id.toString(), action: "create", after: t, actor });
+        { new: true }
+      ).lean<Row>();
+      if (!after) throw new TransactionServiceError("TRANSACTION_NOT_FOUND", "Transaction not found");
+      written.set(row._id.toString(), after);
+      await appendLedgerBlock({ userId, scope: "transaction", entityId: row._id.toString(), action: "update", before: row, after, actor });
+      if (!sameLine) changed.push(line);
     }
-    changed.push(...splits.slice(rows.length));
-  }
 
-  // Fewer lines than rows: remove the extras and keep their receipts on the first line.
-  for (const row of removed) {
-    const deleted = await Transaction.findOneAndUpdate(
-      { _id: row._id, user: userId, isDeleted: { $ne: true } },
-      { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: userId, attachments: [] } },
-      { new: true }
-    ).lean();
-    await appendLedgerBlock({ userId, scope: "transaction", entityId: row._id.toString(), action: "delete", before: row, after: deleted, actor });
-    const moved = await Receipt.find({ user: userId, transaction: row._id }).select("_id").lean<{ _id: Types.ObjectId }[]>();
-    if (moved.length) {
-      await Receipt.updateMany({ user: userId, transaction: row._id }, { $set: { transaction: base._id } });
-      await Transaction.updateOne(
-        { _id: base._id, user: userId },
-        { $addToSet: { attachments: { $each: moved.map((m) => m._id.toString()) } } }
-      );
+    // More lines than rows: clone the shared fields into new rows.
+    if (splits.length > rows.length) {
+      const docs = splits.slice(rows.length).map((line) => ({
+        _id: new Types.ObjectId(),
+        user: userId,
+        account: base.account,
+        type: "expense" as const,
+        currency: base.currency,
+        subcategory: base.subcategory,
+        note: base.note,
+        date: base.date,
+        // Link tags (loan:, repayment:, credit_statement:) belong to one row; never copied.
+        tags: (base.tags ?? []).filter((t) => !isReservedTag(t)),
+        source: base.source,
+        reviewStatus: base.reviewStatus ?? null,
+        reviewedAt: base.reviewedAt,
+        reviewedBy: base.reviewedBy,
+        category: line.category,
+        amount: line.amount,
+        description: line.description ?? base.description,
+        splitGroupId: groupId,
+      }));
+      insertedIds.push(...docs.map((d) => d._id));
+      const inserted = await Transaction.insertMany(docs);
+      for (const t of inserted) {
+        await appendLedgerBlock({ userId, scope: "transaction", entityId: t._id.toString(), action: "create", after: t, actor });
+      }
+      changed.push(...splits.slice(rows.length));
     }
+
+    // Fewer lines than rows: move the extras' receipts to the first line, then remove the extras.
+    for (const row of removed) {
+      const receipts = await Receipt.find({ user: userId, transaction: row._id }).select("_id").lean<{ _id: Types.ObjectId }[]>();
+      if (receipts.length) {
+        // The cap sits in the same atomic update, as when a receipt is added.
+        const linked = await Transaction.updateOne(
+          {
+            _id: base._id,
+            user: userId,
+            $expr: { $lte: [{ $add: [{ $size: { $ifNull: ["$attachments", []] } }, receipts.length] }, MAX_RECEIPTS_PER_TRANSACTION] },
+          },
+          { $addToSet: { attachments: { $each: receipts.map((r) => r._id.toString()) } } }
+        );
+        if (linked.matchedCount !== 1) {
+          throw new TransactionServiceError("TOO_MANY_RECEIPTS", `More than ${MAX_RECEIPTS_PER_TRANSACTION} receipts would end up on one line. Remove some receipts first.`);
+        }
+        movedReceipts.push(...receipts.map((r) => ({ id: r._id, from: row._id })));
+        await Receipt.updateMany({ _id: { $in: receipts.map((r) => r._id) }, user: userId }, { $set: { transaction: base._id } });
+      }
+      touched.push(row);
+      const deleted = await Transaction.findOneAndUpdate(
+        { _id: row._id, user: userId, isDeleted: { $ne: true } },
+        { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: userId, attachments: [] } },
+        { new: true }
+      ).lean();
+      written.set(row._id.toString(), deleted);
+      await appendLedgerBlock({ userId, scope: "transaction", entityId: row._id.toString(), action: "delete", before: row, after: deleted, actor });
+    }
+  } catch (err) {
+    await rollback({ userId, actor, touched, written, insertedIds, movedReceipts });
+    throw err;
+  } finally {
+    await Transaction.updateOne({ _id: base._id, user: userId }, { $unset: { splitBusyUntil: 1 } }).catch((e) =>
+      logger.error({ err: e, userId }, "could not clear the split busy marker")
+    );
   }
 
-  await invalidateStatsCacheMany(userId, dates);
+  await invalidateStatsCacheMany(userId, [new Date(base.date)]);
   for (const line of changed) void checkBudgetAlert(userId, line.category, line.amount, new Date(base.date));
 
   return view(await loadGroup(userId, base._id.toString()));
+}
+
+// Puts a half-applied edit back: rows from their snapshots, clones removed, receipts returned.
+// Each step is tried on its own so one failure does not stop the rest. The ledger gets matching
+// blocks (it is append-only), so the chain shows the edit and its undo.
+async function rollback(args: {
+  userId: string;
+  actor: AuthUser;
+  touched: Row[];
+  written: Map<string, unknown>;
+  insertedIds: Types.ObjectId[];
+  movedReceipts: { id: Types.ObjectId; from: Types.ObjectId }[];
+}) {
+  const { userId, actor, touched, written, insertedIds, movedReceipts } = args;
+  const attempt = async (what: string, fn: () => Promise<unknown>) => {
+    try {
+      await fn();
+    } catch (err) {
+      logger.error({ err, userId, what }, "split edit rollback step failed");
+    }
+  };
+  for (const m of movedReceipts) {
+    await attempt("receipt", () => Receipt.updateOne({ _id: m.id, user: userId }, { $set: { transaction: m.from } }));
+  }
+  if (insertedIds.length) {
+    const clones = await Transaction.find({ _id: { $in: insertedIds }, user: userId }).lean().catch(() => []);
+    await attempt("clones", () => Transaction.deleteMany({ _id: { $in: insertedIds }, user: userId }));
+    for (const c of clones) {
+      await attempt("clone ledger", () =>
+        appendLedgerBlock({ userId, scope: "transaction", entityId: String(c._id), action: "delete", before: c, after: null, actor })
+      );
+    }
+  }
+  for (const row of touched) {
+    const set: Record<string, unknown> = {
+      category: row.category,
+      amount: row.amount,
+      attachments: row.attachments ?? [],
+      isDeleted: false,
+    };
+    const unset: Record<string, 1> = { deletedAt: 1, deletedBy: 1 };
+    if (row.description !== undefined) set.description = row.description;
+    else unset.description = 1;
+    if (row.splitGroupId) set.splitGroupId = row.splitGroupId;
+    else unset.splitGroupId = 1;
+    await attempt("row", () => Transaction.updateOne({ _id: row._id, user: userId }, { $set: set, $unset: unset }));
+    const after = written.get(row._id.toString());
+    if (after) {
+      await attempt("row ledger", () =>
+        appendLedgerBlock({ userId, scope: "transaction", entityId: row._id.toString(), action: "update", before: after, after: row, actor })
+      );
+    }
+  }
 }

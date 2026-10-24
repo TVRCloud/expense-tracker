@@ -37,8 +37,8 @@ Purpose: server business logic shared by browser routes, integration routes, ser
 - `appendLedgerBlock` (ledger.ts) writes a per-user hash chain (`sequence`, `previousHash`, `hash`); concurrent appends retry up to 25 times on the unique {user, sequence} index.
 - Redis and the TTL caches are optional or per instance; code must work without them.
 - A split is one Transaction row per line, so stats and budgets need no split logic; keep it that way. Only split lines through split-service/createTransaction.
-- split-service claims the first line with a compare-and-set on `splitRev` before writing; two edits at once give one `SPLIT_CONFLICT` (409).
-- Receipt cascade (`deleteReceiptsOfTransactions`) retries once and then throws; callers run it before changing anything else. Account self-delete purges receipts; `/api/me/export` lists their metadata only.
+- split-service claims the first line (compare on `splitRev` plus a 30 s `splitBusyUntil` marker) before writing; two edits at once give one `SPLIT_CONFLICT` (409). It snapshots rows, clones and moved receipts and rolls back on any failure; receipts of removed lines move to the first line (cap checked atomically) before the line is deleted.
+- Receipt cascade (`deleteReceiptsOfTransactions`) runs AFTER the delete/void/cancel, retries once, then logs; `getReceiptImage` checks the parent, quota counts only live parents, and `sweepOrphanReceipts` (on list and add) purges leftovers. Account self-delete purges receipts as its last step; `/api/me/export` lists their metadata only.
 - Receipts: never return a receipt URL or bytes without `getReceiptImage(userId, id)`; a receipt is deleted with its transaction (`deleteReceiptsOfTransaction` in `deleteTransaction`). The key is `CAPTURE_ENCRYPTION_KEY` with the purpose `receipt`: changing that env value makes stored receipts unreadable.
 - capture/ingest.ts reads `CAPTURE_ENCRYPTION_KEY`; log-security.ts reads `TOTP_ENCRYPTION_KEY`.
 - integrations/sms-parser.ts (`parseBankSms`) has no importer in src, scripts or server.ts; ingest uses `parseCapture` from capture/parsers.

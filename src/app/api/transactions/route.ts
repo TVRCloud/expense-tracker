@@ -1,3 +1,4 @@
+import { normaliseTag } from "@/lib/tags";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
@@ -48,7 +49,7 @@ export async function GET(req: NextRequest) {
       const query: Record<string, unknown> = { user: user.id, isDeleted: { $ne: true } };
       if (type) query.type = type;
       if (category) query.category = category;
-      if (tag) query.tags = tag.trim().toLowerCase();
+      if (tag) query.tags = normaliseTag(tag);
       if (accountId) query.account = accountId;
       if (dateFrom || dateTo) {
         query.date = {};

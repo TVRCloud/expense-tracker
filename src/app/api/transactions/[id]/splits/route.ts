@@ -30,7 +30,13 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
     const { user, errorResponse } = await requireAuth();
     if (errorResponse) return errorResponse;
     const { id } = await params;
-    const parsed = splitUpdateSchema.safeParse(await req.json());
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: "Request body must be valid JSON" }, { status: 400 });
+    }
+    const parsed = splitUpdateSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json({ error: "Validation failed", details: parsed.error.flatten() }, { status: 400 });
     }

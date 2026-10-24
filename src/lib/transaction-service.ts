@@ -486,10 +486,6 @@ export async function deleteTransaction(userId: string, transactionId: string, a
     throw new TransactionServiceError("TRANSACTION_LOCKED", `${blocker} Use the linked record flow to reverse it.`);
   }
 
-  // A receipt is private and has no meaning without its transaction. Removed first:
-  // if this fails nothing else has changed and the delete can be retried.
-  await deleteReceiptsOfTransaction(userId, transactionId);
-
   // Reverse account balance only for transactions that previously affected it.
   const affectsBalance = !txn.recurringId || txn.installmentStatus === "paid";
   if (affectsBalance) {
@@ -567,6 +563,10 @@ export async function deleteTransaction(userId: string, transactionId: string, a
     actor,
   });
   await invalidateStatsCacheSingle(userId, new Date(txn.date));
+  // A receipt is private and has no meaning without its transaction. Done last: a failure here is
+  // logged and swept later (reads already hide receipts of a deleted row), never undoes the delete.
+  await deleteReceiptsOfTransaction(userId, transactionId);
+
   return deleted;
 }
 

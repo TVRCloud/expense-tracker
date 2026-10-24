@@ -40,6 +40,8 @@ const TransactionSchema = new Schema(
     // Bumped on the first line of a split by every edit of its lines: two edits
     // at once cannot both apply (see split-service.ts). Missing until the first edit.
     splitRev: { type: Number },
+    // Set while an edit of the lines is running; stale after 30 s.
+    splitBusyUntil: { type: Date },
     // Where the values came from. Auto-captured rows (sms / notification /
     // n8n) start as reviewStatus "unreviewed" and show in the reconcile
     // inbox. Manual rows have no reviewStatus.
