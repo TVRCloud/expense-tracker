@@ -55,6 +55,7 @@ All monetary amounts are in **cents** (integers).
 - `type` — `income | expense | transfer`
 - `category` — category string
 - `accountId` — filter by account
+- `includeIncomingTransfers=true` (integrations only) — with `accountId`, also list transfers that moved money into that account
 - `search` — full-text search
 - `dateFrom` / `dateTo` — ISO date strings
 - `skip` / `limit` — pagination
@@ -72,6 +73,18 @@ All monetary amounts are in **cents** (integers).
   "transferToId": "string (transfer only)"
 }
 ```
+
+### Transfers (integrations only)
+A transfer is one `type: "transfer"` row (`account` is the source, `transferTo` the destination). It moves both balances and counts as neither income nor spending in stats, budgets and spend limits.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/integrations/transfers` | Body `{fromAccountId, toAccountId, amount, currency?, date?, note?, description?}`. 201 with `{id, type, amount, currency, fromAccountId, toAccountId, date, note, description, createdAt, updatedAt}`. 400 same account twice, bad amount; 404 an account is not yours or is archived |
+| GET | `/api/integrations/transfers/:id` | Same shape. 404 for another user's row or a non-transfer id |
+| PATCH | `/api/integrations/transfers/:id` | Any of `fromAccountId, toAccountId, amount, date, note, description` (at least one). Old movement reversed and new applied; 400 same account, nothing to update, locked by a statement payment; 404 unknown |
+| DELETE | `/api/integrations/transfers/:id` | Soft delete, both balances put back. `{id, deleted: true}` |
+
+`POST /api/integrations/transactions` answers with `transferToId` (null unless the row is a transfer).
 
 ## Spend limit
 

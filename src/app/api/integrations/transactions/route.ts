@@ -22,6 +22,8 @@ export const GET = withIntegrationRoute("transactions", async ({ req, user, requ
   const dateTo = searchParams.get("dateTo");
   const hideFuture = searchParams.get("hideFuture") === "true";
   const includeUnpaidRecurring = searchParams.get("includeUnpaidRecurring") === "true";
+  // Opt-in: with accountId, also list transfers that moved money INTO that account.
+  const includeIncomingTransfers = searchParams.get("includeIncomingTransfers") === "true";
   // total=false skips the count (latest-N lists on home screens don't page).
   const includeTotal = searchParams.get("total") !== "false";
 
@@ -42,6 +44,7 @@ export const GET = withIntegrationRoute("transactions", async ({ req, user, requ
     hideFuture,
     includeTotal,
     includeUnpaidRecurring,
+    includeIncomingTransfers,
   });
 
   return integrationOk(result, requestId);
@@ -99,6 +102,7 @@ export const POST = withIntegrationRoute("transactions", async ({ req, user, req
           currency: string;
           category: string;
           account: { toString(): string };
+          transferTo?: { toString(): string } | null;
           date: Date;
           createdAt: Date;
           updatedAt: Date;
@@ -110,6 +114,7 @@ export const POST = withIntegrationRoute("transactions", async ({ req, user, req
           currency: transaction.currency,
           category: transaction.category,
           accountId: transaction.account.toString(),
+          transferToId: transaction.transferTo ? transaction.transferTo.toString() : null,
           date: transaction.date,
           seriesId: result.kind === "series" ? result.seriesId : null,
           count: result.kind === "series" ? result.count : 1,
