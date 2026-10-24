@@ -89,6 +89,8 @@ Authorization: Bearer <YOUR_API_KEY>
 | GET, PATCH, DELETE | `/api/integrations/loans/[id]` | Read, edit, soft delete a loan (writes need `Idempotency-Key`) |
 | GET, POST | `/api/integrations/loans/[id]/repayments` | List and record repayments (POST needs `Idempotency-Key`) |
 | POST | `/api/integrations/transfers` | Move money between two own accounts: `{fromAccountId, toAccountId, amount (paise, int), date?, note?, description?}` (needs `Idempotency-Key`). Not income or spending |
+| GET | `/api/integrations/cash` | The user's cash account (oldest live account of type `cash`) with a low-cash view: balance, low-cash line, `isLow`, 30 days of withdrawals and cash spending, latest withdrawals |
+| POST | `/api/integrations/cash` | Make sure a cash account exists (created on first call, 201) and set `name` and `lowBalanceAt` (paise, `null` for the default); `openingBalance` counts only on creation (needs `Idempotency-Key`) |
 | GET, PATCH, DELETE | `/api/integrations/transfers/[id]` | Read, edit (amount, accounts, date, notes; both balances are corrected) and delete a transfer, which puts both balances back (writes need `Idempotency-Key`) |
 | GET | `/api/integrations/subscriptions` | Detected repeating charges (`status`, `includeLapsed`), with `totals`; see below |
 | PATCH | `/api/integrations/subscriptions/[id]` | Confirm, dismiss or restore one (`{status}`, needs `Idempotency-Key`) |

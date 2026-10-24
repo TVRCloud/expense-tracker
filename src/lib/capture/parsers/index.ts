@@ -27,6 +27,8 @@ export interface MoneyParse {
   bankName?: string;
   date?: Date;
   hasTime: boolean;
+  /** A cash withdrawal at an ATM (expense only). Ingest turns it into a transfer to the cash account. */
+  atm?: true;
 }
 
 export interface LoanEmiParse {
@@ -212,6 +214,19 @@ function findMerchant(text: string, type: "income" | "expense"): string | undefi
   return (candidates.find((c) => c.preferred) ?? candidates[0])?.value;
 }
 
+/**
+ * "Rs.5,000.00 withdrawn from A/c XX1234 at ATM ...", "Cash withdrawal of Rs 2000 ...",
+ * "ATM WDL". Needs a cash-withdrawal word next to ATM, or an explicit "cash withdrawal",
+ * so a card spend at a merchant called "ATM Foods" or a deposit at an ATM never matches.
+ */
+export function isAtmWithdrawal(text: string): boolean {
+  return (
+    /\bcash\s+(?:withdrawal|withdrawn|wdl)\b/i.test(text) ||
+    /\b(?:withdrawn|withdrawal|wdl)\b[^.]{0,40}?\b(?:ATM|NFS)\b/i.test(text) ||
+    /\b(?:ATM|NFS)[\s*/-]{0,3}(?:cash|wdl|withdrawal|withdrawn)\b/i.test(text)
+  );
+}
+
 function findBankName(text: string): string | undefined {
   const match = text.match(
     /\b(HDFC|ICICI|SBI|Axis|Kotak|IDFC(?: FIRST)?|Yes|IndusInd|PNB|Bank of Baroda|BOB|Canara|Union|Federal|AU|RBL)\b\s*(Bank)?/i
@@ -254,6 +269,7 @@ function parseGeneric(text: string, receivedAt: Date): MoneyParse | null {
     bankName: findBankName(text),
     date: parsedDate?.date,
     hasTime: parsedDate?.hasTime ?? false,
+    ...(direction.type === "expense" && isAtmWithdrawal(text) ? { atm: true as const } : {}),
   };
 }
 

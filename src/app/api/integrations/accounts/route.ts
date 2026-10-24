@@ -17,7 +17,7 @@ export const GET = withIntegrationRoute("accounts", async ({ req, user, requestI
   await connectDB();
   const accounts = await Account.find(includeArchived ? { user: user.id } : { user: user.id, isArchived: false })
     .sort({ isArchived: 1, createdAt: -1 })
-    .select("_id name type balance currency color icon isArchived creditMeta smsLastFour createdAt updatedAt")
+    .select("_id name type balance currency color icon isArchived lowBalanceAt creditMeta smsLastFour createdAt updatedAt")
     .lean();
 
   return integrationOk(accounts, requestId);
