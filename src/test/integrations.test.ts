@@ -6820,8 +6820,9 @@ describe("tags, split edits and receipts", () => {
       expect(res.status).toBe(400);
       expect((await res.json()).error.reason).toBe("TOO_LARGE");
       const noLength = new Request("http://localhost/x", { method: "POST", body: new Uint8Array(big) });
-      expect(await readBodyCapped(noLength, MAX_RECEIPT_BYTES)).toBeNull();
-      expect((await readBodyCapped(new Request("http://localhost/x", { method: "POST", body: new Uint8Array(JPEG) }), MAX_RECEIPT_BYTES))!.equals(JPEG)).toBe(true);
+      expect(await readBodyCapped(noLength, MAX_RECEIPT_BYTES)).toEqual({ ok: false, reason: "too_large" });
+      const small = await readBodyCapped(new Request("http://localhost/x", { method: "POST", body: new Uint8Array(JPEG) }), MAX_RECEIPT_BYTES);
+      expect(small.ok && small.bytes.equals(JPEG)).toBe(true);
     });
 
     it("another user can neither read, list, attach to nor delete a receipt", async () => {
@@ -7463,6 +7464,153 @@ describe("tags, split edits and receipts", () => {
       expect(await balance()).toBe(before - 3000);
       expect(spy).toHaveBeenCalledTimes(2);
       spy.mockRestore();
+    });
+
+    // A body that sends its first bytes and then goes quiet, and records whether it was ever read.
+    function stalledBody() {
+      const state = { pulled: 0 };
+      // highWaterMark 0: nothing is pulled until someone reads, so `pulled` counts real reads.
+      const stream = new ReadableStream<Uint8Array>(
+        {
+          pull() {
+            state.pulled += 1;
+            return new Promise<void>(() => undefined);
+          },
+        },
+        { highWaterMark: 0 }
+      );
+      return { state, stream };
+    }
+    const stalledRequest = (stream: ReadableStream<Uint8Array>, key: string, id: string) =>
+      new NextRequest(`http://localhost/api/integrations/transactions/${id}/receipts`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${KEY}`, "idempotency-key": key },
+        body: stream,
+        duplex: "half",
+      } as never);
+
+    it("a body that goes quiet is given up on after the idle wait, and the slot is free again", async () => {
+      const { readReceiptBody, RECEIPT_READ_LIMITS } = await import("@/lib/receipt-service");
+      const saved = { ...RECEIPT_READ_LIMITS };
+      RECEIPT_READ_LIMITS.idleMs = 40;
+      try {
+        const { stream } = stalledBody();
+        const started = Date.now();
+        const res = await readReceiptBody(new Request("http://localhost/x", { method: "POST", body: stream, duplex: "half" } as never), userId, 1000);
+        expect(res).toEqual({ ok: false, reason: "timeout" });
+        expect(Date.now() - started).toBeLessThan(2000);
+        const ok = await readReceiptBody(new Request("http://localhost/x", { method: "POST", body: new Uint8Array(JPEG) }), userId, 1000);
+        expect(ok.ok).toBe(true);
+      } finally {
+        Object.assign(RECEIPT_READ_LIMITS, saved);
+      }
+    });
+
+    it("a slow trickle is stopped by the total deadline", async () => {
+      const { readReceiptBody, RECEIPT_READ_LIMITS } = await import("@/lib/receipt-service");
+      const saved = { ...RECEIPT_READ_LIMITS };
+      RECEIPT_READ_LIMITS.idleMs = 1000;
+      RECEIPT_READ_LIMITS.totalMs = 120;
+      try {
+        const stream = new ReadableStream<Uint8Array>({
+          async pull(c) {
+            await new Promise((r) => setTimeout(r, 30));
+            c.enqueue(new Uint8Array([1]));
+          },
+        });
+        const res = await readReceiptBody(new Request("http://localhost/x", { method: "POST", body: stream, duplex: "half" } as never), userId, 1_000_000);
+        expect(res).toEqual({ ok: false, reason: "timeout" });
+      } finally {
+        Object.assign(RECEIPT_READ_LIMITS, saved);
+      }
+    });
+
+    it("one person reads one body at a time, and the process reads at most four", async () => {
+      const { readReceiptBody, RECEIPT_READ_LIMITS } = await import("@/lib/receipt-service");
+      const saved = { ...RECEIPT_READ_LIMITS };
+      RECEIPT_READ_LIMITS.idleMs = 150;
+      try {
+        const slow = (u: string) => readReceiptBody(new Request("http://localhost/x", { method: "POST", body: stalledBody().stream, duplex: "half" } as never), u, 1000);
+        const fast = (u: string) => readReceiptBody(new Request("http://localhost/x", { method: "POST", body: new Uint8Array(JPEG) }), u, 1000);
+        const first = slow("u1");
+        expect(await fast("u1")).toEqual({ ok: false, reason: "busy" });
+        const others = [slow("u2"), slow("u3"), slow("u4")];
+        expect(await fast("u5")).toEqual({ ok: false, reason: "busy" });
+        await Promise.all([first, ...others]);
+        expect((await fast("u5")).ok).toBe(true);
+      } finally {
+        Object.assign(RECEIPT_READ_LIMITS, saved);
+      }
+    });
+
+    it("a refused upload is refused before its body is read", async () => {
+      const { addReceipt, MAX_RECEIPTS_PER_USER } = await import("@/lib/receipt-service");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const { POST } = await import("@/app/api/integrations/transactions/[id]/receipts/route");
+      const t = await addTxn();
+      const id = t._id.toString();
+
+      // No such transaction.
+      let b = stalledBody();
+      const missing = await POST(stalledRequest(b.stream, "pre-1", new mongoose.Types.ObjectId().toString()), ctx(new mongoose.Types.ObjectId().toString()));
+      expect(missing.status).toBe(404);
+      expect(b.state.pulled).toBe(0);
+
+      // Quota full.
+      await Receipt.insertMany(
+        Array.from({ length: MAX_RECEIPTS_PER_USER }, () => ({
+          user: userId, transaction: t._id, contentType: "image/jpeg", size: 10,
+          iv: Buffer.alloc(12), tag: Buffer.alloc(16), data: Buffer.alloc(10),
+        }))
+      );
+      b = stalledBody();
+      const full = await POST(stalledRequest(b.stream, "pre-2", id), ctx(id));
+      expect(full.status).toBe(409);
+      expect((await full.json()).error.reason).toBe("QUOTA_EXCEEDED");
+      expect(b.state.pulled).toBe(0);
+      await Receipt.deleteMany({ user: userId });
+
+      // Five already on the transaction.
+      for (let i = 0; i < 5; i++) await addReceipt({ userId, transactionId: id, bytes: JPEG });
+      b = stalledBody();
+      const five = await POST(stalledRequest(b.stream, "pre-3", id), ctx(id));
+      expect(five.status).toBe(409);
+      expect((await five.json()).error.reason).toBe("TOO_MANY");
+      expect(b.state.pulled).toBe(0);
+    });
+
+    it("a retry of an upload that worked still gets its stored answer when the transaction is now full", async () => {
+      const { addReceipt } = await import("@/lib/receipt-service");
+      const { POST } = await import("@/app/api/integrations/transactions/[id]/receipts/route");
+      const t = await addTxn();
+      const id = t._id.toString();
+      for (let i = 0; i < 4; i++) await addReceipt({ userId, transactionId: id, bytes: PNG });
+      const send = () => POST(req(`transactions/${id}/receipts`, "POST", JPEG, { "idempotency-key": "fifth" }), ctx(id));
+      const first = await send();
+      expect(first.status).toBe(201);
+      const again = await send();
+      expect(again.status).toBe(201);
+    });
+
+    it("the browser route answers 429 when another upload of the same person is still arriving, and 413 or 408 for the rest", async () => {
+      const { readReceiptBody, RECEIPT_READ_LIMITS } = await import("@/lib/receipt-service");
+      const { POST } = await import("@/app/api/transactions/[id]/receipts/route");
+      const t = await addTxn();
+      const id = t._id.toString();
+      const saved = { ...RECEIPT_READ_LIMITS };
+      RECEIPT_READ_LIMITS.idleMs = 200;
+      sessionUser.current = { id: userId, name: "TR User", email: "tr@x.com", role: "user" };
+      try {
+        const hold = readReceiptBody(new Request("http://localhost/x", { method: "POST", body: stalledBody().stream, duplex: "half" } as never), userId, 1000);
+        const busy = await POST(new NextRequest(`http://localhost/api/transactions/${id}/receipts`, { method: "POST", body: new Uint8Array(JPEG) }), ctx(id));
+        expect(busy.status).toBe(429);
+        await hold;
+        const slow = await POST(new NextRequest(`http://localhost/api/transactions/${id}/receipts`, { method: "POST", body: stalledBody().stream, duplex: "half" } as never), ctx(id));
+        expect(slow.status).toBe(408);
+      } finally {
+        sessionUser.current = null;
+        Object.assign(RECEIPT_READ_LIMITS, saved);
+      }
     });
 
     it("the browser split route answers 400 to a body that is not JSON", async () => {

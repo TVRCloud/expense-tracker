@@ -77,25 +77,72 @@ export function sniffImageType(b: Buffer): ReceiptContentType | null {
   return null;
 }
 
-/** Reads a request body, stopping as soon as it passes `max` bytes. Null means too big. */
-export async function readBodyCapped(req: Request, max: number): Promise<Buffer | null> {
+// An upload body is read under three limits, like the backup routes (integrations/backup-http.ts):
+// at most four reads at once in the process, one at a time per person (so one person cannot hold
+// every slot), and a deadline (a total time, and a longest wait for the next chunk). A read that
+// runs out is cancelled without waiting for the cancel, and its slot is freed.
+const MAX_BODY_READS = 4;
+export const RECEIPT_READ_LIMITS = { totalMs: 60_000, idleMs: 15_000 };
+let bodyReads = 0;
+const readersNow = new Set<string>();
+
+export type BodyReadResult = { ok: true; bytes: Buffer } | { ok: false; reason: "too_large" | "timeout" | "busy" };
+
+/** Reads an upload body for one user under the limits above. Check quota BEFORE calling this. */
+export async function readReceiptBody(req: Request, userId: string, max: number): Promise<BodyReadResult> {
+  if (bodyReads >= MAX_BODY_READS || readersNow.has(userId)) return { ok: false, reason: "busy" };
+  bodyReads += 1;
+  readersNow.add(userId);
+  try {
+    return await readBodyCapped(req, max);
+  } finally {
+    bodyReads -= 1;
+    readersNow.delete(userId);
+  }
+}
+
+/** Reads a request body, stopping at `max` bytes or when the deadline passes. */
+export async function readBodyCapped(req: Request, max: number): Promise<BodyReadResult> {
   const declared = Number(req.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > max) return null;
-  if (!req.body) return Buffer.alloc(0);
+  if (Number.isFinite(declared) && declared > max) return { ok: false, reason: "too_large" };
+  if (!req.body) return { ok: true, bytes: Buffer.alloc(0) };
   const reader = req.body.getReader();
   const chunks: Buffer[] = [];
   let total = 0;
+  const deadline = Date.now() + RECEIPT_READ_LIMITS.totalMs;
+  // Never wait for a cancel to finish: a stream that will not cancel must not hold a slot.
+  const drop = () => void reader.cancel().catch(() => undefined);
   for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > max) {
-      await reader.cancel().catch(() => undefined);
-      return null;
+    const wait = Math.min(RECEIPT_READ_LIMITS.idleMs, deadline - Date.now());
+    if (wait <= 0) {
+      drop();
+      return { ok: false, reason: "timeout" };
     }
-    chunks.push(Buffer.from(value));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let next: ReadableStreamReadResult<Uint8Array> | "timeout";
+    try {
+      next = await Promise.race([
+        reader.read(),
+        new Promise<"timeout">((resolve) => {
+          timer = setTimeout(() => resolve("timeout"), wait);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (next === "timeout") {
+      drop();
+      return { ok: false, reason: "timeout" };
+    }
+    if (next.done) break;
+    total += next.value.byteLength;
+    if (total > max) {
+      drop();
+      return { ok: false, reason: "too_large" };
+    }
+    chunks.push(Buffer.from(next.value));
   }
-  return Buffer.concat(chunks, total);
+  return { ok: true, bytes: Buffer.concat(chunks, total) };
 }
 
 export type ReceiptMeta = {
@@ -183,6 +230,45 @@ export async function sweepOrphanReceipts(userId: string): Promise<number> {
   }
 }
 
+const QUOTA_MESSAGE = "You have reached the receipt storage limit. Delete some receipts first";
+
+/** True when adding `extra` bytes (one more file when extra > 0, none when 0) would pass the user's quota. Counts only receipts whose transaction is alive. */
+async function overQuota(userId: string, extra: number) {
+  const [usage] = await Receipt.aggregate<{ n: number; bytes: number }>([
+    { $match: { user: new Types.ObjectId(userId) } },
+    // Only receipts whose transaction is alive count.
+    {
+      $lookup: {
+        from: "transactions",
+        localField: "transaction",
+        foreignField: "_id",
+        pipeline: [{ $match: LIVE_PARENT }, { $project: { _id: 1 } }],
+        as: "parent",
+      },
+    },
+    { $match: { "parent.0": { $exists: true } } },
+    { $group: { _id: null, n: { $sum: 1 }, bytes: { $sum: "$size" } } },
+  ]);
+  return Boolean(usage && (usage.n + (extra ? 1 : 0) > MAX_RECEIPTS_PER_USER || usage.bytes + extra > MAX_RECEIPT_BYTES_PER_USER));
+}
+
+/**
+ * Everything that can be refused without the image: the transaction is yours and alive, it has
+ * room for another receipt, and the user has room under the quota. Routes call this BEFORE they
+ * read the body, so a refused upload costs no memory. `declared` is the Content-Length when sent.
+ */
+export async function preflightReceipt(userId: string, transactionId: string, declared?: number): Promise<void> {
+  await connectDB();
+  const listed = await ownTransaction(userId, transactionId);
+  if (listed.length >= MAX_RECEIPTS_PER_TRANSACTION) {
+    throw new ReceiptServiceError("TOO_MANY", `A transaction can have at most ${MAX_RECEIPTS_PER_TRANSACTION} receipts`);
+  }
+  await sweepOrphanReceipts(userId);
+  // Too big is the body reader's answer; here a huge declared size must not read as a full quota.
+  const size = Number.isFinite(declared) && (declared as number) > 0 ? Math.min(declared as number, MAX_RECEIPT_BYTES) : 1;
+  if (await overQuota(userId, size)) throw new ReceiptServiceError("QUOTA_EXCEEDED", QUOTA_MESSAGE);
+}
+
 export async function addReceipt(input: { userId: string; transactionId: string; bytes: Buffer }): Promise<ReceiptMeta> {
   const { userId, transactionId, bytes } = input;
   if (bytes.length === 0) throw new ReceiptServiceError("EMPTY", "The image is empty");
@@ -198,26 +284,7 @@ export async function addReceipt(input: { userId: string; transactionId: string;
   await ownTransaction(userId, transactionId);
   await sweepOrphanReceipts(userId);
 
-  const overQuota = async (extra: number) => {
-    const [usage] = await Receipt.aggregate<{ n: number; bytes: number }>([
-      { $match: { user: new Types.ObjectId(userId) } },
-      // Only receipts whose transaction is alive count.
-      {
-        $lookup: {
-          from: "transactions",
-          localField: "transaction",
-          foreignField: "_id",
-          pipeline: [{ $match: LIVE_PARENT }, { $project: { _id: 1 } }],
-          as: "parent",
-        },
-      },
-      { $match: { "parent.0": { $exists: true } } },
-      { $group: { _id: null, n: { $sum: 1 }, bytes: { $sum: "$size" } } },
-    ]);
-    return Boolean(usage && (usage.n + (extra ? 1 : 0) > MAX_RECEIPTS_PER_USER || usage.bytes + extra > MAX_RECEIPT_BYTES_PER_USER));
-  };
-  const quotaMessage = "You have reached the receipt storage limit. Delete some receipts first";
-  if (await overQuota(bytes.length)) throw new ReceiptServiceError("QUOTA_EXCEEDED", quotaMessage);
+  if (await overQuota(userId, bytes.length)) throw new ReceiptServiceError("QUOTA_EXCEEDED", QUOTA_MESSAGE);
 
   const id = new Types.ObjectId();
   const enc = encryptBytes(bytes, RECEIPT_KEY_ENV, KEY_PURPOSE, context(userId, id.toString()));
@@ -236,9 +303,9 @@ export async function addReceipt(input: { userId: string; transactionId: string;
   // inserts first and then counts, so uploads at the same moment each see the
   // others and the total never ends above the limit (at the very edge two
   // can both back out, which is the safe way to be wrong). Deletes need no bookkeeping.
-  if (await overQuota(0)) {
+  if (await overQuota(userId, 0)) {
     await Receipt.deleteOne({ _id: id, user: userId });
-    throw new ReceiptServiceError("QUOTA_EXCEEDED", quotaMessage);
+    throw new ReceiptServiceError("QUOTA_EXCEEDED", QUOTA_MESSAGE);
   }
 
   // Deleting an account purges receipts after locking it, so an upload that lands after the purge

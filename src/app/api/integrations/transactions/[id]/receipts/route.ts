@@ -4,11 +4,13 @@ import { receiptIntegrationCode } from "@/lib/integrations/receipt-errors";
 import { withIdempotency } from "@/lib/integrations/idempotency";
 import { conflictMessage, idempotencyKeyOf } from "@/lib/integrations/write-helpers";
 import { createHash } from "crypto";
+import IdempotencyRecord from "@/models/IdempotencyRecord";
 import {
   addReceipt,
   listReceipts,
   MAX_RECEIPT_BYTES,
-  readBodyCapped,
+  preflightReceipt,
+  readReceiptBody,
   ReceiptServiceError,
   type ReceiptServiceErrorCode,
 } from "@/lib/receipt-service";
@@ -34,12 +36,32 @@ export const POST = withIntegrationRoute("receipts", async ({ req, user, request
   const key = idempotencyKeyOf(req);
   if (!key) return integrationError("VALIDATION_ERROR", "Missing or invalid Idempotency-Key header", requestId);
 
-  const bytes = await readBodyCapped(req, MAX_RECEIPT_BYTES);
-  if (!bytes) {
+  // Refuse what can be refused before the body is read (no transaction, five already, quota full). A key
+  // seen before skips this so a retry of an upload that worked still gets its stored answer.
+  const seen = await IdempotencyRecord.exists({ userId: user.id, endpoint: "integrations:receipts:POST", key });
+  if (!seen) {
+    try {
+      const declared = Number(req.headers.get("content-length"));
+      await preflightReceipt(user.id, id, Number.isFinite(declared) ? declared : undefined);
+    } catch (err) {
+      if (err instanceof ReceiptServiceError) return integrationError(receiptIntegrationCode(err.code), err.message, requestId, { reason: err.code });
+      throw err;
+    }
+  }
+
+  const read = await readReceiptBody(req, user.id, MAX_RECEIPT_BYTES);
+  if (!read.ok) {
+    if (read.reason === "busy") {
+      return integrationError("RATE_LIMITED", "Another upload is still being received; try again in a moment", requestId, { retryAfterSeconds: 5, reason: "busy" });
+    }
+    if (read.reason === "timeout") {
+      return integrationError("VALIDATION_ERROR", "The upload took too long", requestId, { reason: "timeout" });
+    }
     return integrationError("VALIDATION_ERROR", `A receipt can be at most ${MAX_RECEIPT_BYTES / (1024 * 1024)} MB`, requestId, {
       reason: "TOO_LARGE",
     });
   }
+  const bytes = read.bytes;
 
   const outcome = await withIdempotency({
     userId: user.id,
