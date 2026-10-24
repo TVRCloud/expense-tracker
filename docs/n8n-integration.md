@@ -97,7 +97,7 @@ Authorization: Bearer <YOUR_API_KEY>
 | GET | `/api/integrations/refunds` | Credits that look like the money back for an earlier expense, each with the expense it probably refunds |
 | POST | `/api/integrations/refunds/[id]/confirm` | Link the credit to its expense, optional `{originalId}` (needs `Idempotency-Key`) |
 | POST | `/api/integrations/refunds/[id]/reject` | Not a refund: drop the suggestion, or unlink a confirmed one (needs `Idempotency-Key`) |
-| GET | `/api/integrations/spend-limit` | Daily and weekly limit settings, today and week progress, safe to spend |
+| GET | `/api/integrations/spend-limit` | Daily and weekly limit settings, today and week progress, safe to spend, and `history` (the amounts over time, so a past day can be judged against the limit it had; a change applies from today) |
 | PUT | `/api/integrations/spend-limit` | Set, change or clear the limits (needs `Idempotency-Key`) |
 | GET | `/api/integrations/bills` | What is coming due: recurring payments, card statements, loans you owe. `days` 0 to 60, default 14; overdue from the last 60 days included. Returns `{bills, settings, days}` |
 | POST | `/api/integrations/bills/[id]/pay` | Mark a bill paid (needs `Idempotency-Key`; optional `{amount, accountId}` for loans). Cards answer 400 `NOT_PAYABLE` |

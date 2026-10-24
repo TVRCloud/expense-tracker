@@ -102,6 +102,8 @@ An ATM withdrawal message (`withdrawn ... at ATM`, `cash withdrawal`, `ATM WDL`)
 | GET | `/api/spend-limit` | Daily and weekly limits, today and week progress, safe to spend |
 | PUT | `/api/spend-limit` | Change limits. Send only what changes; `null` clears a limit or resumes a pause |
 
+A change to the daily or weekly amount applies from the start of the current day in the user's time zone; earlier days keep the limit they had. Every read (here, `/api/integrations/spend-limit`, and `spendLimit` in home and summary) carries `history`: `[{from, dailyAmount, weeklyAmount}]`, oldest first, newest last (equals the current amounts), `from` the ISO instant of a local midnight, amounts in paise or `null` for no limit. Empty for limits set before history existed (the current amounts then apply to every earlier day). To judge a past day use the last entry whose `from` is at or before that day's start (`limitOn` in `src/lib/spend-limit.ts`).
+
 ## Subscriptions
 
 Repeating charges found in expense history (same merchant, similar amount, steady gap; weekly, monthly, quarterly or yearly). Detected on every read; only the confirm and dismiss choices are stored. Recurring series the user already tracks are left out.

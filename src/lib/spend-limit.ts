@@ -10,6 +10,7 @@ import { listBudgetsWithSpend } from "@/lib/budget-service";
 import {
   spendLimitUpdateSchema,
   type LimitBar,
+  type LimitHistoryEntry,
   type SpendLimitStatus,
   type SpendLimitUpdate,
 } from "@/features/budgets/schemas/spend-limit.schema";
@@ -20,7 +21,7 @@ import { dayWindow, DEFAULT_TIME_ZONE, isValidTimeZone, localHour } from "@/lib/
 // left out because they are planned and shown separately, and categories the
 // user excluded are skipped. Limits are soft: they warn, they never block.
 
-export { spendLimitUpdateSchema, type SpendLimitUpdate, type LimitBar, type SpendLimitStatus };
+export { spendLimitUpdateSchema, type SpendLimitUpdate, type LimitBar, type LimitHistoryEntry, type SpendLimitStatus };
 
 type SpendLimitDoc = {
   dailyAmount?: number;
@@ -29,7 +30,57 @@ type SpendLimitDoc = {
   excludeCategories: string[];
   rollover: boolean;
   pausedUntil?: Date;
+  limitHistory?: Array<{ from: Date; dailyAmount?: number | null; weeklyAmount?: number | null }>;
 };
+
+const EPOCH = new Date(0);
+
+type Amounts = { dailyAmount: number | null; weeklyAmount: number | null };
+
+/**
+ * The daily and weekly amounts that were in force at `date`: the last history
+ * entry that starts at or before it. With no history the current amounts count
+ * for every day. Pure, so past-day views (streaks, calendars) can reuse it.
+ */
+export function limitOn(history: LimitHistoryEntry[], current: Amounts, date: Date): Amounts {
+  if (history.length === 0) return current;
+  let found = history[0];
+  for (const entry of history) {
+    if (new Date(entry.from).getTime() <= date.getTime()) found = entry;
+    else break;
+  }
+  return { dailyAmount: found.dailyAmount, weeklyAmount: found.weeklyAmount };
+}
+
+function historyOf(doc: SpendLimitDoc | null): LimitHistoryEntry[] {
+  return (doc?.limitHistory ?? []).map((h) => ({
+    from: new Date(h.from).toISOString(),
+    dailyAmount: h.dailyAmount ?? null,
+    weeklyAmount: h.weeklyAmount ?? null,
+  }));
+}
+
+/**
+ * The history after the amounts change to `next` on the local day starting at
+ * `dayStart`. The first change records what was in force before it (from the
+ * epoch), so earlier days keep their limit. A second change on the same day
+ * replaces that day's entry, and an entry that matches the one before it is
+ * dropped.
+ */
+export function recordLimitChange(
+  history: LimitHistoryEntry[],
+  before: Amounts,
+  next: Amounts,
+  dayStart: Date
+): LimitHistoryEntry[] {
+  const out = history.length ? history.map((h) => ({ ...h })) : [{ from: EPOCH.toISOString(), ...before }];
+  const last = out[out.length - 1];
+  if (new Date(last.from).getTime() >= dayStart.getTime()) out.pop();
+  const prev = out[out.length - 1];
+  if (prev && prev.dailyAmount === next.dailyAmount && prev.weeklyAmount === next.weeklyAmount) return out;
+  out.push({ from: dayStart.toISOString(), ...next });
+  return out;
+}
 
 function bar(spent: number, limit: number | null): LimitBar {
   if (limit === null) return { spent, limit: null, left: null, percent: null };
@@ -52,8 +103,9 @@ export async function getSpendLimitSettings(userId: string) {
   return SpendLimit.findOne({ user: userId }).lean<SpendLimitDoc | null>();
 }
 
-export async function updateSpendLimit(userId: string, input: SpendLimitUpdate) {
+export async function updateSpendLimit(userId: string, input: SpendLimitUpdate, now = new Date()) {
   await connectDB();
+  const existing = await getSpendLimitSettings(userId);
   const set: Record<string, unknown> = {};
   const unset: Record<string, 1> = {};
   if (input.dailyAmount === null) unset.dailyAmount = 1;
@@ -66,11 +118,27 @@ export async function updateSpendLimit(userId: string, input: SpendLimitUpdate) 
   if (input.pausedUntil === null) unset.pausedUntil = 1;
   else if (input.pausedUntil !== undefined) set.pausedUntil = new Date(input.pausedUntil);
 
+  // A change to the amounts applies from today, not to days already lived.
+  const before: Amounts = { dailyAmount: existing?.dailyAmount ?? null, weeklyAmount: existing?.weeklyAmount ?? null };
+  const next: Amounts = {
+    dailyAmount: input.dailyAmount === undefined ? before.dailyAmount : input.dailyAmount,
+    weeklyAmount: input.weeklyAmount === undefined ? before.weeklyAmount : input.weeklyAmount,
+  };
+  if (next.dailyAmount !== before.dailyAmount || next.weeklyAmount !== before.weeklyAmount) {
+    const clock = await getUserClock(userId);
+    const { dayStart } = dayWindow(now, clock.timeZone, clock.weekStartsOn);
+    set.limitHistory = recordLimitChange(historyOf(existing), before, next, dayStart).map((h) => ({
+      from: new Date(h.from),
+      ...(h.dailyAmount !== null ? { dailyAmount: h.dailyAmount } : {}),
+      ...(h.weeklyAmount !== null ? { weeklyAmount: h.weeklyAmount } : {}),
+    }));
+  }
+
   const update: Record<string, unknown> = {};
   if (Object.keys(set).length) update.$set = set;
   if (Object.keys(unset).length) update.$unset = unset;
   await SpendLimit.findOneAndUpdate({ user: userId }, update, { upsert: true, setDefaultsOnInsert: true });
-  return getSpendLimitStatus(userId);
+  return getSpendLimitStatus(userId, now);
 }
 
 async function spentWindows(userId: string, excludeCategories: string[], from: Date, to: Date, bounds: {
@@ -141,9 +209,15 @@ export async function getSpendLimitStatus(userId: string, now = new Date()): Pro
   ]);
 
   const paused = !!settings.pausedUntil && settings.pausedUntil.getTime() > now.getTime();
-  let dailyLimit = settings.dailyAmount ?? null;
+  const history = historyOf(doc);
+  const current: Amounts = { dailyAmount: settings.dailyAmount ?? null, weeklyAmount: settings.weeklyAmount ?? null };
+  // Today's limit is the one in force today; rollover measures yesterday
+  // against the limit yesterday had, not today's.
+  let dailyLimit = limitOn(history, current, win.dayStart).dailyAmount;
   if (dailyLimit !== null && settings.rollover) {
-    dailyLimit = Math.max(0, dailyLimit + (dailyLimit - spent.yesterday));
+    // No limit yesterday means nothing to carry over.
+    const yesterdayLimit = limitOn(history, current, win.yesterdayStart).dailyAmount;
+    if (yesterdayLimit !== null) dailyLimit = Math.max(0, dailyLimit + (yesterdayLimit - spent.yesterday));
   }
 
   return {
@@ -160,6 +234,7 @@ export async function getSpendLimitStatus(userId: string, now = new Date()): Pro
     today: bar(spent.today, paused ? null : dailyLimit),
     week: bar(spent.week, paused ? null : settings.weeklyAmount ?? null),
     safeToSpend,
+    history,
   };
 }
 

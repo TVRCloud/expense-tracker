@@ -2513,6 +2513,67 @@ describe("dayWindow", () => {
   });
 });
 
+describe("spend limit history", () => {
+  const day = (iso: string) => new Date(iso);
+  const hist = [
+    { from: "1970-01-01T00:00:00.000Z", dailyAmount: null, weeklyAmount: null },
+    { from: "2026-10-10T18:30:00.000Z", dailyAmount: 100000, weeklyAmount: 500000 },
+    { from: "2026-10-20T18:30:00.000Z", dailyAmount: 50000, weeklyAmount: 500000 },
+  ];
+
+  it("limitOn picks the last entry that starts at or before the date", async () => {
+    const { limitOn } = await import("@/lib/spend-limit");
+    const current = { dailyAmount: 50000, weeklyAmount: 500000 };
+    expect(limitOn(hist, current, day("2026-10-05T00:00:00Z")).dailyAmount).toBeNull();
+    expect(limitOn(hist, current, day("2026-10-10T18:29:59.999Z")).dailyAmount).toBeNull();
+    expect(limitOn(hist, current, day("2026-10-10T18:30:00Z")).dailyAmount).toBe(100000);
+    expect(limitOn(hist, current, day("2026-10-20T18:29:59Z")).dailyAmount).toBe(100000);
+    expect(limitOn(hist, current, day("2026-10-25T00:00:00Z")).dailyAmount).toBe(50000);
+  });
+
+  it("with no history the current amounts count for every day", async () => {
+    const { limitOn } = await import("@/lib/spend-limit");
+    const current = { dailyAmount: 70000, weeklyAmount: null };
+    expect(limitOn([], current, day("2001-01-01T00:00:00Z"))).toEqual(current);
+    expect(limitOn([], current, day("2030-01-01T00:00:00Z"))).toEqual(current);
+  });
+
+  it("recordLimitChange: first change keeps the old value from the epoch", async () => {
+    const { recordLimitChange } = await import("@/lib/spend-limit");
+    const out = recordLimitChange([], { dailyAmount: 70000, weeklyAmount: null }, { dailyAmount: 90000, weeklyAmount: null }, day("2026-10-23T18:30:00Z"));
+    expect(out).toEqual([
+      { from: "1970-01-01T00:00:00.000Z", dailyAmount: 70000, weeklyAmount: null },
+      { from: "2026-10-23T18:30:00.000Z", dailyAmount: 90000, weeklyAmount: null },
+    ]);
+  });
+
+  it("recordLimitChange: same day replaces, a return to the previous value drops the entry", async () => {
+    const { recordLimitChange } = await import("@/lib/spend-limit");
+    const start = day("2026-10-23T18:30:00Z");
+    const one = recordLimitChange([], { dailyAmount: 70000, weeklyAmount: null }, { dailyAmount: 90000, weeklyAmount: null }, start);
+    const two = recordLimitChange(one, { dailyAmount: 90000, weeklyAmount: null }, { dailyAmount: 40000, weeklyAmount: null }, start);
+    expect(two).toHaveLength(2);
+    expect(two[1].dailyAmount).toBe(40000);
+    const back = recordLimitChange(two, { dailyAmount: 40000, weeklyAmount: null }, { dailyAmount: 70000, weeklyAmount: null }, start);
+    expect(back).toEqual([{ from: "1970-01-01T00:00:00.000Z", dailyAmount: 70000, weeklyAmount: null }]);
+  });
+
+  it("an edit just before and just after local midnight lands on the right day", async () => {
+    const { recordLimitChange } = await import("@/lib/spend-limit");
+    const { dayWindow } = await import("@/lib/spend-limit-time");
+    const before = { dailyAmount: 100000, weeklyAmount: null };
+    const next = { dailyAmount: 50000, weeklyAmount: null };
+    // 23:50 on 23 Oct and 00:10 on 24 Oct in Kolkata (UTC+5:30).
+    const late = dayWindow(new Date("2026-10-23T18:20:00Z"), "Asia/Kolkata", 0).dayStart;
+    const early = dayWindow(new Date("2026-10-23T18:40:00Z"), "Asia/Kolkata", 0).dayStart;
+    expect(recordLimitChange([], before, next, late).at(-1)?.from).toBe("2026-10-22T18:30:00.000Z");
+    expect(recordLimitChange([], before, next, early).at(-1)?.from).toBe("2026-10-23T18:30:00.000Z");
+    // 23:50 on 22 Oct in New York (EDT, UTC-4) is still 22 Oct there.
+    const ny = dayWindow(new Date("2026-10-23T03:50:00Z"), "America/New_York", 0).dayStart;
+    expect(recordLimitChange([], before, next, ny).at(-1)?.from).toBe("2026-10-22T04:00:00.000Z");
+  });
+});
+
 describe("spend limits", () => {
   const KEY = "test-spend-limit-api-key";
   let userId: string;
@@ -2604,10 +2665,97 @@ describe("spend limits", () => {
     const { dayWindow } = await import("@/lib/spend-limit-time");
     const win = dayWindow(new Date(), "Asia/Kolkata", 0);
     await spend(25000, {}, new Date(win.yesterdayStart.getTime() + 3600_000));
-    const off = await (await PUT(req("PUT", { dailyAmount: 100000 }), undefined as never)).json();
+    // The limit was already in force yesterday.
+    const { updateSpendLimit } = await import("@/lib/spend-limit");
+    await updateSpendLimit(userId, { dailyAmount: 100000 }, new Date(win.yesterdayStart.getTime() + 1800_000));
+    const off = await (await PUT(req("PUT", { alertAt: 80 }), undefined as never)).json();
     expect(off.data.today.limit).toBe(100000);
     const on = await (await PUT(req("PUT", { rollover: true }), undefined as never)).json();
     expect(on.data.today.limit).toBe(175000);
+    // A limit first set today has no yesterday to roll over from.
+    const { default: SpendLimit } = await import("@/models/SpendLimit");
+    await SpendLimit.deleteMany({ user: userId });
+    const fresh = await (await PUT(req("PUT", { dailyAmount: 100000, rollover: true }), undefined as never)).json();
+    expect(fresh.data.today.limit).toBe(100000);
+  });
+
+  it("a limit change applies from today: earlier days keep the limit they had", async () => {
+    const { updateSpendLimit, limitOn, getSpendLimitStatus } = await import("@/lib/spend-limit");
+    const { dayWindow } = await import("@/lib/spend-limit-time");
+    const now = new Date();
+    const win = dayWindow(now, "Asia/Kolkata", 0);
+    const twoDaysAgo = new Date(win.dayStart.getTime() - 36 * 3600_000);
+
+    // Set 1,000 two days ago, then change it to 500 today.
+    await updateSpendLimit(userId, { dailyAmount: 100000 }, twoDaysAgo);
+    const changed = await updateSpendLimit(userId, { dailyAmount: 50000 }, now);
+
+    expect(changed.today.limit).toBe(50000);
+    expect(changed.settings.dailyAmount).toBe(50000);
+    expect(changed.history.map((h) => [h.from, h.dailyAmount])).toEqual([
+      ["1970-01-01T00:00:00.000Z", null],
+      [dayWindow(twoDaysAgo, "Asia/Kolkata", 0).dayStart.toISOString(), 100000],
+      [win.dayStart.toISOString(), 50000],
+    ]);
+    const current = { dailyAmount: 50000, weeklyAmount: null };
+    expect(limitOn(changed.history, current, new Date(win.dayStart.getTime() - 1)).dailyAmount).toBe(100000);
+    expect(limitOn(changed.history, current, win.dayStart).dailyAmount).toBe(50000);
+    expect(limitOn(changed.history, current, new Date(0)).dailyAmount).toBeNull();
+
+    // And the GET route returns the same history.
+    const { GET } = await import("@/app/api/integrations/spend-limit/route");
+    const got = await (await GET(req("GET"), undefined as never)).json();
+    expect(got.data.history).toEqual(changed.history);
+    expect((await getSpendLimitStatus(userId)).history).toEqual(changed.history);
+  });
+
+  it("two changes on the same day leave one entry for that day", async () => {
+    const { PUT } = await import("@/app/api/integrations/spend-limit/route");
+    await PUT(req("PUT", { dailyAmount: 100000 }), undefined as never);
+    const second = await (await PUT(req("PUT", { dailyAmount: 80000 }), undefined as never)).json();
+    const third = await (await PUT(req("PUT", { dailyAmount: 60000, weeklyAmount: 400000 }), undefined as never)).json();
+    expect(second.data.history.filter((h: { from: string }) => h.from !== "1970-01-01T00:00:00.000Z")).toHaveLength(1);
+    const today = third.data.history.at(-1);
+    expect(today).toMatchObject({ dailyAmount: 60000, weeklyAmount: 400000 });
+    expect(third.data.history).toHaveLength(2);
+  });
+
+  it("other settings do not add history, and a limit set before history has none", async () => {
+    const { PUT } = await import("@/app/api/integrations/spend-limit/route");
+    const { default: SpendLimit } = await import("@/models/SpendLimit");
+    await SpendLimit.create({ user: userId, dailyAmount: 70000 }); // as written before history existed
+    const status = await (await PUT(req("PUT", { alertAt: 90, excludeCategories: ["rent"] }), undefined as never)).json();
+    expect(status.data.history).toEqual([]);
+    expect(status.data.today.limit).toBe(70000);
+    // The first amount change then keeps the old value for earlier days.
+    const changed = await (await PUT(req("PUT", { dailyAmount: 90000 }), undefined as never)).json();
+    expect(changed.data.history[0]).toEqual({ from: "1970-01-01T00:00:00.000Z", dailyAmount: 70000, weeklyAmount: null });
+    expect(changed.data.history.at(-1).dailyAmount).toBe(90000);
+  });
+
+  it("changing one user's limit never touches another's history", async () => {
+    const { updateSpendLimit } = await import("@/lib/spend-limit");
+    const { default: User } = await import("@/models/User");
+    const other = await User.create({ name: "Other", email: `other${Date.now()}@x.com`, password: "hash", isActive: true });
+    const before = await updateSpendLimit(other._id.toString(), { dailyAmount: 11100 });
+    await updateSpendLimit(userId, { dailyAmount: 22200 });
+    await updateSpendLimit(userId, { dailyAmount: 33300 });
+    const after = await updateSpendLimit(other._id.toString(), { alertAt: 70 });
+    expect(after.history).toEqual(before.history);
+    expect(after.settings.dailyAmount).toBe(11100);
+  });
+
+  it("rollover measures yesterday against the limit yesterday had", async () => {
+    const { updateSpendLimit } = await import("@/lib/spend-limit");
+    const { dayWindow } = await import("@/lib/spend-limit-time");
+    const now = new Date();
+    const win = dayWindow(now, "Asia/Kolkata", 0);
+    // Yesterday the limit was 1,000 and 250 was spent; today it is 500 with rollover.
+    await spend(25000, {}, new Date(win.yesterdayStart.getTime() + 3600_000));
+    await updateSpendLimit(userId, { dailyAmount: 100000, rollover: true }, new Date(win.dayStart.getTime() - 3600_000));
+    const status = await updateSpendLimit(userId, { dailyAmount: 50000 }, now);
+    // 500 + (1,000 - 250), not 500 + (500 - 250).
+    expect(status.today.limit).toBe(125000);
   });
 
   it("computes safe to spend from budgets and upcoming bills, null without a budget", async () => {

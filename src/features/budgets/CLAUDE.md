@@ -10,7 +10,7 @@ Purpose: monthly category budgets with spend progress and alert threshold. Page 
 
 ## Talks to
 - `GET/POST /api/budgets` (`?format=csv` exports), `GET/PATCH/DELETE /api/budgets/:id`, `GET/PUT /api/spend-limit`.
-- Models: Budget (spend comes from Transaction via src/lib/budget-service.ts), SpendLimit (one per user; status from src/lib/spend-limit.ts).
+- Models: Budget (spend comes from Transaction via src/lib/budget-service.ts), SpendLimit (one per user; status from src/lib/spend-limit.ts; a limit change applies from today and the status carries `history`).
 - n8n: `GET/POST /api/integrations/budgets` use the same service. Mobile: none.
 
 ## Rules and gotchas
