@@ -96,6 +96,9 @@ Authorization: Bearer <YOUR_API_KEY>
 | GET, PATCH, DELETE | `/api/integrations/transfers/[id]` | Read, edit (amount, accounts, date, notes; both balances are corrected) and delete a transfer, which puts both balances back (writes need `Idempotency-Key`) |
 | GET | `/api/integrations/subscriptions` | Detected repeating charges (`status`, `includeLapsed`), with `totals`; see below |
 | PATCH | `/api/integrations/subscriptions/[id]` | Confirm, dismiss or restore one (`{status}`, needs `Idempotency-Key`) |
+| GET | `/api/integrations/net-worth` | What the user owns minus what they owe, the rows behind it, a daily trend and the change (`range`); see below |
+| GET, POST | `/api/integrations/net-worth/assets` | List and add manual assets (property, vehicle, gold, ...); POST needs `Idempotency-Key` |
+| PATCH, DELETE | `/api/integrations/net-worth/assets/[id]` | Edit or archive one (needs `Idempotency-Key`) |
 | GET | `/api/integrations/refunds` | Credits that look like the money back for an earlier expense, each with the expense it probably refunds |
 | POST | `/api/integrations/refunds/[id]/confirm` | Link the credit to its expense, optional `{originalId}` (needs `Idempotency-Key`) |
 | POST | `/api/integrations/refunds/[id]/reject` | Not a refund: drop the suggestion, or unlink a confirmed one (needs `Idempotency-Key`) |
@@ -190,6 +193,27 @@ Computed on every read, never stored: `remaining` (never below 0), `percent` (wh
 ```
 
 `months` is oldest first and ends with the month in progress. `saved` is income minus spending (negative when more was spent than earned). `rate` is `saved` over `income` as a fraction rounded to 4 decimals, `null` for a month with no income. `average` adds the whole window together first. `trend` compares the average rate of the latest 3 months with the 3 before (months with income only; with fewer, the latest month against the earliest): `up` or `down` for a move of more than 2 points, else `flat`; `null` when fewer than 2 months have income. Browser equivalent: `GET /api/savings-rate?months=`.
+
+### GET /api/integrations/net-worth
+
+Query: `range` = `30d`, `90d` (default), `1y` or `all`. Reading it also stores today's point (the user's local day).
+
+```json
+{ "success": true, "data": {
+  "assets": 280000, "liabilities": 60000, "netWorth": 220000,
+  "breakdown": {
+    "assets": [{ "key": "bank", "label": "Bank accounts", "amount": 100000, "count": 1 }],
+    "liabilities": [{ "key": "cards", "label": "Credit cards", "amount": 30000, "count": 1 }]
+  },
+  "range": "90d",
+  "history": [{ "date": "2026-10-20", "assets": 250000, "liabilities": 60000, "netWorth": 190000 }],
+  "change": { "amount": 30000, "percent": 15.8, "since": "2026-10-20" }
+}, "requestId": "..." }
+```
+
+Amounts are cents. Asset keys: `bank`, `savings`, `cash`, `wallet`, `investment`, `cardCredit`, `loansGiven`, `manual`; liability keys: `cards`, `overdrafts`, `loansReceived`; rows with nothing in them are left out, in that order. `history` is oldest first and its last point is today; `change` compares now with the first point (`since` is null when there is only today, `percent` is null when that point was 0). Points are stored once per local day (last write wins), by this read and by `GET /api/cron/net-worth-snapshot` (every 3 hours from `server.ts`; on Vercel call it from a scheduler with `Authorization: Bearer $CRON_SECRET`).
+
+`POST /api/integrations/net-worth/assets` takes `{name, kind?, value, note?}` (needs `Idempotency-Key`) and returns `201` with `{id, name, kind, value, note, createdAt, updatedAt}`. `PATCH .../assets/{id}` takes any of those (`note: null` clears it); `DELETE` archives and returns `{id, deleted: true}`. `400 VALIDATION_ERROR` for bad data, a bad id or a missing key; `404 NOT_FOUND` for an unknown or another user's asset; `409 IDEMPOTENCY_CONFLICT` when a key is reused with a different request.
 
 ### Categorise rules
 

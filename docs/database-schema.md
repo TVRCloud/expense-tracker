@@ -118,6 +118,31 @@ One document per user. Separate from `budgets` so the budgets list is unchanged 
 | `pausedUntil` | Date | limit suspended until then |
 | `limitHistory` | `{from, dailyAmount?, weeklyAmount?}[]` | the amounts over time, oldest first. A change to `dailyAmount` or `weeklyAmount` applies from the start of that local day (a second change the same day replaces the entry). The first change writes a baseline entry at the epoch holding what was in force before. Empty for limits set before history existed: the current amounts then count for every earlier day |
 
+## manual_assets
+
+Something the user owns that is not an account (property, a vehicle, gold, shares held elsewhere). Counted in net worth. Archived, never deleted, so realtime sees the change.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | |
+| `name` | String | 1 to 60 characters |
+| `kind` | String | `property`, `vehicle`, `gold`, `investment`, `other` (default) |
+| `value` | Number | cents, 0 or more |
+| `note` | String | up to 200 characters, optional |
+| `isArchived` | Boolean | true once removed |
+
+## net_worth_snapshots
+
+One row per user per local day: what net worth was the last time it was worked out that day. Written when net worth is read and by the snapshot cron. Unique on `{user, day}`.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | |
+| `day` | String | `YYYY-MM-DD` on the user's clock (`preferences.timezone`) |
+| `assets` | Number | cents |
+| `liabilities` | Number | cents, positive |
+| `netWorth` | Number | cents, assets minus liabilities |
+
 ## subscription_decisions
 
 What the user chose about a detected subscription. Detections are never stored; they are worked out from `transactions` on every read.

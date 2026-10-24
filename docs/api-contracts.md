@@ -148,6 +148,16 @@ Money set aside for a cost with a due date, and the share of income saved. Amoun
 
 n8n and the app use `/api/integrations/sinking-funds` (+ `/:id`, `/:id/contribute`) and `/api/integrations/savings-rate` with the integration envelope; writes need `Idempotency-Key`.
 
+## Net worth
+
+What the user owns minus what they owe. Owned: positive account balances, a card with a credit balance, money lent not yet paid back, manual assets. Owed: a card balance below zero, any other account below zero, money borrowed not yet paid back. Archived or deleted accounts, settled or deleted loans and archived manual assets count for nothing. Amounts are cents.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/net-worth?range=30d\|90d\|1y\|all` | `{assets, liabilities, netWorth, breakdown: {assets: [{key,label,amount,count}], liabilities: [...]}, range, history: [{date,assets,liabilities,netWorth}], change: {amount, percent, since}}`. `range` defaults to `90d`; an unknown value falls back to it. `history` is oldest first and ends with today; `change` compares now with the first point (`since` is null when there is only today, `percent` is null when that point was 0). Reading it stores today's point |
+| GET, POST | `/api/net-worth/assets` | List and add manual assets: `{name (1 to 60), kind?: property\|vehicle\|gold\|investment\|other, value (cents, int, 0 or more), note? (200)}` |
+| PATCH, DELETE | `/api/net-worth/assets/:id` | Edit any of name, kind, value, note (`null` clears it); DELETE archives the asset. 404 for an unknown or other user's id |
+
 ## Budgets
 
 | Method | Path | Description |
