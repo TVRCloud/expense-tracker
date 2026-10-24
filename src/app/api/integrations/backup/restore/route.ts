@@ -4,7 +4,7 @@ import { integrationOk, integrationError } from "@/lib/integrations/response";
 import { withIdempotency } from "@/lib/integrations/idempotency";
 import { conflictMessage, idempotencyKeyOf } from "@/lib/integrations/write-helpers";
 import { type BackupBucket, backupBusy, backupFailure, refundBackupBuckets, backupRateLimited, readBackupBody } from "@/lib/integrations/backup-http";
-import { backupEnvelopeSchema, decryptBackup, envelopeDigest, passphraseSchema } from "@/lib/backup-crypto";
+import { BackupError, backupEnvelopeSchema, decryptBackup, envelopeDigest, passphraseSchema, withKeyGate } from "@/lib/backup-crypto";
 import { parsePayload, restoreBackup } from "@/lib/backup-service";
 
 const bodySchema = z.object({
@@ -22,6 +22,7 @@ const bodySchema = z.object({
 // passphrase never gets an old answer back.
 export const POST = withIntegrationRoute("backup-restore", async ({ req, user, requestId }) => {
   const counted: BackupBucket[] = [];
+  let started = false;
   try {
     // Busy first, so a busy answer does not use up one of the caller's request slots.
     const busy = backupBusy(requestId);
@@ -29,9 +30,9 @@ export const POST = withIntegrationRoute("backup-restore", async ({ req, user, r
     const early = await backupRateLimited(user.id, "request", requestId);
     if (early) return early;
     counted.push("request");
-    const read = await readBackupBody(req, requestId);
+    const read = await readBackupBody(req, requestId, user.id);
     if (!read.ok) {
-      if (read.busy) await refundBackupBuckets(user.id, counted);
+      if (read.refund) await refundBackupBuckets(user.id, counted);
       return read.res;
     }
     const parsed = bodySchema.safeParse(read.body);
@@ -54,24 +55,30 @@ export const POST = withIntegrationRoute("backup-restore", async ({ req, user, r
     if (limited) return limited;
     counted.push(bucket);
 
-    const payload = parsePayload(await decryptBackup(backup, passphrase));
-    if (dryRun) return integrationOk(await restoreBackup(user.id, payload, { dryRun: true }), requestId);
+    // A key slot is held before the file is opened or the database touched, so "busy"
+    // comes back first; once work has started nothing is given back.
+    return await withKeyGate(async () => {
+      started = true;
+      const payload = parsePayload(await decryptBackup(backup, passphrase));
+      if (dryRun) return integrationOk(await restoreBackup(user.id, payload, { dryRun: true }), requestId);
 
-    const outcome = await withIdempotency({
-      userId: user.id,
-      endpoint: "integrations:backup-restore:POST",
-      key: key!,
-      body: { backup: envelopeDigest(backup), mode: "merge" },
-      execute: async () => {
-        const report = await restoreBackup(user.id, payload, { dryRun: false });
-        return { status: 200, body: report as unknown as Record<string, unknown> };
-      },
+      const outcome = await withIdempotency({
+        userId: user.id,
+        endpoint: "integrations:backup-restore:POST",
+        key: key!,
+        body: { backup: envelopeDigest(backup), mode: "merge" },
+        execute: async () => {
+          const report = await restoreBackup(user.id, payload, { dryRun: false });
+          return { status: 200, body: report as unknown as Record<string, unknown> };
+        },
+      });
+      if (outcome.kind === "conflict") {
+        return integrationError("IDEMPOTENCY_CONFLICT", conflictMessage(outcome.reason), requestId);
+      }
+      return integrationOk(outcome.body, requestId, { status: outcome.status });
     });
-    if (outcome.kind === "conflict") {
-      return integrationError("IDEMPOTENCY_CONFLICT", conflictMessage(outcome.reason), requestId);
-    }
-    return integrationOk(outcome.body, requestId, { status: outcome.status });
   } catch (err) {
-    return backupFailure(err, requestId, "backup-restore", { userId: user.id, buckets: counted });
+    if (!started && err instanceof BackupError && err.reason === "busy") await refundBackupBuckets(user.id, counted);
+    return backupFailure(err, requestId, "backup-restore");
   }
 });

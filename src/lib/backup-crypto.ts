@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scrypt, type ScryptOptions } from "crypto";
+import { AsyncLocalStorage } from "async_hooks";
 import { gunzip, gzip } from "zlib";
 import { z } from "zod";
 
@@ -34,7 +35,7 @@ export const MAX_BACKUP_BYTES = 3_000_000;
 // file that does open).
 export const MAX_PLAIN_BYTES = 48 * 1024 * 1024;
 
-export type BackupFailure = "unreadable" | "invalid" | "too_large" | "too_large_for_response" | "busy";
+export type BackupFailure = "unreadable" | "invalid" | "too_large" | "too_large_for_response" | "busy" | "timeout";
 
 export class BackupError extends Error {
   constructor(
@@ -90,42 +91,85 @@ function aad(e: { v: number; createdAt: string; kdf: { N: number; r: number; p: 
   );
 }
 
-// scrypt holds 128 MiB while it runs: at most two run at once, a short queue
-// waits, and anything past that is turned away instead of piling up memory.
+// The gate covers whole jobs (database reads, compression and key derivation),
+// two at a time per server process: scrypt alone holds 128 MiB, and a job holds
+// the rest of its memory too. A short queue waits behind them (four), and each
+// waiter gives up after a while; anything past the queue is turned away at once.
+// A job that runs too long (a stalled database call) is cut loose after jobMs,
+// below the platform's maximum duration, so one stuck job cannot pin a slot for
+// everyone. JavaScript cannot stop the work itself: it is abandoned, not killed.
 const MAX_ACTIVE = 2;
 const MAX_QUEUE = 4;
+export const GATE_LIMITS = { waitMs: 10_000, jobMs: 50_000 };
+type Waiter = { go: () => void; timer: ReturnType<typeof setTimeout> };
 let active = 0;
-const waiting: Array<() => void> = [];
-/** True if a derivation could start or queue now. Routes ask before reading a body, so a flood cannot pile up bodies behind a full gate. */
+const waiting: Waiter[] = [];
+/** True if a job could start or queue now. Routes ask before reading a body, so a flood cannot pile up bodies behind a full gate. */
 export function keyGateOpen() {
   return active < MAX_ACTIVE || waiting.length < MAX_QUEUE;
 }
 
+// Work running inside withKeyGate already holds a slot, so a derivation inside it
+// does not ask for a second one (two nested jobs could otherwise deadlock the gate).
+const holdsSlot = new AsyncLocalStorage<true>();
+
+/**
+ * Hold a slot for the whole of a job. A route takes it BEFORE the database and
+ * compression work, so "busy" always comes back before any expensive work has
+ * started (and only then may a caller get a rate limit count back). It throws
+ * "busy" only while waiting to start, never once `work` is running; a job that
+ * overruns throws "timeout" and its slot is freed.
+ */
+export function withKeyGate<T>(work: () => Promise<T>): Promise<T> {
+  return withKeySlot(() => holdsSlot.run(true, work));
+}
+
+const busy = () => new BackupError("busy", "The server is busy opening backups; try again in a moment");
+
 async function withKeySlot<T>(work: () => Promise<T>): Promise<T> {
   if (active >= MAX_ACTIVE) {
-    if (waiting.length >= MAX_QUEUE) throw new BackupError("busy", "The server is busy opening backups; try again in a moment");
+    if (waiting.length >= MAX_QUEUE) throw busy();
     // The finishing job hands its slot straight to us, so `active` stays put.
-    await new Promise<void>((resolve) => waiting.push(resolve));
+    await new Promise<void>((resolve, reject) => {
+      const waiter: Waiter = {
+        go: () => {
+          clearTimeout(waiter.timer);
+          resolve();
+        },
+        timer: setTimeout(() => {
+          const at = waiting.indexOf(waiter);
+          if (at >= 0) waiting.splice(at, 1);
+          reject(busy());
+        }, GATE_LIMITS.waitMs),
+      };
+      waiting.push(waiter);
+    });
   } else {
     active += 1;
   }
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await work();
+    return await Promise.race([
+      work(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new BackupError("timeout", "The backup took too long; try again")), GATE_LIMITS.jobMs);
+      }),
+    ]);
   } finally {
+    clearTimeout(timer);
     const next = waiting.shift();
-    if (next) next();
+    if (next) next.go();
     else active -= 1;
   }
 }
 
 function deriveKey(passphrase: string, salt: Buffer, n: number): Promise<Buffer> {
   const options: ScryptOptions = { N: n, r: SCRYPT_R, p: SCRYPT_P, maxmem: maxmemFor(n) };
-  return withKeySlot(
-    () =>
-      new Promise<Buffer>((resolve, reject) => {
-        scrypt(passphrase.normalize("NFKC"), salt, 32, options, (err, key) => (err ? reject(err) : resolve(key)));
-      })
-  );
+  const run = () =>
+    new Promise<Buffer>((resolve, reject) => {
+      scrypt(passphrase.normalize("NFKC"), salt, 32, options, (err, key) => (err ? reject(err) : resolve(key)));
+    });
+  return holdsSlot.getStore() ? run() : withKeySlot(run);
 }
 
 const gzipAsync = (data: Buffer) =>
