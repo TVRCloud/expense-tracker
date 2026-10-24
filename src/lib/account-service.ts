@@ -65,7 +65,10 @@ export async function updateAccount(input: UpdateAccountInput) {
   const filter = { _id: accountId, user: userId };
   const before = await Account.findOne(filter).lean();
   if (!before) throw new AccountServiceError("ACCOUNT_NOT_FOUND", "Account not found");
-  // A low-cash line or a credit limit is a base-unit amount.
+  // A low-cash line or a credit limit is a base-unit amount. The lock comes
+  // after the account lookup; the only write it can precede that then fails is
+  // the update below losing the account to a concurrent archive or delete, a
+  // window of one query, and the base stays locked in that case.
   if (typeof changes.lowBalanceAt === "number" || (changes.creditMeta?.creditLimit ?? 0) > 0) {
     await lockBaseCurrency(userId);
   }

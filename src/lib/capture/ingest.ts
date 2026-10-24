@@ -417,9 +417,16 @@ async function handleMatch(
   // same event, not a conflict, and a transfer is never rewritten by a capture.
   if (txn.type === "transfer" && parse.atm) return markSupporting(capture, other, txnId);
 
-  // The message is in rupees. A row booked in rupees (an INR base, or an INR
-  // original on another base) can be compared and overwritten; a foreign-currency
-  // row cannot be judged by it and keeps its amount.
+  // The message is in rupees. What it is compared with, and whether it may
+  // overwrite the booked amount:
+  //  - INR base, plain row (no original): the row's amount, compared and
+  //    overwritten exactly as before multi-currency existed;
+  //  - INR base, foreign-original row (a USD spend): not compared and never
+  //    overwritten. Its amount is our conversion, not the bank's figure, so a
+  //    comparison would raise false conflicts;
+  //  - another base, row booked from an INR original: the INR original is
+  //    compared, nothing is overwritten (the stored amount is a conversion);
+  //  - another base, any other row: not compared.
   const inrBase = (await getBaseCurrency(user.id)) === "INR";
   const comparableAmount = txn.originalCurrency === "INR" ? txn.originalAmount : inrBase && !txn.originalCurrency ? txn.amount : undefined;
   const overwriteAmount = inrBase && !txn.originalCurrency;

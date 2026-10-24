@@ -8475,7 +8475,7 @@ describe("multi-currency", () => {
       expect(await setBaseCurrency(userId, "USD")).toBe("USD");
     });
 
-    it("once the base is locked a transaction writes nothing to the user", async () => {
+    it("once the base is locked a transaction makes no write to the user document", async () => {
       const { default: User } = await import("@/models/User");
       await post({ amount: 100 });
       expect(await lockedOf(userId)).toBe(true);
@@ -8510,6 +8510,37 @@ describe("multi-currency", () => {
       });
       // Converted to USD (1000.00 INR is 12.00 USD), not booked as INR.
       expect(result.transaction).toMatchObject({ currency: "USD", amount: 1200, originalCurrency: "INR" });
+      expect(await lockedOf(userId)).toBe(true);
+    });
+
+    it("if the redo after a base change is rejected, the base stays locked (it is not unlocked again)", async () => {
+      const { default: User } = await import("@/models/User");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const { createTransaction, TransactionServiceError } = await import("@/lib/transaction-service");
+      const u = await User.findById(userId);
+      const realFind = User.findOneAndUpdate.bind(User);
+      let switched = false;
+      vi.spyOn(User, "findOneAndUpdate").mockImplementation(((filter: unknown, update: unknown, opts: unknown) => {
+        if (!switched) {
+          switched = true;
+          return {
+            lean: () =>
+              User.updateOne({ _id: userId }, { $set: { "preferences.currency": "USD" } }).then(() =>
+                realFind(filter as never, update as never, opts as never).lean()
+              ),
+          };
+        }
+        return realFind(filter as never, update as never, opts as never);
+      }) as never);
+      providerCalls.mode = "down"; // no INR to USD rate is known for the redo
+      await expect(
+        createTransaction({
+          userId, actor: actorOf(u!), accountId, type: "expense", category: "Travel", tags: [], isRecurring: false,
+          date: new Date().toISOString(), originalAmount: 100000, originalCurrency: "INR",
+        })
+      ).rejects.toBeInstanceOf(TransactionServiceError);
+      expect(await lockedOf(userId)).toBe(true);
+      expect(await Transaction.countDocuments({ user: userId })).toBe(0);
     });
 
     it("a transfer in another currency is a 400 with advice, not a 404", async () => {
@@ -8668,6 +8699,72 @@ describe("multi-currency", () => {
       expect(res.status).toBe(200);
       expect(await lockedOf(userId)).toBe(true);
       expect(await Transaction.findOne({ user: userId, type: "transfer" }).lean()).toMatchObject({ currency: "USD", amount: 5000 });
+    });
+  });
+
+  describe("bank messages on an INR base after a matching row exists", () => {
+    const REF = ". UPI Ref 426912345678";
+    const NOTIF = `₹250 paid to Swiggy from A/c XX1234${REF}`;
+    const SMS = (amount: string) => `Rs.${amount} debited from A/c XX1234 on 26-09-26 to VPA swiggy@icici${REF}. Not you? Call 18002586161`;
+    const T0 = new Date("2026-09-26T06:30:00Z");
+
+    async function setup() {
+      const { default: Account } = await import("@/models/Account");
+      const user = await makeUser();
+      const bank = await Account.create({ user: user._id, name: "HDFC", type: "bank", balance: 0, currency: "INR", smsLastFour: ["1234"] });
+      return { user, bank, actor: { id: user._id.toString(), name: user.name, email: user.email, role: "user" } };
+    }
+    async function ingest(actor: { id: string; name: string; email: string; role: string }, channel: "sms" | "notification", text: string, at: Date) {
+      const { ingestCapture } = await import("@/lib/capture/ingest");
+      return ingestCapture({ user: actor, channel, text, receivedAt: at, sender: channel === "sms" ? "VM-HDFCBK" : undefined });
+    }
+    async function promoted(actor: { id: string; name: string; email: string; role: string }) {
+      await ingest(actor, "notification", NOTIF, T0);
+      const { promoteStalePendingSms } = await import("@/lib/capture/ingest");
+      await promoteStalePendingSms({ now: new Date(Date.now() + 16 * 60_000) });
+      const { default: Transaction } = await import("@/models/Transaction");
+      return Transaction;
+    }
+    const later = new Date(T0.getTime() + 120 * 60_000);
+
+    it("a plain row is compared and overwritten as it always was", async () => {
+      const { actor, bank } = await setup();
+      const Transaction = await promoted(actor);
+      const { default: Account } = await import("@/models/Account");
+      const sms = await ingest(actor, "sms", SMS("260.00"), later);
+      expect(sms.body.status).toBe("updated");
+      expect(await Transaction.findOne({ user: actor.id }).lean()).toMatchObject({ amount: 26000, source: "sms" });
+      expect((await Account.findById(bank._id))!.balance).toBe(-26000);
+    });
+
+    it("a confirmed plain row the SMS disagrees with is a source conflict", async () => {
+      const { actor } = await setup();
+      const Transaction = await promoted(actor);
+      await Transaction.updateMany({ user: actor.id }, { $set: { reviewStatus: "confirmed" } });
+      const sms = await ingest(actor, "sms", SMS("260.00"), later);
+      expect(sms.body).toMatchObject({ status: "queued", reason: "source_conflict" });
+      expect(await Transaction.findOne({ user: actor.id }).lean()).toMatchObject({ amount: 25000 });
+    });
+
+    it("a row with a USD original is not compared and keeps its converted amount", async () => {
+      const { actor } = await setup();
+      const Transaction = await promoted(actor);
+      // 25000 paise is our conversion of a 3.00 USD spend, not the bank's figure.
+      await Transaction.updateMany({ user: actor.id }, { $set: { originalAmount: 300, originalCurrency: "USD", originalExponent: 2, rate: 83.33333333, rateSource: "provider" } });
+
+      // Unconfirmed: the SMS takes over the source, but never rewrites the amount.
+      const sms = await ingest(actor, "sms", SMS("260.00"), later);
+      expect(sms.body.status).toBe("updated");
+      expect(await Transaction.findOne({ user: actor.id }).lean()).toMatchObject({ amount: 25000, originalAmount: 300, originalCurrency: "USD", source: "sms" });
+    });
+
+    it("a confirmed row with a USD original raises no conflict", async () => {
+      const { actor } = await setup();
+      const Transaction = await promoted(actor);
+      await Transaction.updateMany({ user: actor.id }, { $set: { reviewStatus: "confirmed", originalAmount: 300, originalCurrency: "USD", originalExponent: 2, rate: 83.33333333, rateSource: "provider" } });
+      const sms = await ingest(actor, "sms", SMS("260.00"), later);
+      expect(sms.body.status).not.toBe("queued");
+      expect(await Transaction.findOne({ user: actor.id }).lean()).toMatchObject({ amount: 25000 });
     });
   });
 

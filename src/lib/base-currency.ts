@@ -58,10 +58,12 @@ export async function getBaseState(userId: string): Promise<BaseState> {
 /**
  * Locks the base currency for this user (atomic) and returns the base in force
  * at that moment. Call it right before writing an amount in base units, after
- * every check that can reject the write (a rejected write must not lock).
+ * every check that can reject the write, so a rejected write does not lock.
+ * The one exception is a base change that lands between the caller's read and
+ * this lock: the caller then redoes its work against the new base, and that
+ * redo can still be rejected (say, no rate). The lock stays on in that case.
  * Pass the state you read earlier: once it was locked nothing is written, so a
- * busy user costs no extra User write. If the returned base differs from the
- * one you worked with, the base changed in between and the caller redoes its work.
+ * busy user costs no extra User write.
  */
 export async function lockBaseCurrency(userId: string, known?: BaseState): Promise<CurrencyCode> {
   if (known?.locked) return known.base;
