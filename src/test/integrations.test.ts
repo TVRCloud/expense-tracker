@@ -3934,3 +3934,337 @@ describe("refund and reversal matching", () => {
     });
   });
 });
+
+// ── categorise rules (src/lib/rule-service.ts) ─────────────────────────────
+
+describe("categorise rules", () => {
+  const KEY = "test-rules-api-key";
+  let userId: string;
+  let otherUserId: string;
+  let accountId: string;
+  let otherAccountId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { default: Account } = await import("@/models/Account");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Rules", email: `ru${Date.now()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `ruo${Date.now()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+    accountId = (await Account.create({ user: userId, name: "HDFC", type: "bank", balance: 100000, smsLastFour: ["1234"] }))._id.toString();
+    otherAccountId = (await Account.create({ user: otherUserId, name: "Theirs", type: "bank", balance: 0 }))._id.toString();
+  });
+
+  function req(path: string, method: "GET" | "POST" | "PATCH" | "DELETE", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${KEY}`,
+        "content-type": "application/json",
+        ...(method === "GET" ? {} : { "idempotency-key": `rule-key-${n}` }),
+        ...headers,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+  const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+
+  async function addRule(body: Record<string, unknown>, headers: Record<string, string> = {}) {
+    const { POST } = await import("@/app/api/integrations/rules/route");
+    return POST(req("rules", "POST", body, headers), {});
+  }
+  async function testCall(body: unknown) {
+    const { POST } = await import("@/app/api/integrations/rules/test/route");
+    return (await POST(req("rules/test", "POST", body), {})).json();
+  }
+
+  it("POST creates a rule and GET lists the rules in the order they run", async () => {
+    const { GET } = await import("@/app/api/integrations/rules/route");
+    const created = await addRule({ field: "merchant", value: "  Swiggy ", category: "food", merchantName: "Swiggy", priority: 50 });
+    const createdJson = await created.json();
+    expect(created.status).toBe(201);
+    expect(createdJson.data).toMatchObject({ field: "merchant", op: "contains", value: "Swiggy", category: "food", merchantName: "Swiggy", priority: 50, isActive: true, tags: [] });
+    await addRule({ field: "text", value: "uber", category: "transport", priority: 10 });
+
+    const list = await (await GET(req("rules", "GET"), {})).json();
+    expect(list.data.map((r: { value: string }) => r.value)).toEqual(["uber", "Swiggy"]);
+  });
+
+  it("rejects a rule that does nothing, a short value, a missing key and someone else's account", async () => {
+    expect((await addRule({ field: "merchant", value: "swiggy" })).status).toBe(400);
+    expect((await addRule({ field: "merchant", value: "x", category: "food" })).status).toBe(400);
+    expect((await addRule({ field: "bogus", value: "swiggy", category: "food" })).status).toBe(400);
+
+    const { POST } = await import("@/app/api/integrations/rules/route");
+    const noKey = new NextRequest("http://localhost/api/integrations/rules", {
+      method: "POST",
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
+      body: JSON.stringify({ field: "merchant", value: "swiggy", category: "food" }),
+    });
+    expect((await POST(noKey, {})).status).toBe(400);
+
+    const theirs = await addRule({ field: "merchant", value: "swiggy", accountId: otherAccountId });
+    expect(theirs.status).toBe(404);
+    const junk = await addRule({ field: "merchant", value: "swiggy", accountId: "not-an-id" });
+    expect(junk.status).toBe(400);
+  });
+
+  it("replays the same Idempotency-Key and refuses it with a different body", async () => {
+    const { default: Rule } = await import("@/models/Rule");
+    const body = { field: "merchant", value: "zomato", category: "food" };
+    const first = await addRule(body, { "idempotency-key": "same-rule" });
+    const replay = await addRule(body, { "idempotency-key": "same-rule" });
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(201);
+    expect((await replay.json()).data.id).toBe((await first.json()).data.id);
+    expect(await Rule.countDocuments({ user: userId })).toBe(1);
+
+    const different = await addRule({ ...body, category: "shopping" }, { "idempotency-key": "same-rule" });
+    expect(different.status).toBe(409);
+  });
+
+  it("refuses a second rule with the same match, ignoring case and spaces", async () => {
+    expect((await addRule({ field: "merchant", value: "Swiggy", category: "food" })).status).toBe(201);
+    const dup = await addRule({ field: "merchant", value: " swiggy ", category: "shopping" });
+    expect(dup.status).toBe(409);
+    expect((await dup.json()).error.code).toBe("CONFLICT");
+    // Another field or operator is a different rule.
+    expect((await addRule({ field: "merchant", op: "equals", value: "swiggy", category: "food" })).status).toBe(201);
+    expect((await addRule({ field: "text", value: "swiggy", category: "food" })).status).toBe(201);
+  });
+
+  it("only lists and edits your own rules", async () => {
+    const { default: Rule } = await import("@/models/Rule");
+    const { GET } = await import("@/app/api/integrations/rules/route");
+    const { PATCH, DELETE } = await import("@/app/api/integrations/rules/[id]/route");
+    const theirs = await Rule.create({ user: otherUserId, field: "merchant", value: "swiggy", valueKey: "swiggy", category: "food" });
+    const id = theirs._id.toString();
+
+    expect((await (await GET(req("rules", "GET"), {})).json()).data).toEqual([]);
+    expect((await PATCH(req(`rules/${id}`, "PATCH", { priority: 1 }), ctx(id))).status).toBe(404);
+    expect((await DELETE(req(`rules/${id}`, "DELETE"), ctx(id))).status).toBe(404);
+    expect(await Rule.countDocuments({ _id: id })).toBe(1);
+  });
+
+  it("PATCH edits a rule, clears an action with null, and will not leave a rule empty", async () => {
+    const { PATCH } = await import("@/app/api/integrations/rules/[id]/route");
+    const created = await (await addRule({ field: "merchant", value: "swiggy", category: "food", merchantName: "Swiggy" })).json();
+    const id = created.data.id as string;
+
+    const edited = await PATCH(req(`rules/${id}`, "PATCH", { priority: 5, isActive: false, category: null }), ctx(id));
+    const editedJson = await edited.json();
+    expect(edited.status).toBe(200);
+    expect(editedJson.data).toMatchObject({ priority: 5, isActive: false, category: null, merchantName: "Swiggy" });
+
+    const empty = await PATCH(req(`rules/${id}`, "PATCH", { merchantName: null }), ctx(id));
+    expect(empty.status).toBe(400);
+    expect((await PATCH(req(`rules/${id}`, "PATCH", {}), ctx(id))).status).toBe(400);
+    expect((await PATCH(req("rules/nope", "PATCH", { priority: 1 }), ctx("nope"))).status).toBe(400);
+
+    const clash = await (await addRule({ field: "merchant", value: "zomato", category: "food" })).json();
+    const toClash = await PATCH(req(`rules/${clash.data.id}`, "PATCH", { value: "SWIGGY" }), ctx(clash.data.id));
+    expect(toClash.status).toBe(409);
+  });
+
+  it("PATCH can point a rule at one of your accounts but not someone else's", async () => {
+    const { PATCH } = await import("@/app/api/integrations/rules/[id]/route");
+    const created = await (await addRule({ field: "merchant", value: "swiggy", category: "food" })).json();
+    const id = created.data.id as string;
+    const ok = await PATCH(req(`rules/${id}`, "PATCH", { accountId }), ctx(id));
+    expect((await ok.json()).data.accountId).toBe(accountId);
+    expect((await PATCH(req(`rules/${id}`, "PATCH", { accountId: otherAccountId }), ctx(id))).status).toBe(404);
+  });
+
+  it("DELETE removes the rule and replays on the same key", async () => {
+    const { DELETE } = await import("@/app/api/integrations/rules/[id]/route");
+    const { default: Rule } = await import("@/models/Rule");
+    const created = await (await addRule({ field: "merchant", value: "swiggy", category: "food" })).json();
+    const id = created.data.id as string;
+    const first = await DELETE(req(`rules/${id}`, "DELETE", undefined, { "idempotency-key": "del" }), ctx(id));
+    expect(first.status).toBe(200);
+    expect((await first.json()).data).toEqual({ id, deleted: true });
+    expect(await Rule.countDocuments({ user: userId })).toBe(0);
+    const replay = await DELETE(req(`rules/${id}`, "DELETE", undefined, { "idempotency-key": "del" }), ctx(id));
+    expect(replay.status).toBe(200);
+    const again = await DELETE(req(`rules/${id}`, "DELETE"), ctx(id));
+    expect(again.status).toBe(404);
+  });
+
+  it("caps rules per user", async () => {
+    const { default: Rule } = await import("@/models/Rule");
+    const { MAX_RULES_PER_USER } = await import("@/lib/rule-service");
+    await Rule.insertMany(
+      Array.from({ length: MAX_RULES_PER_USER }, (_, i) => ({ user: userId, field: "merchant", value: `shop${i}`, valueKey: `shop${i}`, category: "other" }))
+    );
+    const res = await addRule({ field: "merchant", value: "one too many", category: "food" });
+    expect(res.status).toBe(409);
+  });
+
+  it("rules/test matches by merchant, equals, UPI id and text, and says when nothing matches", async () => {
+    await addRule({ field: "merchant", value: "swiggy", category: "food", merchantName: "Swiggy" });
+    await addRule({ field: "merchant", op: "equals", value: "metro", category: "transport" });
+    await addRule({ field: "upi", value: "ravi@okicici", category: "rent" });
+    await addRule({ field: "text", value: "electricity bill", category: "utilities" });
+
+    expect((await testCall({ merchant: "SWIGGY INSTAMART" })).data.rule).toMatchObject({ category: "food", merchantName: "Swiggy" });
+    expect((await testCall({ merchant: "Metro" })).data.rule.category).toBe("transport");
+    expect((await testCall({ merchant: "Metro Cash and Carry" })).data.matched).toBe(false);
+    expect((await testCall({ text: "Rs 900 paid to Ravi via UPI ravi@okicici ref 1" })).data.rule.category).toBe("rent");
+    expect((await testCall({ upi: "RAVI@okicici" })).data.rule.category).toBe("rent");
+    expect((await testCall({ text: "Your Electricity Bill is due" })).data.rule.category).toBe("utilities");
+    expect((await testCall({ merchant: "Unknown shop" })).data).toEqual({ matched: false });
+    const { POST } = await import("@/app/api/integrations/rules/test/route");
+    expect((await POST(req("rules/test", "POST", {}), {})).status).toBe(400);
+  });
+
+  it("the lowest priority number wins, then the oldest rule; inactive rules are skipped", async () => {
+    await addRule({ field: "merchant", value: "amazon", category: "shopping", priority: 100 });
+    await addRule({ field: "text", value: "prime", category: "subscription", priority: 100 });
+    // Same priority: the older rule wins.
+    expect((await testCall({ merchant: "Amazon Prime", text: "amazon prime" })).data.rule.category).toBe("shopping");
+
+    await addRule({ field: "merchant", op: "equals", value: "amazon prime", category: "entertainment", priority: 1 });
+    expect((await testCall({ merchant: "Amazon Prime" })).data.rule.category).toBe("entertainment");
+
+    const { listRules, updateRule } = await import("@/lib/rule-service");
+    const rules = await listRules(userId);
+    await updateRule({ userId, ruleId: rules[0].id, isActive: false });
+    expect((await testCall({ merchant: "Amazon Prime" })).data.rule.category).toBe("shopping");
+  });
+
+  describe("on a new transaction", () => {
+    async function addTxn(over: Record<string, unknown>) {
+      const { createTransaction } = await import("@/lib/transaction-service");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const actor = { id: userId, name: "Rules", email: "r@x.com", role: "user" };
+      const result = await createTransaction({
+        userId,
+        actor,
+        accountId,
+        type: "expense",
+        amount: 25000,
+        currency: "INR",
+        tags: [],
+        isRecurring: false,
+        date: new Date().toISOString(),
+        ...over,
+      } as Parameters<typeof createTransaction>[0]);
+      return Transaction.findById((result.transaction as { _id: unknown })._id).lean<{ category: string; description?: string; tags: string[] }>();
+    }
+
+    it("fills a category left at 'other', a missing merchant name and the tags", async () => {
+      await addRule({ field: "text", value: "swiggy", category: "food", merchantName: "Swiggy", tags: ["delivery"] });
+      const t = await addTxn({ category: "other", note: "dinner on swiggy" });
+      expect(t).toMatchObject({ category: "food", description: "Swiggy", tags: ["delivery"] });
+    });
+
+    it("never overwrites a category or a merchant name the person chose", async () => {
+      await addRule({ field: "merchant", value: "swiggy", category: "food", merchantName: "Swiggy", tags: ["delivery"] });
+      const t = await addTxn({ category: "Gifts", description: "swiggy gift card", tags: ["mine"] });
+      expect(t).toMatchObject({ category: "Gifts", description: "swiggy gift card" });
+      expect(t!.tags).toEqual(["mine", "delivery"]);
+    });
+
+    it("leaves transfers and rule-less users exactly as given", async () => {
+      const t = await addTxn({ category: "other", description: "swiggy" });
+      expect(t).toMatchObject({ category: "other", description: "swiggy", tags: [] });
+
+      await addRule({ field: "merchant", value: "swiggy", category: "food" });
+      const { default: Account } = await import("@/models/Account");
+      const dest = await Account.create({ user: userId, name: "Wallet", type: "cash", balance: 0 });
+      const tr = await addTxn({ type: "transfer", transferToId: dest._id.toString(), category: "other", description: "swiggy" });
+      expect(tr!.category).toBe("other");
+    });
+
+    it("does not change a captured payment's behaviour when there are no rules", async () => {
+      const { ingestCapture } = await import("@/lib/capture/ingest");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const actor = { id: userId, name: "Rules", email: "r@x.com", role: "user" };
+      const res = await ingestCapture({
+        user: actor,
+        channel: "sms",
+        text: "Rs.250.00 debited from A/c XX1234 on 26-09-26 to VPA swiggy@icici. UPI Ref 426912345678.",
+        receivedAt: new Date("2026-09-26T06:30:00Z"),
+        sender: "VM-HDFCBK",
+      });
+      expect(res.body.status).toBe("created");
+      const t = await Transaction.findOne({ user: userId }).lean<{ category: string; description?: string }>();
+      expect(t!.category).toBe("other");
+      expect(t!.description).toBeTruthy();
+    });
+
+    it("sets category and a clean merchant name on a captured payment, matching a UPI id", async () => {
+      await addRule({ field: "upi", value: "swiggy@icici", category: "food", merchantName: "Swiggy" });
+      const { ingestCapture } = await import("@/lib/capture/ingest");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const actor = { id: userId, name: "Rules", email: "r@x.com", role: "user" };
+      const res = await ingestCapture({
+        user: actor,
+        channel: "sms",
+        text: "Rs.250.00 debited from A/c XX1234 on 26-09-26 to VPA swiggy@icici. UPI Ref 426912345678.",
+        receivedAt: new Date("2026-09-26T06:30:00Z"),
+        sender: "VM-HDFCBK",
+      });
+      expect(res.body.status).toBe("created");
+      const t = await Transaction.findOne({ user: userId }).lean<{ category: string; description?: string; reviewStatus: string }>();
+      expect(t).toMatchObject({ category: "food", description: "Swiggy", reviewStatus: "unreviewed" });
+    });
+
+    it("places a capture that matched no account on the account a rule names", async () => {
+      const { ingestCapture } = await import("@/lib/capture/ingest");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const actor = { id: userId, name: "Rules", email: "r@x.com", role: "user" };
+      const text = "Rs.250.00 debited from A/c XX9999 on 26-09-26 to VPA swiggy@icici. UPI Ref 426912345678.";
+      const before = await ingestCapture({ user: actor, channel: "sms", text, receivedAt: new Date("2026-09-26T06:30:00Z"), sender: "VM-HDFCBK" });
+      expect(before.body.status).toBe("queued");
+
+      await addRule({ field: "upi", value: "swiggy@icici", category: "food", accountId });
+      const after = await ingestCapture({ user: actor, channel: "sms", text: text.replace("426912345678", "426912345999"), receivedAt: new Date("2026-09-27T06:30:00Z"), sender: "VM-HDFCBK" });
+      expect(after.body.status).toBe("created");
+      const t = await Transaction.findOne({ user: userId, "captures.0": { $exists: true } }).sort({ createdAt: -1 }).lean<{ account: { toString(): string }; category: string }>();
+      expect(t!.account.toString()).toBe(accountId);
+      expect(t!.category).toBe("food");
+    });
+  });
+
+  describe("browser routes", () => {
+    afterEach(() => {
+      sessionUser.current = null;
+    });
+
+    function browserReq(method: string, body?: unknown, path = "rules") {
+      return new NextRequest(`http://localhost/api/${path}`, {
+        method,
+        headers: { "content-type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    }
+
+    it("needs a session and shares the service with the integration routes", async () => {
+      const { GET, POST } = await import("@/app/api/rules/route");
+      expect((await GET()).status).toBe(401);
+
+      sessionUser.current = { id: userId, name: "Rules", email: "r@x.com", role: "user" };
+      const made = await POST(browserReq("POST", { field: "merchant", value: "swiggy", category: "food" }));
+      expect(made.status).toBe(201);
+      const id = (await made.json()).data.id as string;
+      expect((await POST(browserReq("POST", { field: "merchant", value: "SWIGGY", category: "food" }))).status).toBe(409);
+      expect((await POST(browserReq("POST", { field: "merchant", value: "swiggy" }))).status).toBe(400);
+
+      const listed = await (await GET()).json();
+      expect(listed.data).toHaveLength(1);
+
+      const { PATCH, DELETE } = await import("@/app/api/rules/[id]/route");
+      const patched = await PATCH(browserReq("PATCH", { priority: 3 }, `rules/${id}`), ctx(id));
+      expect((await patched.json()).data.priority).toBe(3);
+      expect((await DELETE(browserReq("DELETE", undefined, `rules/${id}`), ctx(id))).status).toBe(200);
+      expect((await DELETE(browserReq("DELETE", undefined, `rules/${id}`), ctx(id))).status).toBe(404);
+    });
+  });
+});

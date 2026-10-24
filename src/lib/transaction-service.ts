@@ -11,6 +11,7 @@ import { checkSpendLimitAlert } from "@/lib/spend-limit";
 import { applyRoundUp } from "@/lib/goal-service";
 import { computeInstallmentDates, OPEN_ENDED_WINDOW } from "@/lib/recurrence";
 import { appendLedgerBlock } from "@/lib/ledger";
+import { ruleOverridesForTransaction } from "@/lib/rule-service";
 import logger from "@/lib/logger";
 
 // Shared transaction-creation business logic, used by both the browser-facing
@@ -102,6 +103,9 @@ export type CreateTransactionInput = z.infer<typeof transactionCreateSchema> & {
   userId: string;
   actor: AuthUser;
   provenance?: TransactionProvenance;
+  // The bank message text, so a "text contains" categorise rule can match a
+  // capture. Server code only (like provenance); never read from a request body.
+  ruleText?: string;
 };
 
 export type CreateTransactionResult =
@@ -180,7 +184,7 @@ export async function invalidateStatsCacheMany(userId: string, dates: Date[]) {
 }
 
 export async function createTransaction(input: CreateTransactionInput): Promise<CreateTransactionResult> {
-  const { userId, actor, accountId, transferToId, provenance, ...rest } = input;
+  const { userId, actor, accountId, transferToId, provenance, ruleText, ...rest } = input;
   await connectDB();
 
   const account = await Account.findOne({ _id: accountId, user: userId, isArchived: { $ne: true } });
@@ -195,6 +199,29 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   }
 
   const startDate = new Date(rest.date);
+
+  // Categorise rules (src/lib/rule-service.ts) fill in what the person left
+  // at the default: category still "other", a merchant name that came from a
+  // bank message. Plain transactions only; splits, series and transfers are
+  // always exactly what was asked for.
+  if (!rest.splits && !rest.isRecurring && rest.type !== "transfer") {
+    const overrides = await ruleOverridesForTransaction(userId, {
+      category: rest.category,
+      description: rest.description,
+      note: rest.note,
+      tags: rest.tags,
+      text: ruleText,
+      descriptionFromCapture: Boolean(provenance && provenance.source !== "manual"),
+    }).catch((err) => {
+      logger.error({ err, userId }, "categorise rules failed; creating the transaction without them");
+      return null;
+    });
+    if (overrides) {
+      if (overrides.category) rest.category = overrides.category;
+      if (overrides.description) rest.description = overrides.description;
+      if (overrides.tags) rest.tags = overrides.tags;
+    }
+  }
 
   // ── Split purchase — N sibling documents sharing a splitGroupId ─────────
   // (schema refine above already guarantees rest.type === "expense",

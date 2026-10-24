@@ -112,6 +112,19 @@ Repeating charges found in expense history (same merchant, similar amount, stead
 | PATCH | `/api/budgets/:id` | Update limitAmount/alertAt/isActive |
 | DELETE | `/api/budgets/:id` | Delete |
 
+## Categorise rules
+
+Same merchant, same category and clean name. Rules run in `priority` order (lower first, then oldest); the first match wins. They fill in only what the person left at the default (category still `other`, a merchant name that came from a bank message) and add tags; they never overwrite a value the person set.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/rules` | List, in the order they run |
+| POST | `/api/rules` | Create `{field, op?, value, category?, merchantName?, accountId?, tags?, priority?, isActive?}` (at least one action) |
+| PATCH | `/api/rules/:id` | Edit; `null` clears category, merchantName or accountId |
+| DELETE | `/api/rules/:id` | Delete (hard) |
+
+Errors: 400 invalid, 404 not found or someone else's account, 409 same match already exists or 200 rules reached. Integration twins with the `{success, data}` envelope: [n8n-integration.md](n8n-integration.md).
+
 ## Loans
 
 | Method | Path | Description |
