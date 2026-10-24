@@ -17,6 +17,14 @@ When creating or editing an issue or PR in this repo, follow the forms in `.gith
 - Security problems go through GitHub's private vulnerability reporting, never a public issue.
 - The global rule still applies: no Claude attribution in commits, issues or PRs.
 
+## Phases: one branch, one deploy
+Work that comes as a phase (a tracker ticket with sub-tickets) ships as one merge to `main`, because a merge to `main` deploys to production.
+- The phase has one integration branch, `phase-<n>-<slug>`, made from `main` by the first sub-ticket.
+- Sub-ticket PRs target the phase branch. Vercel only builds a preview for them. Keep the phase branch current by merging `main` into it when `main` moves.
+- Each sub-ticket keeps its own branch `<issue-number>-<slug>`, PR, tests and docs.
+- When every sub-ticket is in and `yarn typecheck` and `yarn test` pass on the phase branch, open one PR from the phase branch to `main` listing the sub-tickets with `Closes #<tracker>`. Say in `## Rollout` what is needed (env vars, cron schedulers). Merge it before the app repo's phase PR.
+- Bug fixes and one-off changes that are not part of a phase still go straight to `main`.
+
 ## Docs and feature context
 
 Read `docs/feature-map.md` first, then the `CLAUDE.md` in the feature dir you will touch, before opening code. The index of all docs is `docs/README.md`; past decisions are in `docs/adr/`.
