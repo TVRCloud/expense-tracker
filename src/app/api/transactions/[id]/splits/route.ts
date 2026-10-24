@@ -8,7 +8,7 @@ type Params = Promise<{ id: string }>;
 
 function statusFor(code: string) {
   if (code === "TRANSACTION_NOT_FOUND") return 404;
-  if (code === "TRANSACTION_LOCKED") return 409;
+  if (code === "TRANSACTION_LOCKED" || code === "SPLIT_CONFLICT" || code === "TOO_MANY_RECEIPTS") return 409;
   return 400;
 }
 

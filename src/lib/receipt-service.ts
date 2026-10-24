@@ -146,13 +146,15 @@ export async function addReceipt(input: { userId: string; transactionId: string;
   await connectDB();
   await ownTransaction(userId, transactionId);
 
-  const [usage] = await Receipt.aggregate<{ n: number; bytes: number }>([
-    { $match: { user: new Types.ObjectId(userId) } },
-    { $group: { _id: null, n: { $sum: 1 }, bytes: { $sum: "$size" } } },
-  ]);
-  if (usage && (usage.n >= MAX_RECEIPTS_PER_USER || usage.bytes + bytes.length > MAX_RECEIPT_BYTES_PER_USER)) {
-    throw new ReceiptServiceError("QUOTA_EXCEEDED", "You have reached the receipt storage limit. Delete some receipts first");
-  }
+  const overQuota = async (extra: number) => {
+    const [usage] = await Receipt.aggregate<{ n: number; bytes: number }>([
+      { $match: { user: new Types.ObjectId(userId) } },
+      { $group: { _id: null, n: { $sum: 1 }, bytes: { $sum: "$size" } } },
+    ]);
+    return Boolean(usage && (usage.n + (extra ? 1 : 0) > MAX_RECEIPTS_PER_USER || usage.bytes + extra > MAX_RECEIPT_BYTES_PER_USER));
+  };
+  const quotaMessage = "You have reached the receipt storage limit. Delete some receipts first";
+  if (await overQuota(bytes.length)) throw new ReceiptServiceError("QUOTA_EXCEEDED", quotaMessage);
 
   const id = new Types.ObjectId();
   const enc = encryptBytes(bytes, RECEIPT_KEY_ENV, KEY_PURPOSE, context(userId, id.toString()));
@@ -166,6 +168,15 @@ export async function addReceipt(input: { userId: string; transactionId: string;
     tag: enc.tag,
     data: enc.data,
   });
+
+  // Quota: the check above is a quick refusal; this one decides. Every upload
+  // inserts first and then counts, so uploads at the same moment each see the
+  // others and the total never ends above the limit (at the very edge two
+  // can both back out, which is the safe way to be wrong). Deletes need no bookkeeping.
+  if (await overQuota(0)) {
+    await Receipt.deleteOne({ _id: id, user: userId });
+    throw new ReceiptServiceError("QUOTA_EXCEEDED", quotaMessage);
+  }
 
   // The cap and the "still alive" check sit in the same atomic update, so two
   // uploads at once cannot pass the cap and a delete in between leaves nothing behind.
@@ -203,6 +214,14 @@ export async function getReceiptImage(userId: string, receiptId: string): Promis
   await connectDB();
   const doc = await Receipt.findOne({ _id: receiptId, user: userId });
   if (!doc) throw new ReceiptServiceError("RECEIPT_NOT_FOUND", "Receipt not found");
+  // A receipt is only as alive as its transaction: deleted, voided or not yours reads as not found.
+  const parent = await Transaction.exists({
+    _id: doc.transaction,
+    user: userId,
+    isDeleted: { $ne: true },
+    reviewStatus: { $ne: "voided" },
+  });
+  if (!parent) throw new ReceiptServiceError("RECEIPT_NOT_FOUND", "Receipt not found");
   try {
     const bytes = decryptBytes(
       { iv: Buffer.from(doc.iv), tag: Buffer.from(doc.tag), data: Buffer.from(doc.data) },
@@ -225,15 +244,32 @@ export async function deleteReceipt(userId: string, receiptId: string): Promise<
   await Transaction.updateOne({ _id: doc.transaction, user: userId }, { $pull: { attachments: receiptId } });
 }
 
-/** Gone with the transaction: nothing keeps a private image after its row is deleted. */
+/**
+ * Gone with the transaction: nothing keeps a private image after its row is deleted.
+ * Tried twice, then the error goes to the caller. Callers run this BEFORE they
+ * delete, void or cancel anything, so a failure leaves the row and its receipts
+ * as they were and the person can simply retry. Reads also check the parent
+ * transaction, so a receipt left behind by a crash between steps is unreachable.
+ */
 export async function deleteReceiptsOfTransactions(userId: string, transactionIds: unknown[]): Promise<void> {
   if (!transactionIds.length) return;
-  try {
+  const run = async () => {
     await Receipt.deleteMany({ user: userId, transaction: { $in: transactionIds } });
     await Transaction.updateMany({ _id: { $in: transactionIds }, user: userId }, { $set: { attachments: [] } });
+  };
+  try {
+    await run();
   } catch (err) {
-    logger.error({ err, userId, count: transactionIds.length }, "could not delete the receipts of deleted transactions");
+    logger.warn({ err, userId, count: transactionIds.length }, "deleting receipts failed, retrying once");
+    await run();
   }
+}
+
+/** Every receipt of one user, for account deletion. */
+export async function deleteAllReceiptsOfUser(userId: string): Promise<void> {
+  await connectDB();
+  await Receipt.deleteMany({ user: userId });
+  await Transaction.updateMany({ user: userId, "attachments.0": { $exists: true } }, { $set: { attachments: [] } });
 }
 
 export async function deleteReceiptsOfTransaction(userId: string, transactionId: string): Promise<void> {

@@ -342,6 +342,9 @@ export async function deleteLoan(userId: string, loanId: string, actor: AuthUser
     }
   }
 
+  // Private images first: if this fails nothing else has changed and the delete can be retried.
+  await deleteReceiptsOfTransactions(userId, linkedTransactions.map((txn) => txn._id));
+
   for (const txn of linkedTransactions) {
     if (txn.type === "transfer") {
       await adjustBalance(txn.account, txn.amount);
@@ -355,7 +358,6 @@ export async function deleteLoan(userId: string, loanId: string, actor: AuthUser
     { _id: { $in: linkedTransactions.map((txn) => txn._id) }, user: userId },
     { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: userId } }
   );
-  await deleteReceiptsOfTransactions(userId, linkedTransactions.map((txn) => txn._id));
   for (const txn of linkedTransactions) {
     await appendLedgerBlock({
       userId,

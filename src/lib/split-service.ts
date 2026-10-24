@@ -6,6 +6,8 @@ import Receipt from "@/models/Receipt";
 import type { AuthUser } from "@/lib/auth-guard";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { checkBudgetAlert } from "@/lib/budget-alert";
+import { isReservedTag } from "@/lib/tags";
+import { MAX_RECEIPTS_PER_TRANSACTION } from "@/lib/receipt-service";
 import {
   getLinkedTransactionBlocker,
   invalidateStatsCacheMany,
@@ -52,6 +54,7 @@ type Row = {
   isRecurring?: boolean;
   splitGroupId?: Types.ObjectId;
   attachments?: string[];
+  splitRev?: number;
 };
 
 export type SplitView = {
@@ -115,6 +118,9 @@ export async function replaceSplits(input: {
     if (r.reviewStatus === "unreviewed") {
       throw new TransactionServiceError("TRANSACTION_LOCKED", "Confirm this transaction in Review before splitting it.");
     }
+    if ((r.tags ?? []).some((t) => t.startsWith("loan:") || t === "loan_principal")) {
+      throw new TransactionServiceError("TRANSACTION_LOCKED", "This transaction is linked to a loan. Use the loan to change it.");
+    }
     const blocker = await getLinkedTransactionBlocker(userId, r._id.toString(), r.tags);
     if (blocker) throw new TransactionServiceError("TRANSACTION_LOCKED", `${blocker} Use the linked record flow to change it.`);
   }
@@ -128,6 +134,27 @@ export async function replaceSplits(input: {
     throw new TransactionServiceError("TRANSACTION_LOCKED", "This expense has a refund matched to it. Unlink the refund first.");
   }
 
+  // Removed lines hand their receipts to the first line: refuse before anything changes if that is too many.
+  const removed = rows.slice(splits.length);
+  if (removed.length) {
+    const total = await Receipt.countDocuments({ user: userId, transaction: { $in: [base._id, ...removed.map((r) => r._id)] } });
+    if (total > MAX_RECEIPTS_PER_TRANSACTION) {
+      throw new TransactionServiceError(
+        "TOO_MANY_RECEIPTS",
+        `Removing these lines would leave more than ${MAX_RECEIPTS_PER_TRANSACTION} receipts on one line. Remove some receipts first.`
+      );
+    }
+  }
+
+  // Compare and set on the first line: of two edits made at once, only one gets past here.
+  const claimed = await Transaction.updateOne(
+    { _id: base._id, user: userId, isDeleted: { $ne: true }, splitRev: base.splitRev ?? null },
+    { $inc: { splitRev: 1 } }
+  );
+  if (claimed.modifiedCount !== 1) {
+    throw new TransactionServiceError("SPLIT_CONFLICT", "This purchase was just changed somewhere else. Reload and try again.");
+  }
+
   const groupId = base.splitGroupId ?? new Types.ObjectId();
   const dates = [new Date(base.date)];
   const changed: SplitLine[] = [];
@@ -137,7 +164,8 @@ export async function replaceSplits(input: {
   for (let i = 0; i < kept; i++) {
     const row = rows[i];
     const line = splits[i];
-    const description = line.description ?? base.description;
+    // A line keeps its own description unless the new line gives one.
+    const description = line.description !== undefined ? line.description : row.description;
     const before = row;
     const sameLine = row.category === line.category && row.amount === line.amount;
     const after = await Transaction.findOneAndUpdate(
@@ -167,7 +195,8 @@ export async function replaceSplits(input: {
       subcategory: base.subcategory,
       note: base.note,
       date: base.date,
-      tags: base.tags ?? [],
+      // Link tags (loan:, repayment:, credit_statement:) belong to one row; never copied.
+      tags: (base.tags ?? []).filter((t) => !isReservedTag(t)),
       source: base.source,
       reviewStatus: base.reviewStatus ?? null,
       reviewedAt: base.reviewedAt,
@@ -185,7 +214,7 @@ export async function replaceSplits(input: {
   }
 
   // Fewer lines than rows: remove the extras and keep their receipts on the first line.
-  for (const row of rows.slice(splits.length)) {
+  for (const row of removed) {
     const deleted = await Transaction.findOneAndUpdate(
       { _id: row._id, user: userId, isDeleted: { $ne: true } },
       { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: userId, attachments: [] } },

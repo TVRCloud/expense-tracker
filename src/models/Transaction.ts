@@ -37,6 +37,9 @@ const TransactionSchema = new Schema(
     // sharing this id, same pattern as recurringId above (not an embedded
     // array), so every existing $sum/$group aggregation needs no changes.
     splitGroupId: { type: Schema.Types.ObjectId },
+    // Bumped on the first line of a split by every edit of its lines: two edits
+    // at once cannot both apply (see split-service.ts). Missing until the first edit.
+    splitRev: { type: Number },
     // Where the values came from. Auto-captured rows (sms / notification /
     // n8n) start as reviewStatus "unreviewed" and show in the reconcile
     // inbox. Manual rows have no reviewStatus.

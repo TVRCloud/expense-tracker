@@ -90,9 +90,9 @@ Added in Phase 6. Everything here is additive. Integration routes answer `{succe
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/integrations/transactions/:id/splits`, `/api/transactions/:id/splits` | `{splitGroupId, total, lines: [{id, category, amount, description}]}` for any line's id; a plain transaction answers one line and `splitGroupId: null` |
-| PUT | `/api/integrations/transactions/:id/splits`, `/api/transactions/:id/splits` | Body `{splits: [...]}`. Replaces the lines (needs `Idempotency-Key` on the integration route); a plain expense becomes a split. Total never changes so no balance moves. 400 lines do not add up, fewer than 2 or more than 20, not an expense, recurring; 409 unreviewed capture, linked to a statement payment or loan repayment, or a refund is matched to it; 404 not yours |
+| PUT | `/api/integrations/transactions/:id/splits`, `/api/transactions/:id/splits` | Body `{splits: [...]}`. Replaces the lines (needs `Idempotency-Key` on the integration route); a plain expense becomes a split. Total never changes so no balance moves. 400 lines do not add up, fewer than 2 or more than 20, not an expense, recurring; 409 unreviewed capture, linked to a statement payment, a loan or a loan repayment, a refund is matched to it, another edit landed first (`CONFLICT`, not stored under the Idempotency-Key: reload and send again), or removing lines would leave more than 5 receipts on the first line; 404 not yours |
 
-Existing line ids are kept for lines that stay; extra lines are new rows; removed lines are soft-deleted and their receipts move to the first line.
+Existing line ids and each line's own description are kept for lines that stay (a line without `description` keeps its old one; a new line gets the first line's); extra lines are new rows and never copy `loan:`, `repayment:`, `credit_statement:` or `loan_principal` tags; removed lines are soft-deleted and their receipts move to the first line.
 
 **Receipts.** A photo on a transaction (up to 5 per transaction, 3 MB each, 200 files and 150 MB per user). JPEG, PNG, WebP or HEIC, decided from the file's own bytes. Stored encrypted; no public URL.
 
@@ -100,10 +100,10 @@ Existing line ids are kept for lines that stay; extra lines are new rows; remove
 |--------|------|-------------|
 | POST | `/api/integrations/transactions/:id/receipts`, `/api/transactions/:id/receipts` | The request body is the raw image bytes (the `Content-Type` header is ignored). Integration route needs `Idempotency-Key`. 201 `{id, transactionId, contentType, size, createdAt}`. 400 empty or not an image of those four types, or over 3 MB (integration: `error.reason` is `TOO_LARGE` or `UNSUPPORTED_TYPE`; browser: 413 and 415); 404 not yours, deleted or voided; 409 five already or quota full (`error.reason` `TOO_MANY` or `QUOTA_EXCEEDED`) |
 | GET | `/api/integrations/transactions/:id/receipts`, `/api/transactions/:id/receipts` | `[{id, transactionId, contentType, size, createdAt}]`, oldest first, no image bytes |
-| GET | `/api/integrations/receipts/:id`, `/api/receipts/:id` | The image. `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff`, a `sandbox` CSP. Another user's id is 404 |
+| GET | `/api/integrations/receipts/:id`, `/api/receipts/:id` | The image; 404 when the transaction is deleted, voided or not yours. `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff`, a `sandbox` CSP. Another user's id is 404 |
 | DELETE | `/api/integrations/receipts/:id` (needs `Idempotency-Key`), `/api/receipts/:id` | `{id, deleted: true}` |
 
-A transaction row lists its receipt ids in `attachments`. Deleting a transaction deletes its receipts for good.
+A transaction row lists its receipt ids in `attachments`. Deleting a transaction (also void, series cancel, loan delete) deletes its receipts for good, before anything else changes, so a failure leaves it all as it was and can be retried. Deleting the account deletes all of the user's receipts. `GET /api/me/export` lists receipt metadata (`id, transactionId, contentType, size, createdAt`) under `receipts`; the images are not exported because they are encrypted with the server key. The user quota is enforced by inserting, then counting: uploads at the same moment cannot exceed it (at the edge two can both be refused).
 
 ### Transfers (integrations only)
 A transfer is one `type: "transfer"` row (`account` is the source, `transferTo` the destination). It moves both balances and counts as neither income nor spending in stats, budgets and spend limits.

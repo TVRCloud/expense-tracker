@@ -7,6 +7,7 @@ import logger from "@/lib/logger";
 import { z } from "zod";
 import { forgetUserSessions } from "@/lib/perf/session-cache";
 import { forgetUserKeys } from "@/lib/integrations/auth";
+import { deleteAllReceiptsOfUser } from "@/lib/receipt-service";
 
 const updateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
@@ -67,6 +68,9 @@ export async function DELETE() {
     await connectDB();
     const existing = await User.findById(user.id).select("email").lean<{ email: string }>();
     if (!existing) return NextResponse.json({ error: "User not found" }, { status: 404 });
+    // Transactions are only soft-deleted, but the private receipt images go for good.
+    // Done first: if it fails the account is untouched and the person can retry.
+    await deleteAllReceiptsOfUser(user.id);
     // Tombstone the email so the same address can register a fresh account.
     await User.findByIdAndUpdate(user.id, {
       $set: {

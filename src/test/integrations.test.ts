@@ -6861,6 +6861,7 @@ describe("tags, split edits and receipts", () => {
       const t = await addTxn();
       const r = await addReceipt({ userId, transactionId: t._id.toString(), bytes: JPEG });
       await Receipt.updateOne({ _id: r.id }, { $set: { user: otherUserId } });
+      await (await import("@/models/Transaction")).default.updateOne({ _id: t._id }, { $set: { user: otherUserId } });
       await expect(getReceiptImage(otherUserId, r.id)).rejects.toMatchObject({ code: "UNREADABLE" });
     });
 
@@ -6937,4 +6938,188 @@ describe("tags, split edits and receipts", () => {
       expect((await POST(r, ctx(t._id.toString()))).status).toBe(400);
     });
   });
+
+  describe("review fixes: descriptions, concurrent edits, limits, privacy", () => {
+    const putSplits = async (id: string, splits: unknown, headers: Record<string, string> = {}) => {
+      const { PUT } = await import("@/app/api/integrations/transactions/[id]/splits/route");
+      return PUT(req(`transactions/${id}/splits`, "PUT", { splits }, headers), ctx(id));
+    };
+    async function splitOf(descriptions: (string | undefined)[], shared = "Mart") {
+      const { createTransaction } = await import("@/lib/transaction-service");
+      const each = 1000;
+      const r = await createTransaction({
+        userId, actor, accountId, type: "expense", amount: each * descriptions.length, currency: "INR", description: shared,
+        date: "2026-10-05T10:00:00.000Z", tags: [], isRecurring: false,
+        splits: descriptions.map((d, i) => ({ category: `c${i}`, amount: each, ...(d ? { description: d } : {}) })),
+      });
+      if (r.kind !== "split") throw new Error("not a split");
+      return { id: (r.transaction as { _id: { toString(): string } })._id.toString(), groupId: r.splitGroupId };
+    }
+    const live = async (groupId: string) => {
+      const { default: Transaction } = await import("@/models/Transaction");
+      return Transaction.find({ splitGroupId: groupId, isDeleted: { $ne: true } }).sort({ _id: 1 }).lean<{ _id: { toString(): string }; amount: number; description?: string; tags?: string[]; attachments?: string[] }[]>();
+    };
+
+    it("an edit that leaves out a description keeps each line's own, and new lines get the shared one", async () => {
+      const { id, groupId } = await splitOf([undefined, "soap"], "Mart");
+      const res = await putSplits(id, [
+        { category: "food", amount: 700 },
+        { category: "home", amount: 700 },
+        { category: "fun", amount: 600 },
+      ]);
+      expect(res.status).toBe(200);
+      expect((await live(groupId)).map((r) => r.description)).toEqual(["Mart", "soap", "Mart"]);
+      const set = await putSplits(id, [
+        { category: "food", amount: 700, description: "bread" },
+        { category: "home", amount: 700 },
+        { category: "fun", amount: 600 },
+      ]);
+      expect(set.status).toBe(200);
+      expect((await live(groupId)).map((r) => r.description)).toEqual(["bread", "soap", "Mart"]);
+    });
+
+    it("two edits at once cannot both apply: one wins, the other is a 409, the lines still add up", async () => {
+      const { id, groupId } = await splitOf(["a", "b"]);
+      const mk = (cats: string[]) => cats.map((c, i) => ({ category: c, amount: 2000 / cats.length + (i === 0 ? 0 : 0) }));
+      const [r1, r2] = await Promise.all([
+        putSplits(id, mk(["x", "y"])),
+        putSplits(id, mk(["p", "q", "r", "s"])),
+      ]);
+      expect([r1.status, r2.status].sort()).toEqual([200, 409]);
+      const rows = await live(groupId);
+      expect(rows.reduce((n, r) => n + r.amount, 0)).toBe(2000);
+      const loser = r1.status === 409 ? r1 : r2;
+      expect((await loser.json()).error.code).toBe("CONFLICT");
+    });
+
+    it("a clash is not stored under the Idempotency-Key, so the same key works on a retry", async () => {
+      const { id } = await splitOf(["a", "b"]);
+      const lines = [{ category: "x", amount: 1000 }, { category: "y", amount: 1000 }];
+      const { default: Transaction } = await import("@/models/Transaction");
+      const first = await Transaction.findOne({ splitGroupId: { $exists: true } }).sort({ _id: 1 }).lean<{ splitRev?: number }>();
+      // Simulate another edit landing between this edit's read and write.
+      const spy = (await import("vitest")).vi.spyOn(Transaction, "updateOne").mockResolvedValueOnce({ modifiedCount: 0 } as never);
+      const clash = await putSplits(id, lines, { "idempotency-key": "retry-me" });
+      spy.mockRestore();
+      expect(clash.status).toBe(409);
+      expect(first).toBeTruthy();
+      const again = await putSplits(id, lines, { "idempotency-key": "retry-me" });
+      expect(again.status).toBe(200);
+    });
+
+    it("refuses to merge lines when their receipts would not fit on the first line, and changes nothing", async () => {
+      const { addReceipt } = await import("@/lib/receipt-service");
+      const { id, groupId } = await splitOf(["a", "b", "c"]);
+      const rows = await live(groupId);
+      for (let i = 0; i < 3; i++) await addReceipt({ userId, transactionId: rows[0]._id.toString(), bytes: JPEG });
+      for (let i = 0; i < 3; i++) await addReceipt({ userId, transactionId: rows[2]._id.toString(), bytes: JPEG });
+      const res = await putSplits(id, [{ category: "x", amount: 1500 }, { category: "y", amount: 1500 }]);
+      expect(res.status).toBe(409);
+      const after = await live(groupId);
+      expect(after).toHaveLength(3);
+      expect(after.map((r) => r.amount)).toEqual([1000, 1000, 1000]);
+      expect(after[0].attachments).toHaveLength(3);
+      expect(after[2].attachments).toHaveLength(3);
+    });
+
+    it("will not split a loan row, and never copies link tags onto new lines", async () => {
+      const loanRow = await addTxn({ amount: 4000, tags: ["loan:abc", "loan_principal"] });
+      const loanLines = [{ category: "a", amount: 2000 }, { category: "b", amount: 2000 }];
+      expect((await putSplits(loanRow._id.toString(), loanLines)).status).toBe(409);
+      const plain = await addTxn({ amount: 4000, tags: ["trip", "credit_statement:s1"] });
+      const res = await putSplits(plain._id.toString(), loanLines);
+      expect(res.status).toBe(200);
+      const { default: Transaction } = await import("@/models/Transaction");
+      const rows = await Transaction.find({ splitGroupId: (await res.json()).data.splitGroupId }).sort({ _id: 1 }).lean<{ tags: string[] }[]>();
+      expect(rows[0].tags).toEqual(["trip", "credit_statement:s1"]);
+      expect(rows[1].tags).toEqual(["trip"]);
+    });
+
+    it("uploads at the same moment never take the user over the receipt quota", async () => {
+      const { addReceipt, MAX_RECEIPTS_PER_USER } = await import("@/lib/receipt-service");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const txns = await Promise.all([addTxn(), addTxn(), addTxn()]);
+      await Receipt.insertMany(
+        Array.from({ length: MAX_RECEIPTS_PER_USER - 2 }, () => ({
+          user: userId, transaction: new mongoose.Types.ObjectId(), contentType: "image/jpeg", size: 10,
+          iv: Buffer.alloc(12), tag: Buffer.alloc(16), data: Buffer.alloc(10),
+        }))
+      );
+      const results = await Promise.allSettled(
+        Array.from({ length: 9 }, (_, i) => addReceipt({ userId, transactionId: txns[i % 3]._id.toString(), bytes: JPEG }))
+      );
+      const ok = results.filter((r) => r.status === "fulfilled").length;
+      expect(ok).toBeLessThanOrEqual(2);
+      expect(await Receipt.countDocuments({ user: userId })).toBeLessThanOrEqual(MAX_RECEIPTS_PER_USER);
+      for (const r of results) if (r.status === "rejected") expect(r.reason.code).toBe("QUOTA_EXCEEDED");
+    });
+
+    it("a receipt cannot be read once its transaction is deleted or voided", async () => {
+      const { addReceipt, getReceiptImage } = await import("@/lib/receipt-service");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const a = await addTxn();
+      const b = await addTxn();
+      const ra = await addReceipt({ userId, transactionId: a._id.toString(), bytes: JPEG });
+      const rb = await addReceipt({ userId, transactionId: b._id.toString(), bytes: JPEG });
+      await expect(getReceiptImage(userId, ra.id)).resolves.toBeTruthy();
+      await Transaction.updateOne({ _id: a._id }, { $set: { isDeleted: true } });
+      await Transaction.updateOne({ _id: b._id }, { $set: { reviewStatus: "voided" } });
+      await expect(getReceiptImage(userId, ra.id)).rejects.toMatchObject({ code: "RECEIPT_NOT_FOUND" });
+      await expect(getReceiptImage(userId, rb.id)).rejects.toMatchObject({ code: "RECEIPT_NOT_FOUND" });
+    });
+
+    it("deleting a transaction retries a failed receipt clean-up once, then fails without deleting anything", async () => {
+      const { vi } = await import("vitest");
+      const { addReceipt } = await import("@/lib/receipt-service");
+      const { deleteTransaction } = await import("@/lib/transaction-service");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const t = await addTxn({ amount: 1000 });
+      const id = t._id.toString();
+      await addReceipt({ userId, transactionId: id, bytes: JPEG });
+      const before = await balance();
+
+      const once = vi.spyOn(Receipt, "deleteMany").mockRejectedValueOnce(new Error("boom"));
+      await deleteTransaction(userId, id, actor);
+      once.mockRestore();
+      expect(await Receipt.countDocuments({ transaction: id })).toBe(0);
+
+      const t2 = await addTxn({ amount: 1000 });
+      await addReceipt({ userId, transactionId: t2._id.toString(), bytes: JPEG });
+      const mid = await balance();
+      const always = vi.spyOn(Receipt, "deleteMany").mockRejectedValue(new Error("boom"));
+      await expect(deleteTransaction(userId, t2._id.toString(), actor)).rejects.toThrow("boom");
+      always.mockRestore();
+      expect((await Transaction.findById(t2._id).lean<{ isDeleted?: boolean }>())!.isDeleted).toBeFalsy();
+      expect(await Receipt.countDocuments({ transaction: t2._id })).toBe(1);
+      expect(await balance()).toBe(mid);
+      expect(before).toBeDefined();
+    });
+
+    it("deleting the account purges the user's receipts, and the export lists receipt metadata only", async () => {
+      const { addReceipt } = await import("@/lib/receipt-service");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const { GET: EXPORT } = await import("@/app/api/me/export/route");
+      const { DELETE } = await import("@/app/api/me/route");
+      const mine = await addTxn();
+      const theirs = await addTxn({}, otherUserId);
+      const r = await addReceipt({ userId, transactionId: mine._id.toString(), bytes: JPEG });
+      await addReceipt({ userId: otherUserId, transactionId: theirs._id.toString(), bytes: JPEG });
+
+      sessionUser.current = { id: userId, name: "TR User", email: "tr@x.com", role: "user" };
+      const exported = await (await EXPORT()).json();
+      expect(exported.receipts).toEqual([
+        { id: r.id, transactionId: mine._id.toString(), contentType: "image/jpeg", size: JPEG.length, createdAt: expect.any(String) },
+      ]);
+      expect(JSON.stringify(exported.receipts)).not.toContain("data");
+
+      expect((await DELETE()).status).toBe(200);
+      sessionUser.current = null;
+      expect(await Receipt.countDocuments({ user: userId })).toBe(0);
+      expect(await Receipt.countDocuments({ user: otherUserId })).toBe(1);
+      expect((await Transaction.findById(mine._id).lean<{ attachments: string[] }>())!.attachments).toEqual([]);
+    });
+  });
+
 });

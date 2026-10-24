@@ -125,7 +125,9 @@ export type TransactionServiceErrorCode =
   | "TRANSACTION_NOT_FOUND"
   | "TRANSACTION_LOCKED"
   | "INSTALLMENT_NOT_FOUND"
-  | "INVALID_SPLIT";
+  | "INVALID_SPLIT"
+  | "SPLIT_CONFLICT"
+  | "TOO_MANY_RECEIPTS";
 
 export class TransactionServiceError extends Error {
   code: TransactionServiceErrorCode;
@@ -484,6 +486,10 @@ export async function deleteTransaction(userId: string, transactionId: string, a
     throw new TransactionServiceError("TRANSACTION_LOCKED", `${blocker} Use the linked record flow to reverse it.`);
   }
 
+  // A receipt is private and has no meaning without its transaction. Removed first:
+  // if this fails nothing else has changed and the delete can be retried.
+  await deleteReceiptsOfTransaction(userId, transactionId);
+
   // Reverse account balance only for transactions that previously affected it.
   const affectsBalance = !txn.recurringId || txn.installmentStatus === "paid";
   if (affectsBalance) {
@@ -561,9 +567,6 @@ export async function deleteTransaction(userId: string, transactionId: string, a
     actor,
   });
   await invalidateStatsCacheSingle(userId, new Date(txn.date));
-  // A receipt is private and has no meaning without its transaction.
-  await deleteReceiptsOfTransaction(userId, transactionId);
-
   return deleted;
 }
 
