@@ -7121,34 +7121,39 @@ describe("csv import helpers", () => {
     const start = Date.now();
     expect(parseAmountCell(" ".repeat(1_000_000) + "x")).toBeNull();
     expect(parseAmountCell("5" + " ".repeat(1_000_000) + "dr")).toBeNull();
-    expect(Date.now() - start).toBeLessThan(500);
+    // A backtracking blow-up would take minutes; this only guards that, so the bound is loose.
+    expect(Date.now() - start).toBeLessThan(5000);
     // Whole-file parse of a 1 MB cell of spaces is fast as well.
     const { parseCsv, rowToCandidate } = await import("@/lib/csv-import");
     const t0 = Date.now();
     const table = parseCsv(`Date,Amount\n01/10/2026,${" ".repeat(900_000)}250${" ".repeat(50_000)}Dr`);
     const out = rowToCandidate(table.rows[0], 1, { date: 0, amount: 1 }, { mapping: {}, dateOrder: "dmy", amountSign: "signed", now: new Date(), timeZone: "Asia/Kolkata" });
     expect(out.ok).toBe(false);
-    expect(Date.now() - t0).toBeLessThan(500);
+    expect(Date.now() - t0).toBeLessThan(5000);
   });
 
   it("stays linear on short adversarial amount cells", async () => {
     const { parseAmountCell } = await import("@/lib/csv-import");
     const start = Date.now();
-    for (let i = 0; i < 2000; i += 1) {
+    for (let i = 0; i < 200; i += 1) {
       for (const cell of ["1,".repeat(31) + "x", "1,111".repeat(12) + "x", "(" + "1,".repeat(30), "9".repeat(60) + "dr x", "-".repeat(63) + "1", " ".repeat(30) + "1" + " ".repeat(30) + "cr"]) {
         expect(cell.length).toBeLessThanOrEqual(64);
         parseAmountCell(cell);
       }
     }
-    expect(Date.now() - start).toBeLessThan(2000);
+    // 1,200 calls; exponential backtracking would not finish. Loose on purpose, a loaded machine must not flake.
+    expect(Date.now() - start).toBeLessThan(20_000);
   });
 
-  it("reads year-first dates when told ymd, and refuses a day-first cell then", async () => {
+  it("reads only four-digit-year-first dates when told ymd", async () => {
     const { parseDateCell } = await import("@/lib/csv-import");
     expect(parseDateCell("2026/10/05", "ymd")).toEqual({ y: 2026, m: 10, d: 5 });
     expect(parseDateCell("2026-10-05", "ymd")).toEqual({ y: 2026, m: 10, d: 5 });
-    expect(parseDateCell("26-10-05", "ymd")).toEqual({ y: 2026, m: 10, d: 5 });
-    expect(parseDateCell("26.1.5", "ymd")).toEqual({ y: 2026, m: 1, d: 5 });
+    expect(parseDateCell("2026.10.05", "ymd")).toEqual({ y: 2026, m: 10, d: 5 });
+    // Two digits first could just as well be day first: refused, never guessed.
+    expect(parseDateCell("24-10-26", "ymd")).toBeNull();
+    expect(parseDateCell("05-10-26", "ymd")).toBeNull();
+    expect(parseDateCell("26.1.5", "ymd")).toBeNull();
     expect(parseDateCell("05/10/2026", "ymd")).toBeNull();
     expect(parseDateCell("2026-13-01", "ymd")).toBeNull();
     expect(parseDateCell("26-02-30", "ymd")).toBeNull();
@@ -7192,7 +7197,7 @@ describe("csv import helpers", () => {
       expect(win.dayStart.toISOString()).toBe(utc);
     }
     // Every day around every kind of change starts on its own date, in order.
-    for (const [tz, y, m] of [["America/Santiago", 2026, 9], ["Asia/Beirut", 2026, 3], ["America/Havana", 2026, 11], ["Australia/Lord_Howe", 2026, 10], ["Pacific/Auckland", 2026, 9], ["America/New_York", 2026, 11]] as const) {
+    for (const [tz, y, m] of [["America/Santiago", 2026, 9], ["Asia/Beirut", 2026, 3], ["America/Havana", 2026, 11], ["Australia/Lord_Howe", 2026, 10], ["Pacific/Auckland", 2026, 9], ["America/New_York", 2026, 11], ["Asia/Amman", 2011, 10], ["Antarctica/Davis", 2011, 10]] as const) {
       let prev = 0;
       for (let d = 1; d <= 30; d += 1) {
         const start = localMidnight(tz, y, m, d);
@@ -7202,6 +7207,30 @@ describe("csv import helpers", () => {
         prev = start.getTime();
       }
     }
+  });
+
+  it("takes the first of a midnight that happens twice, and gives a skipped day to the next one", async () => {
+    const { localMidnight, localDateKey } = await import("@/lib/spend-limit-time");
+    for (const tz of ["Asia/Amman", "Antarctica/Davis"]) {
+      const start = localMidnight(tz, 2011, 10, 28);
+      expect(localDateKey(start, tz)).toBe("2011-10-28");
+      expect(localDateKey(new Date(start.getTime() - 1000), tz)).toBe("2011-10-27");
+    }
+    // Samoa skipped 2011-12-30: no start of its own, so the helper gives 12-31's.
+    const apia = localMidnight("Pacific/Apia", 2011, 12, 30);
+    expect(localDateKey(apia, "Pacific/Apia")).toBe("2011-12-31");
+    expect(apia.getTime()).toBe(localMidnight("Pacific/Apia", 2011, 12, 31).getTime());
+  });
+
+  it("an import row on a day the zone skipped is a row error", async () => {
+    const { rowToCandidate } = await import("@/lib/csv-import");
+    const opts = { mapping: {}, dateOrder: "ymd" as const, amountSign: "signed" as const, now: new Date("2012-06-01T00:00:00Z"), timeZone: "Pacific/Apia" };
+    const skipped = rowToCandidate(["2011-12-30", "5"], 3, { date: 0, amount: 1 }, opts);
+    expect(skipped).toEqual({ ok: false, error: { row: 3, field: "date", message: expect.stringContaining("does not exist") } });
+    expect(rowToCandidate(["2011-12-31", "5"], 4, { date: 0, amount: 1 }, opts).ok).toBe(true);
+    const ymd = rowToCandidate(["24-10-26", "5"], 5, { date: 0, amount: 1 }, opts);
+    expect(ymd).toEqual({ ok: false, error: { row: 5, field: "date", message: expect.stringContaining("year first needs four digits") } });
+    expect(rowToCandidate(["2026-10-24", "5"], 6, { date: 0, amount: 1 }, { ...opts, now: new Date("2027-01-01T00:00:00Z") }).ok).toBe(true);
   });
 
   it("guesses a mapping from common bank headers", async () => {

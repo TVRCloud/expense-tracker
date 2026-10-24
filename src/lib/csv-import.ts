@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { localMidnight } from "@/lib/spend-limit-time";
+import { localDateKey, localMidnight } from "@/lib/spend-limit-time";
 
 // Pure CSV import helpers: parse the text, suggest a column mapping, and turn
 // each row into a transaction candidate or an error. No database access here;
@@ -150,9 +150,9 @@ function twoDigitYear(y: number) {
 
 /**
  * A date cell to a calendar date. Takes 2026-10-24 (and a time after it),
- * 24/10/2026, 24-10-26, 24.10.2026 and 24 Oct 2026; the day-first,
- * month-first or year-first (26-10-05) order of the short numeric forms is the
- * caller's choice.
+ * 24/10/2026, 24-10-26, 24.10.2026 and 24 Oct 2026; the day-first or
+ * month-first order of the numeric forms is the caller's choice. Under "ymd"
+ * only a four-digit year first is read (2026-10-24, 2026/10/24, 2026.10.24).
  */
 export function parseDateCell(raw: string, order: DateOrder): { y: number; m: number; d: number } | null {
   const s = raw.trim();
@@ -167,12 +167,9 @@ export function parseDateCell(raw: string, order: DateOrder): { y: number; m: nu
     return month ? validDate(twoDigitYear(Number(m[3])), month, Number(m[1])) : null;
   }
 
-  if (order === "ymd") {
-    // Year first: 26-10-05 (2026-10-05). A day-first or month-first cell is not
-    // this order, so it is refused rather than read the wrong way.
-    m = /^(\d{2})[-/.](\d{1,2})[-/.](\d{1,2})(?:[T\s,].*)?$/.exec(s);
-    return m ? validDate(twoDigitYear(Number(m[1])), Number(m[2]), Number(m[3])) : null;
-  }
+  // Year first (ymd) takes only a four-digit year, handled above: 24-10-26 could
+  // as well be day first, so it is refused rather than read the wrong way.
+  if (order === "ymd") return null;
 
   m = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2}|\d{4})(?:[T\s,].*)?$/.exec(s);
   if (m) {
@@ -293,7 +290,11 @@ export function rowToCandidate(
 
   const dateCell = cell("date");
   const parsedDate = parseDateCell(dateCell, opts.dateOrder);
-  if (!parsedDate) return fail("date", dateCell ? `Cannot read the date "${dateCell.slice(0, 40)}"` : "Date is empty");
+  if (!parsedDate) {
+    if (!dateCell) return fail("date", "Date is empty");
+    const hint = opts.dateOrder === "ymd" ? " (year first needs four digits)" : "";
+    return fail("date", `Cannot read the date "${dateCell.slice(0, 40)}"${hint}`);
+  }
   const year = parsedDate.y;
   if (year < 1990 || Date.UTC(parsedDate.y, parsedDate.m - 1, parsedDate.d) > opts.now.getTime() + 366 * 86_400_000) {
     return fail("date", "Date is out of range");
@@ -338,11 +339,14 @@ export function rowToCandidate(
   const note = text("note").slice(0, 500);
 
   const dateKey = `${String(parsedDate.y).padStart(4, "0")}-${String(parsedDate.m).padStart(2, "0")}-${String(parsedDate.d).padStart(2, "0")}`;
+  const start = localMidnight(opts.timeZone, parsedDate.y, parsedDate.m, parsedDate.d);
+  // A day some zone skipped (Samoa, 2011-12-30) has no start of its own.
+  if (localDateKey(start, opts.timeZone) !== dateKey) return fail("date", "That date does not exist in your time zone");
   return {
     ok: true,
     candidate: {
       row,
-      date: localMidnight(opts.timeZone, parsedDate.y, parsedDate.m, parsedDate.d),
+      date: start,
       dateKey,
       type,
       amount: signed,
