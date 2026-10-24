@@ -143,6 +143,9 @@ export function backupFailure(err: unknown, requestId: string, route: string): R
     if (err.reason === "base_currency_mismatch") {
       return integrationError("BASE_CURRENCY_MISMATCH", err.message, requestId, { reason: "base_currency_mismatch" });
     }
+    if (err.reason === "base_currency_only_two_decimals") {
+      return integrationError("BASE_CURRENCY_ONLY_TWO_DECIMALS", err.message, requestId, { reason: "base_currency_only_two_decimals" });
+    }
     if (err.reason === "base_currency_unknown") {
       return integrationError("BASE_CURRENCY_UNKNOWN", err.message, requestId, { reason: "base_currency_unknown" });
     }
