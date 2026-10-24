@@ -3,7 +3,7 @@ Purpose: Mongoose schemas, one file per collection. Field tables: [docs/database
 
 ## Files
 - User (incl. `preferences.timezone` and `preferences.billReminders`), Session (collection `userSession`), ApiKey: identity and access.
-- Account, Transaction, TransactionCorrection, CreditStatement: money records and corrections.
+- Account, Transaction (also `refundOf`, `refundStatus` for refund matching), TransactionCorrection, CreditStatement: money records and corrections.
 - Budget, SpendLimit (one doc per user: daily and weekly limit), SubscriptionDecision (confirm or dismiss choice per detected subscription), Goal, Loan, Repayment, Notification, PushSubscription: feature data.
 - CapturedMessage, IdempotencyRecord: bank message inbox; integration idempotency.
 - LedgerBlock, LedgerBackfill, LogSecurity, LogUnlockSession, SecurityRateLimit: ledger chain, logs unlock, rate limits.

@@ -58,6 +58,14 @@ Every message is stored in `captured_messages`. The raw text is encrypted with `
 - **Record:** each fix writes a `transaction_corrections` row with before and after snapshots, changed fields, reason, note, `via` (`web | mobile | system`), balance effects, and the ledger sequence. These rows are never updated or deleted.
 - **Voiding:** the reasons `duplicate` and `not_a_transaction` void the row (balance reversed, soft-deleted, `reviewStatus: voided`). The original values are kept in the correction.
 
+## Refunds and reversals
+
+When a credit is created from a capture, `suggestRefund` (`src/lib/refund-service.ts`) looks for the expense it refunds: same merchant (normalized, so "AMAZON REFUND" matches "Amazon"; placeholder names like "Captured payment" never match), the same or a smaller amount, dated up to 60 days before the credit, not voided or deleted, and not already refunded up to its amount. The best match (exact amount, then the same account, then closest in time) is stored on the credit as `refundOf` with `refundStatus: suggested` and shown on the inbox item as `refundSuggestion`.
+
+- **Confirm** links the credit to the expense and gives it the expense's category (the old one is kept in `refundPriorCategory`). A confirmed refund comes off expense and that category in the month stats, range stats, daily totals, budget spend and budget alerts instead of counting as income. Net does not change, and no balance changes.
+- **Reject** drops a suggestion for good, or unlinks a confirmed one and restores the category.
+- Deleting the original expense does not unlink its confirmed refunds; reject the refund first.
+
 ## API
 
 Web routes use the session. Phone routes use the Bearer key and require `Idempotency-Key` on every mutation.
@@ -73,6 +81,7 @@ Web routes use the session. Phone routes use the Bearer key and require `Idempot
 | Act on a queued message | `POST /api/captures/:id/resolve` `{action: create\|link\|keep_mine\|use_sms, …}` | `POST /api/integrations/review/captures/:id/resolve` |
 | Discard a queued message | `DELETE /api/captures/:id` | `DELETE /api/integrations/review/captures/:id` |
 | Correction history | `GET /api/reconcile/history` | `GET /api/integrations/review/history` |
+| Refund suggestions | — | `GET /api/integrations/refunds`; `POST /api/integrations/refunds/:id/confirm` `{originalId?}` and `/reject` |
 
 **Upload response statuses** (`data.status`):
 - `created` (201)

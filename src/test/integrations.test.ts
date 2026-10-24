@@ -3523,3 +3523,414 @@ describe("bills: upcoming list, mark paid, settings and reminders", () => {
     expect(await ok.json()).toEqual({ ok: true, checked: 0, sent: 0 });
   });
 });
+
+describe("refund and reversal matching", () => {
+  const KEY = "test-refunds-api-key";
+  const DAY = 24 * 60 * 60 * 1000;
+  let userId: string;
+  let otherUserId: string;
+  let accountId: string;
+  let n = 0;
+  const now = new Date();
+  const daysAgo = (d: number) => new Date(now.getTime() - d * DAY);
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { default: Account } = await import("@/models/Account");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Refund User", email: `rf${Date.now()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `rfo${Date.now()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    const account = await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 100000, currency: "INR" });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+    accountId = account._id.toString();
+  });
+
+  function req(path: string, method = "GET", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${KEY}`,
+        "content-type": "application/json",
+        ...(method === "GET" ? {} : { "idempotency-key": `refund-key-${n}` }),
+        ...headers,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+  const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+
+  async function txn(over: Record<string, unknown> = {}) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    return Transaction.create({
+      user: userId,
+      account: accountId,
+      type: "expense",
+      amount: 25000,
+      category: "shopping",
+      description: "Amazon",
+      date: daysAgo(10),
+      ...over,
+    });
+  }
+  const credit = (over: Record<string, unknown> = {}) =>
+    txn({ type: "income", description: "Amazon", category: "other", date: daysAgo(1), ...over });
+
+  async function reload(id: unknown) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    return Transaction.findById(id).lean<{
+      refundOf?: { toString(): string };
+      refundStatus?: string | null;
+      category: string;
+      refundPriorCategory?: string;
+    }>();
+  }
+
+  describe("merchant matching", () => {
+    it("ignores case, punctuation and company words, and needs a real name", async () => {
+      const { merchantsMatch, normalizeMerchant } = await import("@/lib/refund-service");
+      expect(normalizeMerchant("AMAZON PAY INDIA PVT LTD")).toBe("amazon");
+      expect(merchantsMatch("Amazon", "AMAZON REFUND")).toBe(true);
+      expect(merchantsMatch("Swiggy", "swiggy instamart")).toBe(true);
+      expect(merchantsMatch("Amazon", "Flipkart")).toBe(false);
+      expect(merchantsMatch("Captured payment", "Captured payment")).toBe(false);
+      expect(merchantsMatch("", "Amazon")).toBe(false);
+      expect(merchantsMatch("Mi", "Mi Store")).toBe(false);
+    });
+  });
+
+  describe("suggestRefund", () => {
+    it("links a credit to the expense with the same merchant and amount", async () => {
+      const { suggestRefund } = await import("@/lib/refund-service");
+      const original = await txn();
+      const refund = await credit();
+      const best = await suggestRefund(userId, refund._id.toString());
+      expect(best?._id.toString()).toBe(original._id.toString());
+      const saved = await reload(refund._id);
+      expect(saved?.refundStatus).toBe("suggested");
+      expect(saved?.refundOf?.toString()).toBe(original._id.toString());
+    });
+
+    it("accepts a partial refund (a smaller amount)", async () => {
+      const { suggestRefund } = await import("@/lib/refund-service");
+      const original = await txn({ amount: 25000 });
+      const refund = await credit({ amount: 9000 });
+      expect((await suggestRefund(userId, refund._id.toString()))?._id.toString()).toBe(original._id.toString());
+    });
+
+    it("does not suggest for a bigger amount, an old expense, another merchant or a plain income", async () => {
+      const { suggestRefund } = await import("@/lib/refund-service");
+      await txn({ amount: 25000 });
+      expect(await suggestRefund(userId, (await credit({ amount: 30000 }))._id.toString())).toBeNull();
+      expect(await suggestRefund(userId, (await credit({ description: "Flipkart" }))._id.toString())).toBeNull();
+      const old = await txn({ description: "Myntra", date: daysAgo(120) });
+      expect(old).toBeTruthy();
+      expect(await suggestRefund(userId, (await credit({ description: "Myntra" }))._id.toString())).toBeNull();
+      expect(await suggestRefund(userId, (await credit({ description: "Salary Acme" }))._id.toString())).toBeNull();
+    });
+
+    it("does not suggest an expense dated after the credit, a voided one or a deleted one", async () => {
+      const { suggestRefund } = await import("@/lib/refund-service");
+      await txn({ description: "Zomato", date: daysAgo(-5) });
+      await txn({ description: "Zomato", reviewStatus: "voided" });
+      await txn({ description: "Zomato", isDeleted: true });
+      expect(await suggestRefund(userId, (await credit({ description: "Zomato" }))._id.toString())).toBeNull();
+    });
+
+    it("prefers the exact amount, then the closest in time", async () => {
+      const { suggestRefund } = await import("@/lib/refund-service");
+      await txn({ amount: 40000, date: daysAgo(2) });
+      const exact = await txn({ amount: 25000, date: daysAgo(20) });
+      const refund = await credit({ amount: 25000 });
+      expect((await suggestRefund(userId, refund._id.toString()))?._id.toString()).toBe(exact._id.toString());
+    });
+
+    it("never takes an expense that is already refunded up to its amount", async () => {
+      const { suggestRefund, confirmRefund } = await import("@/lib/refund-service");
+      const original = await txn({ amount: 25000 });
+      const first = await credit({ amount: 25000 });
+      await suggestRefund(userId, first._id.toString());
+      await confirmRefund(userId, first._id.toString());
+      const second = await credit({ amount: 5000 });
+      expect(await suggestRefund(userId, second._id.toString())).toBeNull();
+      expect(original).toBeTruthy();
+    });
+
+    it("lets two partial refunds share one expense until it is used up", async () => {
+      const { suggestRefund, confirmRefund } = await import("@/lib/refund-service");
+      await txn({ amount: 25000 });
+      const a = await credit({ amount: 10000 });
+      await suggestRefund(userId, a._id.toString());
+      await confirmRefund(userId, a._id.toString());
+      const b = await credit({ amount: 15000 });
+      expect(await suggestRefund(userId, b._id.toString())).not.toBeNull();
+      const c = await credit({ amount: 16000 });
+      expect(await suggestRefund(userId, c._id.toString())).toBeNull();
+    });
+
+    it("does not suggest again after a rejection, nor for a credit that already has a status", async () => {
+      const { suggestRefund, rejectRefund } = await import("@/lib/refund-service");
+      await txn();
+      const refund = await credit();
+      await suggestRefund(userId, refund._id.toString());
+      await rejectRefund(userId, refund._id.toString());
+      expect(await suggestRefund(userId, refund._id.toString())).toBeNull();
+      expect((await reload(refund._id))?.refundStatus).toBe("rejected");
+    });
+
+    it("never looks at another user's expenses", async () => {
+      const { suggestRefund } = await import("@/lib/refund-service");
+      const { default: Account } = await import("@/models/Account");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const theirAccount = await Account.create({ user: otherUserId, name: "Theirs", type: "bank", balance: 0, currency: "INR" });
+      await Transaction.create({
+        user: otherUserId, account: theirAccount._id, type: "expense", amount: 25000, category: "shopping", description: "Amazon", date: daysAgo(10),
+      });
+      expect(await suggestRefund(userId, (await credit())._id.toString())).toBeNull();
+    });
+  });
+
+  describe("capture ingest", () => {
+    it("suggests the match when a credit message creates a transaction", async () => {
+      const { ingestCapture } = await import("@/lib/capture/ingest");
+      const { default: Account } = await import("@/models/Account");
+      const { default: Transaction } = await import("@/models/Transaction");
+      await Account.updateOne({ _id: accountId }, { $set: { smsLastFour: ["1234"] } });
+      const actor = { id: userId, name: "Refund User", email: "x@x.com", role: "user" };
+      const at = new Date();
+      const debit = await ingestCapture({
+        user: actor, channel: "sms", sender: "VM-HDFCBK", receivedAt: at,
+        text: "Rs.250.00 debited from A/c XX1234 on 26-09-26 to VPA swiggy@icici. UPI Ref 426912345678. Not you? Call 18002586161",
+      });
+      expect(debit.body.status).toBe("created");
+      const original = await Transaction.findOne({ type: "expense" }).lean<{ _id: { toString(): string }; description: string }>();
+      expect(original?.description).toBeTruthy();
+      // The SMS dates carry over to the transactions: put the purchase two days before the refund.
+      await Transaction.updateOne({ _id: original!._id }, { $set: { description: "Swiggy", date: new Date("2026-09-24T06:30:00Z") } });
+      const back = await ingestCapture({
+        user: actor, channel: "sms", sender: "VM-HDFCBK", receivedAt: new Date(at.getTime() + 60_000),
+        text: "Rs.250.00 credited to A/c XX1234 on 26-09-26 by Swiggy refund. UPI Ref 426999999999.",
+      });
+      expect(back.body.status).toBe("created");
+      const income = await Transaction.findOne({ type: "income" }).lean<{ refundOf?: { toString(): string }; refundStatus?: string }>();
+      expect(income?.refundStatus).toBe("suggested");
+      expect(income?.refundOf?.toString()).toBe(original!._id.toString());
+    });
+
+    it("leaves a credit with no matching expense alone", async () => {
+      const { ingestCapture } = await import("@/lib/capture/ingest");
+      const { default: Account } = await import("@/models/Account");
+      const { default: Transaction } = await import("@/models/Transaction");
+      await Account.updateOne({ _id: accountId }, { $set: { smsLastFour: ["1234"] } });
+      const actor = { id: userId, name: "Refund User", email: "x@x.com", role: "user" };
+      const res = await ingestCapture({
+        user: actor, channel: "sms", sender: "VM-HDFCBK", receivedAt: new Date(),
+        text: "Rs.250.00 credited to A/c XX1234 on 26-09-26 by Swiggy refund. UPI Ref 426999999999.",
+      });
+      expect(res.body.status).toBe("created");
+      const income = await Transaction.findOne({ type: "income" }).lean<{ refundStatus?: string | null }>();
+      expect(income?.refundStatus ?? null).toBeNull();
+    });
+  });
+
+  describe("confirm, reject and balances", () => {
+    it("confirming carries the category over and leaves every balance alone", async () => {
+      const { suggestRefund, confirmRefund } = await import("@/lib/refund-service");
+      const { createTransaction } = await import("@/lib/transaction-service");
+      const { default: Account } = await import("@/models/Account");
+      const actor = { id: userId, name: "Refund User", email: "x@x.com", role: "user" };
+      const spend = await createTransaction({
+        userId, actor, accountId, type: "expense", amount: 25000, currency: "INR", category: "shopping", description: "Amazon",
+        date: daysAgo(5).toISOString(), tags: [], isRecurring: false,
+      });
+      const back = await createTransaction({
+        userId, actor, accountId, type: "income", amount: 25000, currency: "INR", category: "other", description: "Amazon refund",
+        date: new Date().toISOString(), tags: [], isRecurring: false,
+      });
+      const backId = (back.transaction as { _id: { toString(): string } })._id.toString();
+      const spendId = (spend.transaction as { _id: { toString(): string } })._id.toString();
+      const before = (await Account.findById(accountId).lean<{ balance: number }>())!.balance;
+      await suggestRefund(userId, backId);
+      const refund = await confirmRefund(userId, backId);
+      expect(refund.status).toBe("confirmed");
+      expect(refund.category).toBe("shopping");
+      expect(refund.original?.id).toBe(spendId);
+      const saved = await reload(backId);
+      expect(saved?.category).toBe("shopping");
+      expect(saved?.refundPriorCategory).toBe("other");
+      expect((await Account.findById(accountId).lean<{ balance: number }>())!.balance).toBe(before);
+    });
+
+    it("nets the pair out of monthly, range and daily stats and the budget", async () => {
+      const { suggestRefund, confirmRefund } = await import("@/lib/refund-service");
+      const { getMonthlyStats, getRangeStats, getDailyTotals } = await import("@/lib/stats-service");
+      const { listBudgetsWithSpend } = await import("@/lib/budget-service");
+      const { default: Budget } = await import("@/models/Budget");
+      const first = new Date(now.getFullYear(), now.getMonth(), 1, 12);
+      const day = (d: number) => new Date(first.getTime() + (d - 1) * DAY);
+      const year = now.getFullYear();
+      const month = now.getMonth() + 1;
+      await Budget.create({ user: userId, category: "shopping", month, year, limitAmount: 100000, alertAt: 80 });
+      await txn({ amount: 20000, category: "shopping", description: "Amazon", date: day(2) });
+      await txn({ amount: 5000, category: "food", description: "Cafe", date: day(2) });
+      await txn({ type: "income", amount: 70000, category: "salary", description: "Acme Salary", date: day(3) });
+      const refund = await credit({ amount: 8000, date: day(4) });
+
+      const asIncome = await getMonthlyStats(userId, year, month);
+      expect(asIncome).toMatchObject({ income: 78000, expense: 25000 });
+
+      await suggestRefund(userId, refund._id.toString());
+      // Suggested is not confirmed: nothing moves yet.
+      expect(await getMonthlyStats(userId, year, month)).toMatchObject({ income: 78000, expense: 25000 });
+      await confirmRefund(userId, refund._id.toString());
+
+      const monthly = await getMonthlyStats(userId, year, month);
+      expect(monthly).toMatchObject({ income: 70000, expense: 17000, net: 53000 });
+      expect(monthly.byCategory).toEqual([
+        { category: "shopping", total: 12000 },
+        { category: "food", total: 5000 },
+      ]);
+
+      const [range] = await getRangeStats(userId, [{ year, month }]);
+      expect(range.stats).toMatchObject({ income: 70000, expense: 17000, net: 53000 });
+      expect(range.stats.byCategory[0]).toEqual({ category: "shopping", total: 12000 });
+
+      const days = await getDailyTotals(userId, year, month);
+      expect(days[1].expense).toBe(25000);
+      expect(days[3].expense).toBe(-8000);
+      expect(days[3].income).toBe(0);
+
+      const [budget] = (await listBudgetsWithSpend(userId, year, month)) as Array<{ spent: number }>;
+      expect(budget.spent).toBe(12000);
+    });
+
+    it("reject unlinks a confirmed refund and restores its category", async () => {
+      const { suggestRefund, confirmRefund, rejectRefund } = await import("@/lib/refund-service");
+      const { getMonthlyStats } = await import("@/lib/stats-service");
+      await txn({ date: daysAgo(2) });
+      const refund = await credit({ date: daysAgo(1) });
+      await suggestRefund(userId, refund._id.toString());
+      await confirmRefund(userId, refund._id.toString());
+      const d = new Date();
+      const after = await rejectRefund(userId, refund._id.toString());
+      expect(after.status).toBe("rejected");
+      const saved = await reload(refund._id);
+      expect(saved?.category).toBe("other");
+      expect(saved?.refundPriorCategory).toBeUndefined();
+      const stats = await getMonthlyStats(userId, d.getFullYear(), d.getMonth() + 1);
+      expect(stats.income).toBeGreaterThanOrEqual(25000);
+    });
+
+    it("confirm rejects a second link, a self link, a missing credit and another user's credit", async () => {
+      const { suggestRefund, confirmRefund } = await import("@/lib/refund-service");
+      const original = await txn();
+      const refund = await credit();
+      await suggestRefund(userId, refund._id.toString());
+      await confirmRefund(userId, refund._id.toString());
+      await expect(confirmRefund(userId, refund._id.toString())).rejects.toMatchObject({ code: "INVALID_STATE" });
+      const plain = await credit({ description: "Gift" });
+      await expect(confirmRefund(userId, plain._id.toString())).rejects.toMatchObject({ code: "INVALID_STATE" });
+      await expect(confirmRefund(userId, plain._id.toString(), { originalId: plain._id.toString() })).rejects.toMatchObject({ code: "INVALID_STATE" });
+      await expect(confirmRefund(userId, "64f000000000000000000000")).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(confirmRefund(otherUserId, plain._id.toString(), { originalId: original._id.toString() })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("lets the user link a credit to an expense of their choice", async () => {
+      const { confirmRefund } = await import("@/lib/refund-service");
+      const original = await txn({ description: "Croma", category: "electronics", amount: 50000 });
+      const refund = await credit({ description: "Reversal 8841", amount: 50000 });
+      const result = await confirmRefund(userId, refund._id.toString(), { originalId: original._id.toString() });
+      expect(result.category).toBe("electronics");
+      // A bigger refund than what is left on the expense is refused.
+      const tooMuch = await credit({ description: "Reversal 9", amount: 1000 });
+      await expect(confirmRefund(userId, tooMuch._id.toString(), { originalId: original._id.toString() })).rejects.toMatchObject({
+        code: "INVALID_STATE",
+      });
+    });
+  });
+
+  describe("routes", () => {
+    it("GET lists suggestions with the expense they refund, for this user only", async () => {
+      const { GET } = await import("@/app/api/integrations/refunds/route");
+      const { suggestRefund } = await import("@/lib/refund-service");
+      const original = await txn();
+      const refund = await credit();
+      await suggestRefund(userId, refund._id.toString());
+      const res = await GET(req("refunds"), {});
+      expect(res.status).toBe(200);
+      const { data } = await res.json();
+      expect(data).toHaveLength(1);
+      expect(data[0]).toMatchObject({ id: refund._id.toString(), amount: 25000, status: "suggested" });
+      expect(data[0].original).toMatchObject({ id: original._id.toString(), amount: 25000, category: "shopping", accountName: "Bank" });
+      expect((await GET(req("refunds", "GET", undefined, { authorization: "Bearer wrong" }), {})).status).toBe(401);
+    });
+
+    it("confirm and reject need an Idempotency-Key, replay on the same key, and hide other users' credits", async () => {
+      const { POST: confirm } = await import("@/app/api/integrations/refunds/[id]/confirm/route");
+      const { POST: reject } = await import("@/app/api/integrations/refunds/[id]/reject/route");
+      const { suggestRefund } = await import("@/lib/refund-service");
+      await txn();
+      const refund = await credit();
+      const id = refund._id.toString();
+      await suggestRefund(userId, id);
+
+      const noKey = new NextRequest(`http://localhost/api/integrations/refunds/${id}/confirm`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
+        body: "{}",
+      });
+      expect((await confirm(noKey, ctx(id))).status).toBe(400);
+      expect((await confirm(req(`refunds/${id}/confirm`, "POST", { originalId: "nope" }), ctx(id))).status).toBe(400);
+
+      const first = await confirm(req(`refunds/${id}/confirm`, "POST", undefined, { "idempotency-key": "same" }), ctx(id));
+      expect(first.status).toBe(200);
+      const firstJson = await first.json();
+      expect(firstJson.data.refund).toMatchObject({ status: "confirmed", category: "shopping" });
+      const replay = await confirm(req(`refunds/${id}/confirm`, "POST", undefined, { "idempotency-key": "same" }), ctx(id));
+      expect(replay.status).toBe(200);
+      expect((await replay.json()).data.refund.status).toBe("confirmed");
+      // A new key on an already linked credit is a conflict.
+      expect((await confirm(req(`refunds/${id}/confirm`, "POST"), ctx(id))).status).toBe(409);
+
+      const undone = await reject(req(`refunds/${id}/reject`, "POST"), ctx(id));
+      expect(undone.status).toBe(200);
+      expect((await undone.json()).data.refund.status).toBe("rejected");
+      expect((await reject(req(`refunds/${"64f000000000000000000000"}/reject`, "POST"), ctx("64f000000000000000000000"))).status).toBe(404);
+    });
+
+    it("another user's API key cannot confirm or reject your credit", async () => {
+      const { POST: confirm } = await import("@/app/api/integrations/refunds/[id]/confirm/route");
+      const { default: User } = await import("@/models/User");
+      const { default: ApiKey } = await import("@/models/ApiKey");
+      const { hashKey } = await import("@/lib/integrations/auth");
+      const THEIR_KEY = "test-refunds-other-api-key";
+      await ApiKey.create({ user: otherUserId, label: "phone", keyHash: hashKey(THEIR_KEY), lastFour: THEIR_KEY.slice(-4) });
+      expect(await User.countDocuments({ _id: otherUserId })).toBe(1);
+      await txn();
+      const refund = await credit();
+      const id = refund._id.toString();
+      const { suggestRefund } = await import("@/lib/refund-service");
+      await suggestRefund(userId, id);
+      const res = await confirm(req(`refunds/${id}/confirm`, "POST", undefined, { authorization: `Bearer ${THEIR_KEY}` }), ctx(id));
+      expect(res.status).toBe(404);
+      expect((await reload(id))?.refundStatus).toBe("suggested");
+    });
+
+    it("the reconcile inbox shows the suggestion on an unreviewed credit", async () => {
+      const { getReviewInbox } = await import("@/lib/reconcile/inbox");
+      const { suggestRefund } = await import("@/lib/refund-service");
+      const original = await txn();
+      const refund = await credit({ reviewStatus: "unreviewed", source: "sms" });
+      await suggestRefund(userId, refund._id.toString());
+      const inbox = await getReviewInbox(userId);
+      const item = inbox.needsReview.find((i: { id: string }) => i.id === refund._id.toString()) as
+        | { refundSuggestion: { id: string; amount: number } | null }
+        | undefined;
+      expect(item?.refundSuggestion).toMatchObject({ id: original._id.toString(), amount: 25000 });
+    });
+  });
+});

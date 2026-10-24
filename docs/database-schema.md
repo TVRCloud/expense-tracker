@@ -77,12 +77,15 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `sourceCapture` | ObjectId | ref: CapturedMessage, the message whose values are in use |
 | `captures` | [ObjectId] | every captured message for this payment |
 | `reviewStatus` | String | `unreviewed\|confirmed\|corrected\|voided`, null for manual rows |
+| `refundOf` | ObjectId → Transaction | On an income row: the expense it refunds (suggested, confirmed or rejected) |
+| `refundStatus` | String | `suggested\|confirmed\|rejected`, null otherwise. Only `confirmed` nets the pair out of stats and budgets |
+| `refundPriorCategory` | String | The category before the expense's was carried over; restored when a confirmed refund is unlinked |
 | `reviewedAt` / `reviewedBy` | Date / ObjectId | |
 | `isDeleted` | Boolean | soft delete |
 | `deletedAt` | Date | |
 | `deletedBy` | ObjectId | ref: User |
 
-Indexes: `{user, isDeleted, date}` plus `{user, isDeleted, <account\|transferTo\|type\|category\|splitGroupId\|reviewStatus>, date}`, recurring-series indexes, `{user, tags}`, full-text on `{description, note}`
+Indexes: `{user, isDeleted, date}` plus `{user, isDeleted, <account\|transferTo\|type\|category\|splitGroupId\|reviewStatus\|refundStatus>, date}`, sparse `{user, refundOf}`, recurring-series indexes, `{user, tags}`, full-text on `{description, note}`
 
 ## budgets
 

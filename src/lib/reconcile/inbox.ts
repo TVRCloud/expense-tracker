@@ -16,6 +16,7 @@ import {
   type CorrectionChanges,
   type CorrectionVia,
 } from "@/lib/reconcile/correct";
+import { refundOriginalsFor } from "@/lib/refund-service";
 import logger from "@/lib/logger";
 
 // Read side of reconcile (the review inbox, one transaction's provenance,
@@ -104,6 +105,8 @@ type RawTxn = {
   reviewStatus?: string | null;
   sourceCapture?: Types.ObjectId;
   captures?: Types.ObjectId[];
+  refundOf?: Types.ObjectId;
+  refundStatus?: string | null;
   isDeleted?: boolean;
 };
 
@@ -188,6 +191,8 @@ export async function getReviewInbox(userId: string) {
   const captureById = new Map(captures.map((c) => [c._id.toString(), c]));
   const names = await accountNames(userId, [...txns, ...relatedTxns].map((t) => t.account));
   const relatedById = new Map(relatedTxns.map((t) => [t._id.toString(), serializeTxn(t, names)]));
+  // A credit that looks like a refund names the expense it probably refunds.
+  const refundSuggestions = await refundOriginalsFor(userId, txns);
 
   // Lower-priority (notification) values first: they need the closest look.
   const needsReview = txns
@@ -200,6 +205,7 @@ export async function getReviewInbox(userId: string) {
         ...serializeTxn(t, names),
         sourceCapture: primary ? serializeCapture(primary) : null,
         alsoSeenIn: supporting.map(serializeCapture),
+        refundSuggestion: refundSuggestions.get(t._id.toString()) ?? null,
       };
     })
     .sort((a, b) => sourcePriorityOf(a.source) - sourcePriorityOf(b.source));
