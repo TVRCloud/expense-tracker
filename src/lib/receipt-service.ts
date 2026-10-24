@@ -2,6 +2,7 @@ import { Types } from "mongoose";
 import connectDB from "@/lib/mongodb";
 import Receipt from "@/models/Receipt";
 import Transaction from "@/models/Transaction";
+import User from "@/models/User";
 import { decryptBytes, encryptBytes } from "@/lib/crypto";
 import logger from "@/lib/logger";
 
@@ -238,6 +239,13 @@ export async function addReceipt(input: { userId: string; transactionId: string;
   if (await overQuota(0)) {
     await Receipt.deleteOne({ _id: id, user: userId });
     throw new ReceiptServiceError("QUOTA_EXCEEDED", quotaMessage);
+  }
+
+  // Deleting an account purges receipts after locking it, so an upload that lands after the purge
+  // must see the lock: take the receipt back out if the user is no longer active.
+  if (!(await User.exists({ _id: userId, isActive: { $ne: false } }))) {
+    await Receipt.deleteOne({ _id: id, user: userId });
+    throw new ReceiptServiceError("TRANSACTION_NOT_FOUND", "Transaction not found");
   }
 
   // The cap and the "still alive" check sit in the same atomic update, so two

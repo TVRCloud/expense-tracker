@@ -95,6 +95,35 @@ export async function getSplit(userId: string, transactionId: string): Promise<S
   return view(await loadGroup(userId, transactionId));
 }
 
+/** Another change got in the way (a write conflict that kept happening). Safe to send again. */
+export class SplitBusyError extends Error {
+  constructor(message = "This purchase was just changed somewhere else. Reload and try again.") {
+    super(message);
+    this.name = "SplitBusyError";
+  }
+}
+
+/** The database cannot run transactions (a standalone MongoDB). */
+export class SplitUnsupportedError extends Error {
+  constructor() {
+    super("This server needs a MongoDB replica set to edit split purchases.");
+    this.name = "SplitUnsupportedError";
+  }
+}
+
+type DriverError = { hasErrorLabel?: (label: string) => boolean; code?: number; message?: string };
+
+function translateTransactionError(err: unknown): unknown {
+  const e = err as DriverError;
+  if (e?.hasErrorLabel?.("TransientTransactionError") || e?.hasErrorLabel?.("UnknownTransactionCommitResult") || e?.code === 112) {
+    return new SplitBusyError();
+  }
+  if (e?.code === 20 || /Transaction numbers are only allowed on a replica set/i.test(e?.message ?? "")) {
+    return new SplitUnsupportedError();
+  }
+  return err;
+}
+
 type LedgerEntry = { entityId: string; action: "create" | "update" | "delete"; before?: unknown; after?: unknown };
 
 /**
@@ -146,7 +175,7 @@ export async function replaceSplits(input: {
         if ((r.tags ?? []).some((t) => t.startsWith("loan:") || t === "loan_principal")) {
           throw new TransactionServiceError("TRANSACTION_LOCKED", "This transaction is linked to a loan. Use the loan to change it.");
         }
-        const blocker = await getLinkedTransactionBlocker(userId, r._id.toString(), r.tags);
+        const blocker = await getLinkedTransactionBlocker(userId, r._id.toString(), r.tags, session);
         if (blocker) throw new TransactionServiceError("TRANSACTION_LOCKED", `${blocker} Use the linked record flow to change it.`);
       }
       const refunded = await Transaction.exists({
@@ -229,7 +258,13 @@ export async function replaceSplits(input: {
           if (linked.matchedCount !== 1) {
             throw new TransactionServiceError("TOO_MANY_RECEIPTS", `More than ${MAX_RECEIPTS_PER_TRANSACTION} receipts would end up on one line. Remove some receipts first.`);
           }
-          await Receipt.updateMany({ _id: { $in: receipts.map((r) => r._id) }, user: userId }, { $set: { transaction: base._id } }, { session });
+          const moved = await Receipt.updateMany(
+            { _id: { $in: receipts.map((r) => r._id) }, user: userId },
+            { $set: { transaction: base._id } },
+            { session }
+          );
+          // A receipt removed since it was read: abort rather than leave it listed on the first line.
+          if (moved.matchedCount !== receipts.length) throw new SplitBusyError();
         }
         const deleted = await Transaction.findOneAndUpdate(
           { _id: row._id, user: userId, isDeleted: { $ne: true } },
@@ -239,6 +274,8 @@ export async function replaceSplits(input: {
         ledger.push({ entityId: row._id.toString(), action: "delete", before: row, after: deleted });
       }
     });
+  } catch (err) {
+    throw translateTransactionError(err);
   } finally {
     await session.endSession();
   }

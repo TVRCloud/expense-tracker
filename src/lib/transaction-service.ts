@@ -1,4 +1,4 @@
-import { Types } from "mongoose";
+import { type ClientSession, Types } from "mongoose";
 import { z } from "zod";
 import connectDB from "@/lib/mongodb";
 import Transaction from "@/models/Transaction";
@@ -157,12 +157,12 @@ function hasRepaymentTag(tags?: unknown[]) {
   return (tags ?? []).some((tag) => typeof tag === "string" && tag.startsWith("repayment:"));
 }
 
-export async function getLinkedTransactionBlocker(userId: string, transactionId: string, tags?: unknown[]) {
+export async function getLinkedTransactionBlocker(userId: string, transactionId: string, tags?: unknown[], session?: ClientSession) {
   const linkedStatement = await CreditStatement.findOne({
     user: userId,
     paymentTransactionId: transactionId,
     isDeleted: { $ne: true },
-  }).select("_id").lean();
+  }).select("_id").session(session ?? null).lean();
   if (linkedStatement) return "This transaction is linked to a credit statement payment.";
   if (hasRepaymentTag(tags)) return "This transaction is linked to a loan repayment.";
   return null;

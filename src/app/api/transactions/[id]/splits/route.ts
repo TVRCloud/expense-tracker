@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
-import { getSplit, replaceSplits, splitUpdateSchema } from "@/lib/split-service";
+import { getSplit, replaceSplits, SplitBusyError, SplitUnsupportedError, splitUpdateSchema } from "@/lib/split-service";
 import { TransactionServiceError } from "@/lib/transaction-service";
 
 type Params = Promise<{ id: string }>;
@@ -44,6 +44,8 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
     return NextResponse.json({ data });
   } catch (err) {
     if (err instanceof TransactionServiceError) return NextResponse.json({ error: err.message }, { status: statusFor(err.code) });
+    if (err instanceof SplitBusyError) return NextResponse.json({ error: err.message }, { status: 409 });
+    if (err instanceof SplitUnsupportedError) return NextResponse.json({ error: err.message }, { status: 501 });
     logger.error({ err }, "PUT /api/transactions/[id]/splits failed");
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }

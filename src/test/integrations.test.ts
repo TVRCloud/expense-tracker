@@ -7321,6 +7321,95 @@ describe("tags, split edits and receipts", () => {
       expect(await Receipt.countDocuments({ user: userId })).toBe(0);
     });
 
+    it("a transient transaction error is retried: the ledger and the budget alert come out once", async () => {
+      const { vi } = await import("vitest");
+      const { MongoServerError } = await import("mongodb");
+      const { default: LedgerBlock } = await import("@/models/LedgerBlock");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const alert = await import("@/lib/budget-alert");
+      const alertSpy = vi.spyOn(alert, "checkBudgetAlert").mockResolvedValue(undefined as never);
+      const t = await addTxn({ amount: 9000, category: "food" });
+      const transient = new MongoServerError({ message: "write conflict", errorLabels: ["TransientTransactionError"] });
+      const spy = vi.spyOn(Transaction, "findOneAndUpdate").mockImplementationOnce((() => ({ lean: () => Promise.reject(transient) })) as never);
+      const res = await putSplits(t._id.toString(), [{ category: "a", amount: 4000 }, { category: "b", amount: 5000 }]);
+      spy.mockRestore();
+      expect(res.status).toBe(200);
+      // One update (the first line) and one create (the second): not doubled by the retry.
+      expect(await LedgerBlock.countDocuments({ user: userId, scope: "transaction" })).toBe(2);
+      expect(alertSpy).toHaveBeenCalledTimes(2);
+      alertSpy.mockRestore();
+      expect(await Transaction.countDocuments({ user: userId })).toBe(2);
+    });
+
+    it("a receipt that vanished mid-move aborts the edit with a 409 that is not stored under the key", async () => {
+      const { vi } = await import("vitest");
+      const { addReceipt } = await import("@/lib/receipt-service");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const { PUT } = await import("@/app/api/transactions/[id]/splits/route");
+      const { id, groupId } = await splitOf(["a", "b", "c"]);
+      const rows = await live(groupId);
+      await addReceipt({ userId, transactionId: rows[2]._id.toString(), bytes: JPEG });
+      const merged = [{ category: "x", amount: 1500 }, { category: "y", amount: 1500 }];
+      const spy = vi.spyOn(Receipt, "updateMany").mockResolvedValueOnce({ matchedCount: 0 } as never);
+      const first = await putSplits(id, merged, { "idempotency-key": "busy-key" });
+      expect(first.status).toBe(409);
+      expect((await first.json()).error.code).toBe("CONFLICT");
+      expect(await live(groupId)).toHaveLength(3);
+      spy.mockRestore();
+      const again = await putSplits(id, merged, { "idempotency-key": "busy-key" });
+      expect(again.status).toBe(200);
+
+      const { id: id2, groupId: g2 } = await splitOf(["a", "b", "c"]);
+      const rows2 = await live(g2);
+      await addReceipt({ userId, transactionId: rows2[2]._id.toString(), bytes: JPEG });
+      const spy2 = vi.spyOn(Receipt, "updateMany").mockResolvedValueOnce({ matchedCount: 0 } as never);
+      sessionUser.current = { id: userId, name: "TR User", email: "tr@x.com", role: "user" };
+      const web = await PUT(new NextRequest(`http://localhost/api/transactions/${id2}/splits`, { method: "PUT", body: JSON.stringify({ splits: merged }), headers: { "content-type": "application/json" } }), ctx(id2));
+      sessionUser.current = null;
+      spy2.mockRestore();
+      expect(web.status).toBe(409);
+    });
+
+    it("an upload that lands after the account was locked is taken back out", async () => {
+      const { addReceipt } = await import("@/lib/receipt-service");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const { default: User } = await import("@/models/User");
+      const t = await addTxn();
+      await User.updateOne({ _id: userId }, { $set: { isActive: false } });
+      await expect(addReceipt({ userId, transactionId: t._id.toString(), bytes: JPEG })).rejects.toMatchObject({ code: "TRANSACTION_NOT_FOUND" });
+      expect(await Receipt.countDocuments({ user: userId })).toBe(0);
+    });
+
+    it("the final purge on self-delete removes a receipt added between the two purges", async () => {
+      const { vi } = await import("vitest");
+      const { addReceipt } = await import("@/lib/receipt-service");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const { DELETE } = await import("@/app/api/me/route");
+      const t = await addTxn();
+      await addReceipt({ userId, transactionId: t._id.toString(), bytes: JPEG });
+      sessionUser.current = { id: userId, name: "TR User", email: "tr@x.com", role: "user" };
+      const real = Receipt.deleteMany.bind(Receipt);
+      let calls = 0;
+      const spy = vi.spyOn(Receipt, "deleteMany").mockImplementation(((...a: unknown[]) => {
+        calls += 1;
+        if (calls !== 2) return (real as (...x: unknown[]) => unknown)(...a);
+        // Between the first purge and the last one, a request that was already running lands a receipt.
+        return (async () => {
+          await Receipt.create({
+            user: userId, transaction: t._id, contentType: "image/png", size: 10,
+            iv: Buffer.alloc(12), tag: Buffer.alloc(16), data: Buffer.alloc(10),
+          });
+          return (real as (...x: unknown[]) => unknown)(...a);
+        })();
+      }) as never);
+      const res = await DELETE();
+      spy.mockRestore();
+      sessionUser.current = null;
+      expect(res.status).toBe(200);
+      expect(calls).toBe(2);
+      expect(await Receipt.countDocuments({ user: userId })).toBe(0);
+    });
+
     it("the browser split route answers 400 to a body that is not JSON", async () => {
       const { PUT } = await import("@/app/api/transactions/[id]/splits/route");
       const t = await addTxn();
