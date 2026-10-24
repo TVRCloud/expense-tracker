@@ -9,6 +9,8 @@ import ImportLock from "@/models/ImportLock";
 import type { AuthUser } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { createTransaction } from "@/lib/transaction-service";
+import { getBaseCurrency, lockBaseCurrency } from "@/lib/base-currency";
+import { minorExponent } from "@/lib/currency";
 import { userTagsOnly } from "@/lib/tags";
 import { DEFAULT_TIME_ZONE, isValidTimeZone, localDateKey } from "@/lib/spend-limit-time";
 import {
@@ -81,7 +83,9 @@ export function rowHash(dateKey: string, type: string, amount: number) {
 }
 
 type Analysis = {
+  // `currency` is the account's label, for display only: every amount is in the base currency.
   account: { id: string; name: string; currency: string };
+  baseCurrency: string;
   delimiter: string;
   headers: string[];
   mapping: ImportMapping;
@@ -128,12 +132,14 @@ async function analyze(userId: string, input: ImportRequest): Promise<Analysis> 
 
   const now = new Date();
   const timeZone = await userTimeZone(userId);
+  const baseCurrency = await getBaseCurrency(userId);
+  const exponent = minorExponent(baseCurrency);
   const dateOrder = input.dateOrder ?? "dmy";
   const ambiguousDates = table.rows.some((cells) => dateIsAmbiguous(cells[columns.date as number] ?? ""));
   const candidates: ImportCandidate[] = [];
   const errors: ImportRowError[] = [];
   table.rows.forEach((cells, i) => {
-    const out = rowToCandidate(cells, i + 1, columns, { mapping, dateOrder, amountSign: input.amountSign, now, timeZone });
+    const out = rowToCandidate(cells, i + 1, columns, { mapping, dateOrder, amountSign: input.amountSign, now, timeZone, exponent });
     if (out.ok) candidates.push(out.candidate);
     else errors.push(out.error);
   });
@@ -141,6 +147,7 @@ async function analyze(userId: string, input: ImportRequest): Promise<Analysis> 
   const duplicates = await markDuplicates(userId, input.accountId, candidates, timeZone);
   return {
     account: { id: input.accountId, name: account.name, currency: account.currency ?? "INR" },
+    baseCurrency,
     delimiter: table.delimiter,
     headers: table.headers,
     mapping,
@@ -221,6 +228,8 @@ function summary(a: Analysis, explicit: boolean) {
   const sum = (type: string) => fresh.filter((c) => c.type === type).reduce((n, c) => n + c.amount, 0);
   return {
     account: a.account,
+    baseCurrency: a.baseCurrency,
+    minorExponent: minorExponent(a.baseCurrency),
     delimiter: a.delimiter,
     headers: a.headers,
     mapping: a.mapping,
@@ -271,11 +280,21 @@ export async function commitImport(userId: string, actor: AuthUser, input: Impor
   // row an earlier import wrote and a retry under a new key cannot double up.
   const lockId = await takeLock(userId, input.accountId);
   try {
-    const a = await analyze(userId, input);
+    let a = await analyze(userId, input);
     if (a.ambiguousDates && input.dateOrder === undefined) {
       throw new TransactionImportError("NEEDS_DATE_ORDER", "The file has dates that read two ways; send dateOrder (dmy, mdy or ymd)");
     }
-    const todo = a.candidates.filter((c) => input.includeDuplicates || !c.duplicate);
+    let todo = a.candidates.filter((c) => input.includeDuplicates || !c.duplicate);
+    if (todo.length > 0) {
+      // The rows are amounts in the base currency, so pin it before writing
+      // (lockBaseCurrency's contract: after every check that can reject). If
+      // the base changed since the analysis, read the file again against it.
+      const locked = await lockBaseCurrency(userId);
+      if (locked !== a.baseCurrency) {
+        a = await analyze(userId, input);
+        todo = a.candidates.filter((c) => input.includeDuplicates || !c.duplicate);
+      }
+    }
     let imported = 0;
     let failed = 0;
     for (const c of todo) {
@@ -286,7 +305,7 @@ export async function commitImport(userId: string, actor: AuthUser, input: Impor
           accountId: input.accountId,
           type: c.type,
           amount: c.amount,
-          currency: a.account.currency,
+          currency: a.baseCurrency,
           category: c.category,
           description: c.description || undefined,
           note: c.note,
@@ -305,6 +324,7 @@ export async function commitImport(userId: string, actor: AuthUser, input: Impor
     }
     return {
       account: a.account,
+      baseCurrency: a.baseCurrency,
       totalRows: a.totalRows,
       imported,
       skippedDuplicates: input.includeDuplicates ? 0 : a.candidates.length - todo.length,
