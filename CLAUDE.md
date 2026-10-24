@@ -23,7 +23,12 @@ Work that comes as a phase (a tracker ticket with sub-tickets) ships as one merg
 - Sub-ticket PRs target the phase branch. Vercel only builds a preview for them. Keep the phase branch current by merging `main` into it when `main` moves.
 - Each sub-ticket keeps its own branch `<issue-number>-<slug>`, PR, tests and docs.
 - When every sub-ticket is in and `yarn typecheck` and `yarn test` pass on the phase branch, open one PR from the phase branch to `main` listing the sub-tickets with `Closes #<tracker>`. Say in `## Rollout` what is needed (env vars, cron schedulers). Merge it before the app repo's phase PR.
+- **Every sub-ticket PR is independently reviewed before it merges into the phase branch.** The review is a code review of its diff by someone who did not write it (a reviewer agent or a person), not the builder's own read and not just passing tests and typecheck. Findings go back to the builder to fix with tests, and the PR is reviewed again until it reports no blocking findings; only then does it merge into the phase branch. Look hardest at ownership filters (every query scoped to the signed-in user), input bounds, idempotency on writes, voided or deleted rows, money units, time zones, and CodeQL alerts.
+- The final PR from the phase branch to `main` then gets a light last pass over the combined diff: shared files where several sub-PRs edited the same lines (docs lists, realtime resources, `server.ts` timers, `src/test/integrations.test.ts`), merge-conflict repairs, the `## Rollout` notes, and a green CodeQL. Expect few findings; a long list means a sub-PR skipped its review.
 - Bug fixes and one-off changes that are not part of a phase still go straight to `main`.
+
+## Code review before every push
+Before any `git push` (a feature, a fix, or a merge-conflict repair), review the diff first: run the `code-review` skill, or have a reviewer agent read it, fix what it finds, then push. Passing tests and the analyzer is not a review. A repair that resolves conflicts can introduce duplicated lines (a repeated enum value or `if` condition), so it is reviewed too.
 
 ## Docs and feature context
 
