@@ -6,7 +6,16 @@ const TransactionSchema = new Schema(
     account: { type: Schema.Types.ObjectId, ref: "Account", required: true },
     type: { type: String, enum: ["income", "expense", "transfer"], required: true },
     amount: { type: Number, required: true }, // cents, always positive
+    // Currency of `amount`: always the user's base currency.
     currency: { type: String, default: "INR" },
+    // Foreign spend (src/lib/exchange-rate-service.ts). Only set when the
+    // payment was in another currency; `amount` is then the converted value.
+    originalAmount: { type: Number }, // minor units of originalCurrency
+    originalCurrency: { type: String },
+    originalExponent: { type: Number },
+    rate: { type: Number }, // base units per 1 unit of originalCurrency
+    rateDate: { type: Date }, // when the provider published the rate; unset for a client rate
+    rateSource: { type: String, enum: ["provider", "client"] },
     category: { type: String, required: true },
     subcategory: { type: String },
     description: { type: String },

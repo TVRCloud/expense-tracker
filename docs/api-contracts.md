@@ -96,6 +96,27 @@ A transfer is one `type: "transfer"` row (`account` is the source, `transferTo` 
 
 A row is a duplicate when the account already has a live row on the same calendar day (user's clock) with the same type and amount; equal rows inside one file only match as many as already exist, so re-importing a file adds nothing. Income and expense only: transfers are not imported. Amounts accept a comma only as thousands grouping (`1,234.50`, `1,23,456`); `12,50` is refused as unreadable. Any negative marker (`-`, brackets, `Dr`) makes an amount negative; `Cr` is positive, and a cell with both (`(500) Cr`, `-250 Cr`) is refused. A row on a day the user's zone skipped (Samoa, 2011-12-30) is a row error. Up to 500 rows per file.
 
+## Multi-currency
+
+`amount` is always integer paise (minor units) of the user's base currency (`preferences.currency`, default INR), so stats, budgets and limits never see a foreign amount. A payment in another currency also keeps what was actually paid.
+
+`POST /api/transactions` and `POST /api/integrations/transactions` take, instead of `amount`:
+
+| Field | Notes |
+|-------|-------|
+| `originalAmount` | Integer minor units of `originalCurrency` (cents, yen, fils), 1 to 1e13 |
+| `originalCurrency` | Supported ISO 4217 code, capitals (`USD`, `JPY`, `KWD`, ...). Same as the base currency: treated as a plain `amount` |
+| `rate` | Optional, base units per 1 unit of `originalCurrency`. Kept only if within 20% of the provider's rate (else 400); accepted as given when no provider rate is known. Stored with `rateSource: "client"` and no `rateDate` |
+
+Send `originalAmount` and `originalCurrency` together, and not together with `amount`. Not allowed with transfers, splits or recurring series (400). The server converts once (half up, minor-unit digits of both currencies) and stores `amount` (base) with `originalAmount`, `originalCurrency`, `originalExponent`, `rate` (10 significant digits), `rateDate` (when the provider published it, null for a client rate) and `rateSource` (`provider` or `client`). The conversion is exact (integer maths on the rate, half up). The integrations POST answers with those six fields (null on a plain row); lists and `PATCH` return them as stored. A stored `currency` is always the base currency's code, so a plain request whose `currency` differs from the base is a 400 telling the caller to send `originalAmount` and `originalCurrency`. Transactions, transfers, goals, budgets, loans, spend limits, account balances and credit limits, and card and bill payments accept at most 1e13 minor units; sinking funds and manual assets keep their own, higher cap of 1e14. A conversion that rounds to 0 or passes the cap is a 400; no usable rate (provider down and cache older than 30 days or empty) is a 400 whose message says to send `rate`. `PATCH` does not change amounts, so these fields cannot be edited; a review correction that changes `amount` on a foreign row is a 400 (delete and add it again). A client `rate` outside the band is not stored against the Idempotency-Key (the provider rate moves daily), nor is a missing rate; deterministic errors are.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/integrations/currencies` | `{base, canChangeBase, currencies: [{code, name, exponent}], rates: {USD: 83.33333333, ...}, rateDate, stale}`. `rates` is base units per 1 unit; empty and `rateDate` null when the provider is down and nothing is cached; `stale` when the cached table is over a day old |
+| PATCH | `/api/integrations/currencies` | `{base}` with `Idempotency-Key`. 400 for an unsupported code, or once the user has any transaction, account with a balance, credit limit or low-cash line, budget, goal, loan, sinking fund, manual asset or spend limit (every stored amount is in the base). The first write of any of those also locks the base (`users.baseLocked`), so a base change racing a first write is refused, not applied |
+
+Rates come from open.er-api.com (free, no key, daily; the provider asks for attribution, "Rates by Exchange Rate API", https://www.exchangerate-api.com). One table per base is cached in `exchange_rates` and refreshed after 24 hours; if the refresh fails the old table serves for up to 30 days and nobody retries for 10 minutes (so a dead provider costs one 5 second wait per ten minutes). `PATCH /api/me/preferences` `currency` follows the same whitelist and the same fixed-once-transactions rule. Accounts take a supported `currency` (create and `PATCH`); it labels the account, balances stay in the base currency. Forecast, bills, cash, home, summary and card payments report the base currency on every amount; only `GET /api/integrations/accounts` returns the account's own label. Bank messages are in rupees: on a base other than INR they are booked as an INR original through the rate service, and with no rate they wait in the review inbox (`reason: "rate_unavailable"`) instead of booking a wrong amount; a captured amount never overwrites an amount booked in another currency, and on a base other than INR a message is still compared with a row booked from an INR original, so a disagreement still surfaces as a source conflict.
+
 ## Cash
 
 | Method | Path | Description |

@@ -5,6 +5,7 @@ import Account from "@/models/Account";
 import Transaction from "@/models/Transaction";
 import type { AuthUser } from "@/lib/auth-guard";
 import { appendLedgerBlock } from "@/lib/ledger";
+import { MAX_MINOR_AMOUNT } from "@/lib/currency";
 import {
   createTransaction,
   deleteTransaction,
@@ -27,8 +28,9 @@ export const transferCreateSchema = z
   .object({
     fromAccountId: objectId,
     toAccountId: objectId,
-    amount: z.number().int().positive(),
-    currency: z.string().default("INR"),
+    amount: z.number().int().positive().max(MAX_MINOR_AMOUNT),
+    // Only the base currency's code is accepted (checked in createTransaction).
+    currency: z.string().optional(),
     date: z.string().optional(),
     note: z.string().max(500).optional(),
     description: z.string().max(200).optional(),
@@ -46,7 +48,7 @@ export const transferUpdateSchema = z
   .object({
     fromAccountId: objectId.optional(),
     toAccountId: objectId.optional(),
-    amount: z.number().int().positive().optional(),
+    amount: z.number().int().positive().max(MAX_MINOR_AMOUNT).optional(),
     date: z.string().optional(),
     note: z.string().max(500).optional(),
     description: z.string().max(200).optional(),
@@ -67,7 +69,8 @@ export type TransferServiceErrorCode =
   | "TRANSFER_NOT_FOUND"
   | "TRANSFER_ACCOUNT_NOT_FOUND"
   | "TRANSFER_SAME_ACCOUNT"
-  | "TRANSFER_LOCKED";
+  | "TRANSFER_LOCKED"
+  | "TRANSFER_CURRENCY_MISMATCH";
 
 export class TransferServiceError extends Error {
   code: TransferServiceErrorCode;
@@ -135,7 +138,11 @@ export async function createTransfer(input: CreateTransferInput) {
   } catch (err) {
     // The shared service names the two lookups differently; the app only needs "an account was not found".
     if (err instanceof Error && err.name === "TransactionServiceError") {
-      throw new TransferServiceError("TRANSFER_ACCOUNT_NOT_FOUND", err.message);
+      const code = (err as { code?: string }).code;
+      if (code === "CURRENCY_MISMATCH") throw new TransferServiceError("TRANSFER_CURRENCY_MISMATCH", err.message);
+      if (code === "ACCOUNT_NOT_FOUND" || code === "TRANSFER_ACCOUNT_NOT_FOUND") {
+        throw new TransferServiceError("TRANSFER_ACCOUNT_NOT_FOUND", err.message);
+      }
     }
     throw err;
   }

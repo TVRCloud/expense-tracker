@@ -19,7 +19,8 @@ All monetary fields are stored as **integers (cents)** — divide by 100 for dis
 | `preferences.emailNotifications` | Boolean | |
 | `preferences.weekStartsOn` | Number | 0=Sun, 1=Mon |
 | `preferences.timezone` | String | IANA zone, default `Asia/Kolkata`; decides where a day starts for spend limits |
-| `preferences.currency` | String | ISO 4217 |
+| `baseLocked` | Boolean | set atomically by the first write of any base-unit amount; once set the base currency cannot change |
+| `preferences.currency` | String | ISO 4217, the base currency every `amount` is in; supported codes only, cannot change once the user has transactions |
 | `preferences.billReminders.enabled` | Boolean | default false; turns on bill due reminders |
 | `preferences.billReminders.leadDays` | Number | 1 to 14, default 3; how many days ahead to remind |
 | `preferences.tax.deductibleCategories` | [String] | lower-case category names that count as deductible in the tax summary, up to 50 |
@@ -47,7 +48,7 @@ All monetary fields are stored as **integers (cents)** — divide by 100 for dis
 | `name` | String | |
 | `type` | String | `cash\|bank\|credit_card\|savings\|investment\|wallet` |
 | `balance` | Number | cents, integer |
-| `currency` | String | ISO 4217 |
+| `currency` | String | ISO 4217, supported codes only; a label for the account's own currency, `balance` stays in the user's base currency |
 | `color` | String | hex |
 | `icon` | String | |
 | `isArchived` | Boolean | soft delete |
@@ -67,7 +68,13 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `account` | ObjectId | ref: Account |
 | `type` | String | `income\|expense\|transfer` |
 | `amount` | Number | cents, always positive |
-| `currency` | String | |
+| `currency` | String | code of the base currency `amount` is in |
+| `originalAmount` | Number | foreign spend only: minor units of `originalCurrency` |
+| `originalCurrency` | String | foreign spend only: ISO 4217 |
+| `originalExponent` | Number | foreign spend only: minor-unit digits of `originalCurrency` (JPY 0, USD 2, KWD 3) |
+| `rate` | Number | foreign spend only: base units per 1 unit of `originalCurrency`, 10 significant digits |
+| `rateDate` | Date | foreign spend only: when the provider published the rate; unset for a client rate |
+| `rateSource` | String | foreign spend only: `provider\|client` |
 | `category` | String | |
 | `subcategory` | String | |
 | `description` | String | full-text indexed |
@@ -372,6 +379,18 @@ One live CSV import per user and account.
 |-------|------|-------|
 | `user` / `account` | String | unique together: the lock |
 | `expiresAt` | Date | TTL, 2 minutes, frees a lock if the run was killed |
+
+## exchange_rates
+
+One cached rate table per base currency (open.er-api.com), refreshed after 24 hours by `src/lib/exchange-rate-service.ts`; rows are kept so an outage can fall back to the last table for up to 30 days.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `base` | String | unique; ISO 4217 |
+| `rates` | Object | code to units of that currency per 1 unit of `base` (supported codes only) |
+| `rateDate` | Date | the provider's own update time |
+| `fetchedAt` | Date | when we fetched it |
+| `lastAttemptAt` | Date | set when a refresh failed; no new attempt for 10 minutes (a row can exist with no table yet) |
 
 ## credit_statements
 

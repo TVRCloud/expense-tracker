@@ -10,6 +10,7 @@ import { createRepayment } from "@/lib/loan-service";
 import { dayWindow, DEFAULT_TIME_ZONE, isValidTimeZone } from "@/lib/spend-limit-time";
 import type { ICreditMeta } from "@/types/models";
 import { Types } from "mongoose";
+import { getBaseCurrency } from "@/lib/base-currency";
 
 // Upcoming bills in one list: recurring payments (EMIs, rent), credit card
 // statements and loans the user owes. Read by GET /api/integrations/bills and
@@ -105,6 +106,8 @@ export async function listUpcomingBills(
     bills.push({ ...rest, dueDate: due.toISOString(), daysUntil: d, status: statusOf(d) });
   };
 
+  // Every amount here is in base units; an account's or loan's own `currency` is only a label.
+  const baseCurrency = await getBaseCurrency(userId);
   const [installments, loans, cards] = await Promise.all([
     Transaction.find({
       user: userId,
@@ -142,7 +145,7 @@ export async function listUpcomingBills(
       kind: "recurring",
       title: t.recurrenceLabel ?? t.description ?? t.category,
       amount: t.amount,
-      currency: t.currency ?? "INR",
+      currency: baseCurrency,
       due: new Date(t.date),
       accountId: t.account.toString(),
       canMarkPaid: true,
@@ -156,7 +159,7 @@ export async function listUpcomingBills(
       kind: "loan",
       title: `Loan from ${l.counterparty}`,
       amount: l.remainingAmount,
-      currency: l.currency ?? "INR",
+      currency: baseCurrency,
       due: new Date(l.dueDate),
       accountId: l.account?.toString() ?? null,
       canMarkPaid: true,
@@ -182,7 +185,7 @@ export async function listUpcomingBills(
       kind: "card",
       title: `${card.name} payment`,
       amount: next.remainingDue,
-      currency: card.currency ?? "INR",
+      currency: baseCurrency,
       due: next.dueDate,
       accountId: card._id.toString(),
       canMarkPaid: false,

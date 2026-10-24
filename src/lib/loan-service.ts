@@ -7,6 +7,9 @@ import type { AuthUser } from "@/lib/auth-guard";
 import { redis } from "@/lib/redis";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { z } from "zod";
+import { lockBaseCurrency } from "@/lib/base-currency";
+import { MAX_MINOR_AMOUNT } from "@/lib/currency";
+import { getBaseCurrency } from "@/lib/base-currency";
 
 // Shared loan-repayment business logic, used by both the browser-facing
 // POST /api/loans/[id]/repayments route and the n8n-facing
@@ -133,7 +136,7 @@ export async function createRepayment(params: {
       account: accountId,
       type,
       amount,
-      currency: loan.currency ?? "INR",
+      currency: await getBaseCurrency(userId),
       category: "loan_repayment",
       description: loan.direction === "given"
         ? `Repayment from ${loan.counterparty}`
@@ -159,7 +162,7 @@ export async function createRepayment(params: {
 export const loanCreateSchema = z.object({
   direction: z.enum(["given", "received"]),
   counterparty: z.string().min(1).max(100),
-  principalAmount: z.number().int().positive(),
+  principalAmount: z.number().int().positive().max(MAX_MINOR_AMOUNT),
   currency: z.string().default("INR"),
   interestRate: z.number().min(0).max(100).default(0),
   startDate: z.string(),
@@ -179,7 +182,7 @@ export const loanUpdateSchema = z.object({
 });
 
 export const repaymentCreateSchema = z.object({
-  amount: z.number().int().positive(),
+  amount: z.number().int().positive().max(MAX_MINOR_AMOUNT),
   date: z.string(),
   note: z.string().optional(),
   accountId: z.string().optional(),
@@ -219,6 +222,7 @@ export async function createLoan(input: CreateLoanInput) {
     const account = await Account.findOne({ _id: accountId, user: userId, isArchived: false });
     if (!account) throw new LoanServiceError("ACCOUNT_NOT_FOUND", "Account not found");
   }
+  await lockBaseCurrency(userId); // after the lookup that can reject the write
 
   const loan = await Loan.create({
     ...loanData,

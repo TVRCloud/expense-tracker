@@ -8,6 +8,7 @@ import TransactionCorrection from "@/models/TransactionCorrection";
 import type { AuthUser } from "@/lib/auth-guard";
 import { decryptField, type EncryptedField } from "@/lib/crypto";
 import { createTransaction } from "@/lib/transaction-service";
+import { getBaseCurrency } from "@/lib/base-currency";
 import { CAPTURE_KEY_ENV, promoteStalePendingSms } from "@/lib/capture/ingest";
 import { sourcePriorityOf } from "@/lib/capture/source";
 import {
@@ -18,6 +19,7 @@ import {
 } from "@/lib/reconcile/correct";
 import { refundOriginalsFor } from "@/lib/refund-service";
 import logger from "@/lib/logger";
+import { MAX_MINOR_AMOUNT } from "@/lib/currency";
 
 // Read side of reconcile (the review inbox, one transaction's provenance,
 // correction history) and the actions on queued captures. Shared by the
@@ -322,7 +324,7 @@ export const resolveCaptureSchema = z.discriminatedUnion("action", [
     action: z.literal("create"),
     accountId: objectId,
     type: z.enum(["income", "expense"]),
-    amount: z.number().int().positive(),
+    amount: z.number().int().positive().max(MAX_MINOR_AMOUNT),
     category: z.string().trim().min(1).max(50).default("other"),
     description: z.string().trim().max(200).optional(),
     date: z.string().datetime().optional(),
@@ -358,11 +360,12 @@ async function finishCapture(captureId: Types.ObjectId, userId: string, set: Rec
   );
 }
 
-function smsChanges(capture: RawCapture): CorrectionChanges {
+// `overwriteAmount` false: the parse is in rupees, so it never overwrites an amount booked in another currency.
+function smsChanges(capture: RawCapture, overwriteAmount: boolean): CorrectionChanges {
   const f = (capture.parse?.fields ?? {}) as Record<string, unknown>;
   const accountId = capture.eventKey?.account?.toString();
   return {
-    ...(typeof f.amountMinor === "number" ? { amount: f.amountMinor } : {}),
+    ...(overwriteAmount && typeof f.amountMinor === "number" ? { amount: f.amountMinor } : {}),
     ...(f.type === "income" || f.type === "expense" ? { type: f.type as "income" | "expense" } : {}),
     ...(accountId ? { accountId } : {}),
     ...(f.date ? { date: new Date(f.date as string).toISOString() } : {}),
@@ -383,13 +386,15 @@ export async function resolveCapture(params: {
   const channel = capture.channel as "sms" | "n8n" | "notification";
 
   if (input.action === "create") {
+    // The amount is what the bank message says, in rupees. With another base
+    // currency it is converted; with INR as base nothing changes.
+    const inrBase = (await getBaseCurrency(userId)) === "INR";
     const { transaction } = await createTransaction({
       userId,
       actor,
       accountId: input.accountId,
       type: input.type,
-      amount: input.amount,
-      currency: "INR",
+      ...(inrBase ? { amount: input.amount, currency: "INR" } : { originalAmount: input.amount, originalCurrency: "INR" }),
       category: input.category,
       description: input.description,
       date: input.date ?? new Date(capture.receivedAt).toISOString(),
@@ -413,12 +418,15 @@ export async function resolveCapture(params: {
     return { transactionId: txnId };
   }
 
+  const inrBase = (await getBaseCurrency(userId)) === "INR";
   const txnId = capture.transaction?.toString();
   if (!txnId) throw new ReconcileError("INVALID_STATE", "This message isn't linked to a transaction");
   const txn = await Transaction.findOne({ _id: txnId, user: userId, isDeleted: { $ne: true } })
-    .select("source")
-    .lean<{ source?: string }>();
+    .select("source originalCurrency")
+    .lean<{ source?: string; originalCurrency?: string }>();
   if (!txn) throw new ReconcileError("NOT_FOUND", "Linked transaction not found");
+  // The message is in rupees: it never overwrites an amount booked in another currency.
+  const overwriteAmount = inrBase && !txn.originalCurrency;
 
   if (input.action === "link") {
     // "Same payment". If this message outranks the transaction's current
@@ -427,7 +435,7 @@ export async function resolveCapture(params: {
       await correctTransaction({
         userId,
         transactionId: txnId,
-        changes: smsChanges(capture),
+        changes: smsChanges(capture, overwriteAmount),
         reason: "sms_override",
         via,
         actor,
@@ -461,7 +469,7 @@ export async function resolveCapture(params: {
   await correctTransaction({
     userId,
     transactionId: txnId,
-    changes: smsChanges(capture),
+    changes: smsChanges(capture, overwriteAmount),
     reason: "sms_override",
     via,
     actor,

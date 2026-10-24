@@ -6,6 +6,8 @@ import type { AuthUser } from "@/lib/auth-guard";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { budgetCreateSchema } from "@/features/budgets/schemas/budget.schema";
 import { z } from "zod";
+import { lockBaseCurrency } from "@/lib/base-currency";
+import { MAX_MINOR_AMOUNT } from "@/lib/currency";
 
 export { budgetCreateSchema };
 
@@ -142,6 +144,7 @@ export async function createBudget(input: CreateBudgetInput) {
   if (existing && existing.isDeleted !== true) {
     throw new BudgetServiceError("BUDGET_EXISTS", "Budget already exists for this category and period");
   }
+  await lockBaseCurrency(userId); // after the checks that can reject the write
 
   if (existing?.isDeleted === true) {
     const before = existing.toObject();
@@ -172,7 +175,7 @@ export async function createBudget(input: CreateBudgetInput) {
 }
 
 export const budgetUpdateSchema = z.object({
-  limitAmount: z.number().int().positive().optional(),
+  limitAmount: z.number().int().positive().max(MAX_MINOR_AMOUNT).optional(),
   alertAt: z.number().min(1).max(100).optional(),
   isActive: z.boolean().optional(),
   rollover: z.boolean().optional(),

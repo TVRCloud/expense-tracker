@@ -15,6 +15,8 @@ import {
 } from "@/lib/transaction-service";
 import logger from "@/lib/logger";
 import { learnDigitsFromCapture } from "@/lib/capture/account-match";
+import { MAX_MINOR_AMOUNT } from "@/lib/currency";
+import { getBaseCurrency } from "@/lib/base-currency";
 
 // Reconcile: confirm an auto-captured transaction, or fix it in place and
 // keep a permanent TransactionCorrection record of what changed. Shared by
@@ -48,7 +50,7 @@ const objectId = z.string().refine((v) => Types.ObjectId.isValid(v), "Invalid id
 
 export const correctionChangesSchema = z
   .object({
-    amount: z.number().int().positive().optional(),
+    amount: z.number().int().positive().max(MAX_MINOR_AMOUNT).optional(),
     type: z.enum(["income", "expense"]).optional(),
     accountId: objectId.optional(),
     date: z.string().datetime().optional(),
@@ -70,6 +72,7 @@ export type ReconcileErrorCode =
   | "NOT_CORRECTABLE"
   | "ACCOUNT_NOT_FOUND"
   | "NO_CHANGES"
+  | "FOREIGN_AMOUNT"
   | "INVALID_STATE";
 
 export class ReconcileError extends Error {
@@ -95,6 +98,9 @@ type TxnDoc = {
   isRecurring?: boolean;
   sourceCapture?: Types.ObjectId;
   reviewStatus?: string | null;
+  // Foreign spend (src/lib/exchange-rate-service.ts): `amount` is converted from these.
+  originalAmount?: number;
+  originalCurrency?: string;
 };
 
 export type Snapshot = {
@@ -186,6 +192,14 @@ export async function correctTransaction(input: CorrectInput) {
   }
 
   const txn = await loadCorrectable(input.userId, input.transactionId);
+  // amount = convert(originalAmount, rate) for a foreign spend; changing one
+  // side alone would break that, so the amount of such a row is fixed.
+  if (txn.originalAmount !== undefined && input.changes.amount !== undefined && input.changes.amount !== txn.amount) {
+    throw new ReconcileError(
+      "FOREIGN_AMOUNT",
+      "The amount of a foreign-currency transaction is fixed. Delete it and add it again."
+    );
+  }
   const before = snapshotOf(txn);
   const after: Snapshot = {
     amount: input.changes.amount ?? before.amount,
@@ -274,11 +288,28 @@ export async function correctTransaction(input: CorrectInput) {
 
   // Keep the primary capture's eventKey in step with the values in use, so a
   // later message is matched against the corrected payment.
+  // The eventKey amount is what the bank message said, in rupees: the row's
+  // own amount on an INR base, the INR original on another base, and left
+  // alone when the row is in a currency the message cannot speak for.
   const primary = input.sourceUpdate?.sourceCapture ?? txn.sourceCapture?.toString();
   if (primary) {
+    const keyAmount =
+      txn.originalCurrency === "INR"
+        ? txn.originalAmount
+        : txn.originalCurrency
+          ? undefined
+          : (await getBaseCurrency(input.userId)) === "INR"
+            ? after.amount
+            : undefined;
     await CapturedMessage.updateOne(
       { _id: primary, user: input.userId },
-      { $set: { "eventKey.amount": after.amount, "eventKey.type": after.type, "eventKey.account": after.account } }
+      {
+        $set: {
+          ...(keyAmount !== undefined ? { "eventKey.amount": keyAmount } : {}),
+          "eventKey.type": after.type,
+          "eventKey.account": after.account,
+        },
+      }
     );
   }
 
