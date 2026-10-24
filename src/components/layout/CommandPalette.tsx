@@ -15,6 +15,7 @@ import {
   PiggyBank,
   Target,
   HandCoins,
+  Repeat,
 } from "lucide-react";
 import {
   CommandDialog,
@@ -36,6 +37,7 @@ const NAV_COMMANDS = [
   { href: "/budgets", label: "Budgets", icon: PiggyBank },
   { href: "/goals", label: "Goals", icon: Target },
   { href: "/loans", label: "Loans", icon: HandCoins },
+  { href: "/subscriptions", label: "Subscriptions", icon: Repeat },
   { href: "/notifications", label: "Notifications", icon: Bell },
   { href: "/logs", label: "Logs", icon: KeyRound },
   { href: "/settings", label: "Settings", icon: Settings },

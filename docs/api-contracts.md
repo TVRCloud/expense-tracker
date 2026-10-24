@@ -93,6 +93,15 @@ A transfer is one `type: "transfer"` row (`account` is the source, `transferTo` 
 | GET | `/api/spend-limit` | Daily and weekly limits, today and week progress, safe to spend |
 | PUT | `/api/spend-limit` | Change limits. Send only what changes; `null` clears a limit or resumes a pause |
 
+## Subscriptions
+
+Repeating charges found in expense history (same merchant, similar amount, steady gap; weekly, monthly, quarterly or yearly). Detected on every read; only the confirm and dismiss choices are stored. Recurring series the user already tracks are left out.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/subscriptions?status&includeLapsed` | `{subscriptions, totals: {count, monthly, yearly}}`. `status` is `detected`, `confirmed`, `dismissed` or `all`; the default hides dismissed. `includeLapsed=true` adds ones whose next charge is long overdue |
+| PATCH | `/api/subscriptions/:id` | `{status: "confirmed" | "dismissed" | "detected"}`; 404 if the id is not a current detection |
+
 ## Budgets
 
 | Method | Path | Description |

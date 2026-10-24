@@ -19,10 +19,11 @@ describe("collectionToResource", () => {
     expect(collectionToResource("repayments")).toBe("repayments");
     expect(collectionToResource("credit_statements")).toBe("statements");
     expect(collectionToResource("spend_limits")).toBe("spendLimits");
+    expect(collectionToResource("subscription_decisions")).toBe("subscriptions");
   });
   it("covers every resource", () => {
     expect([...RESOURCE_NAMES].sort()).toEqual(
-      ["accounts", "budgets", "captures", "goals", "loans", "notifications", "repayments", "spendLimits", "statements", "transactions"]
+      ["accounts", "budgets", "captures", "goals", "loans", "notifications", "repayments", "spendLimits", "statements", "subscriptions", "transactions"]
     );
   });
 });
