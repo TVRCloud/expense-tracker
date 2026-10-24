@@ -3,6 +3,7 @@ import connectDB from "@/lib/mongodb";
 import Account from "@/models/Account";
 import Transaction from "@/models/Transaction";
 import { listUpcomingBills, getUserTimeZone } from "@/lib/bills";
+import { getBaseCurrency } from "@/lib/base-currency";
 import { listSubscriptions } from "@/lib/subscription-service";
 import { merchantKey } from "@/lib/subscription-detector";
 import {
@@ -72,12 +73,13 @@ export async function getCashFlowForecast(
     isArchived: { $ne: true },
     type: { $in: LIQUID_TYPES },
   })
-    .select("balance currency")
-    .lean<Array<{ _id: Types.ObjectId; balance: number; currency?: string }>>();
+    .select("balance")
+    .lean<Array<{ _id: Types.ObjectId; balance: number }>>();
   const liquidIds = accounts.map((a) => a._id);
   const liquidSet = new Set(liquidIds.map(String));
   const startingBalance = accounts.reduce((sum, a) => sum + (a.balance ?? 0), 0);
-  const currency = accounts[0]?.currency ?? "INR";
+  // Balances are base units; an account's own `currency` is only a label.
+  const currency = await getBaseCurrency(userId);
 
   const windowEnd = new Date(now.getTime() + (days + 1) * DAY_MS);
   const overdueFrom = new Date(now.getTime() - OVERDUE_WINDOW_DAYS * DAY_MS);

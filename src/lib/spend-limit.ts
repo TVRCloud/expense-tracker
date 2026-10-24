@@ -15,6 +15,7 @@ import {
   type SpendLimitUpdate,
 } from "@/features/budgets/schemas/spend-limit.schema";
 import { dayWindow, DEFAULT_TIME_ZONE, isValidTimeZone, localHour } from "@/lib/spend-limit-time";
+import { lockBaseCurrency } from "@/lib/base-currency";
 
 // Daily and weekly spend limits. "Spend" is expenses only: transfers are a
 // different transaction type, recurring bills (EMI, rent, subscriptions) are
@@ -105,6 +106,9 @@ export async function getSpendLimitSettings(userId: string) {
 
 export async function updateSpendLimit(userId: string, input: SpendLimitUpdate, now = new Date()) {
   await connectDB();
+  if (typeof input.dailyAmount === "number" || typeof input.weeklyAmount === "number") {
+    await lockBaseCurrency(userId);
+  }
   const existing = await getSpendLimitSettings(userId);
   const set: Record<string, unknown> = {};
   const unset: Record<string, 1> = {};

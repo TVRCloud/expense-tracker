@@ -2,6 +2,8 @@
 // strings/numbers, escapes quotes/commas/newlines per RFC 4180.
 function escapeCsvCell(value: unknown): string {
   if (value === null || value === undefined) return "";
+  // A real number is never a formula, and a negative one must stay numeric.
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "";
   let str = String(value);
 
   // Neutralize formula injection: a cell starting with =, +, -, @, tab, or CR
@@ -9,10 +11,12 @@ function escapeCsvCell(value: unknown): string {
   // opened, letting a user-controlled field (description/note/tags) run
   // arbitrary formulas (data exfiltration, or DDE command execution) in
   // whoever's spreadsheet app opens the export. Prefixing with a literal
-  // quote forces it to be read as text instead.
-  if (/^[=+\-@\t\r]/.test(str)) str = `'${str}`;
+  // quote forces it to be read as text instead. A value that already starts
+  // with a quote gets one too, so the import can strip exactly one and get the
+  // original back.
+  if (/^['=+\-@\t\r]/.test(str)) str = `'${str}`;
 
-  if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
+  if (/[",\r\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
   return str;
 }
 

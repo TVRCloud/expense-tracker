@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "crypto";
 
 // Shared AES-256-GCM helpers for encrypting a single field at rest. Same
 // scheme as the TOTP secret encryption in src/lib/log-security.ts: a 12-byte
@@ -60,4 +60,14 @@ export function decryptBytes(enc: EncryptedBytes, envName: string, purpose: stri
   decipher.setAAD(Buffer.from(context, "utf8"));
   decipher.setAuthTag(enc.tag);
   return Buffer.concat([decipher.update(enc.data), decipher.final()]);
+}
+
+/**
+ * A key for one purpose, taken from the same env secret: HMAC of the domain
+ * label under the env key. Keys for different domains do not reveal each other
+ * or the env key. Used where something must be deterministic yet not guessable
+ * by people who do not hold the server secret.
+ */
+export function deriveSubkey(envName: string, domain: string): Buffer {
+  return createHmac("sha256", keyFromEnv(envName)).update(`subkey:${domain}`).digest();
 }

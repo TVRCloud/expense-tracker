@@ -50,7 +50,7 @@ export const POST = withIntegrationRoute("transfers", async ({ req, user, reques
         return { status: 201, body: transfer as unknown as Record<string, unknown> };
       } catch (err) {
         if (err instanceof TransferServiceError) {
-          return { status: 404, body: { errorCode: err.code, message: err.message } };
+          return { status: err.code === "TRANSFER_CURRENCY_MISMATCH" ? 400 : 404, body: { errorCode: err.code, message: err.message } };
         }
         throw err;
       }
@@ -62,6 +62,9 @@ export const POST = withIntegrationRoute("transfers", async ({ req, user, reques
   }
 
   const body_ = outcome.body as { errorCode?: string; message?: string } & Record<string, unknown>;
+  if (body_.errorCode === "TRANSFER_CURRENCY_MISMATCH") {
+    return integrationError("VALIDATION_ERROR", body_.message ?? "Request failed", requestId);
+  }
   if (body_.errorCode) {
     return integrationError("NOT_FOUND", body_.message ?? "Account not found", requestId);
   }

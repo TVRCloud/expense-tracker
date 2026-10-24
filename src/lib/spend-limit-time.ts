@@ -43,11 +43,33 @@ function offsetAt(ms: number, timeZone: string) {
   return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - whole;
 }
 
-// The UTC instant at which the local calendar day y-m-d starts.
+// The UTC instant at which the local calendar day y-m-d starts: the first
+// second whose wall-clock date is that day. Where a clock change skips midnight
+// (America/Santiago, Asia/Beirut: 00:00 becomes 01:00) that is the first instant
+// that exists; where midnight happens twice (Asia/Amman, Havana) it is the
+// first of the two. A day that does not exist at all (Pacific/Apia skipped
+// 2011-12-30) gives the start of the next day that does.
 export function localMidnight(timeZone: string, year: number, month: number, day: number) {
   const wall = Date.UTC(year, month - 1, day);
+  const wallDayAt = (ms: number) => {
+    const p = localParts(new Date(ms), timeZone);
+    return Date.UTC(p.year, p.month - 1, p.day);
+  };
   const first = wall - offsetAt(wall, timeZone);
-  return new Date(wall - offsetAt(first, timeZone));
+  const guess = wall - offsetAt(first, timeZone);
+  // Fast path: the guess is on the day and the second before it is not.
+  if (wallDayAt(guess) >= wall && wallDayAt(guess - 1000) < wall) return new Date(guess);
+  // Assumes the wall-clock date does not go backwards inside this 48 h window
+  // (a clock change repeats an hour but never rewinds past a date, in every
+  // zone checked), so "date >= wanted" flips once and bisecting finds it.
+  let lo = guess - 86_400_000;
+  let hi = guess + 86_400_000;
+  while (hi - lo > 1000) {
+    const mid = lo + Math.floor((hi - lo) / 2000) * 1000;
+    if (wallDayAt(mid) >= wall) hi = mid;
+    else lo = mid;
+  }
+  return new Date(hi);
 }
 
 /** The calendar date on the user's wall clock at this instant (dayOfWeek: 0 is Sunday). */

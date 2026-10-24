@@ -96,6 +96,10 @@ Authorization: Bearer <YOUR_API_KEY>
 | GET, PATCH, DELETE | `/api/integrations/transfers/[id]` | Read, edit (amount, accounts, date, notes; both balances are corrected) and delete a transfer, which puts both balances back (writes need `Idempotency-Key`) |
 | GET | `/api/integrations/subscriptions` | Detected repeating charges (`status`, `includeLapsed`), with `totals`; see below |
 | PATCH | `/api/integrations/subscriptions/[id]` | Confirm, dismiss or restore one (`{status}`, needs `Idempotency-Key`) |
+| GET | `/api/integrations/tax?fy=2025` | Financial-year summary (April to March, user time zone): income, spending, saved, deductible spending by category, per month totals; see [api-contracts.md](api-contracts.md#tax) |
+| GET | `/api/integrations/tax/export?fy=2025` | The same as a CSV file |
+| GET, PUT, PATCH | `/api/integrations/tax/settings` | The deductible category list; PUT replaces it, PATCH takes `{add?, remove?}`; both need `Idempotency-Key` |
+| PATCH | `/api/integrations/tax/transactions/[id]` | `{deductible: true\|false\|null}` on one expense (needs `Idempotency-Key`) |
 | GET | `/api/integrations/net-worth` | What the user owns minus what they owe, the rows behind it, a daily trend and the change (`range`); see below |
 | GET, POST | `/api/integrations/net-worth/assets` | List and add manual assets (property, vehicle, gold, ...); POST needs `Idempotency-Key` |
 | PATCH, DELETE | `/api/integrations/net-worth/assets/[id]` | Edit or archive one (needs `Idempotency-Key`) |
@@ -588,3 +592,7 @@ A credit card can carry one reward rule. `PUT /api/integrations/credit-cards/[ac
 - `highlights` is at most two plain sentences: the change on the week before (10% or more), how the daily limit held, no-spend days, the top category (30% or more of spending). An empty week says "No spending recorded this week."
 - `PATCH /weekly-review/settings` takes `enabled` (boolean) and/or `day` (whole number 0 to 6) and changes only what is sent.
 - Notification: with `enabled`, a notification (type `system`, `meta.kind` `weekly_review`, title "Your week in review") and push are created once per week, on the chosen weekday from 09:00 on the user's clock, for the last completed week. A week with no spending and no income sends nothing. The job runs every 30 minutes from `server.ts`; on Vercel call `GET /api/cron/weekly-review` with `Authorization: Bearer $CRON_SECRET` from a scheduler every 30 minutes (safe to call often).
+
+## Export and import
+
+`GET /api/integrations/export/transactions` returns the transactions as a CSV file (see [api-contracts.md](api-contracts.md#export-and-import-integrations-only)). `POST /api/integrations/import/preview` reads a CSV (a bank statement or an earlier export) and answers what it would add without writing; `POST /api/integrations/import/commit` writes it (needs `Idempotency-Key`). Imported rows have `source: import`, leave the account balance alone unless `adjustBalance` is true, and rows that match one already in the account (same day, type and amount) are skipped unless `includeDuplicates` is true. Dates that read two ways (`03/04/2026`) need an explicit `dateOrder` on commit. Transfers are neither exported nor imported. Limits: 1 MB, 500 rows and 50 columns per file; an export is cut at 20,000 rows (`X-Export-Truncated`). There is no PDF output: the server has no PDF library and a PDF adds nothing the app cannot make from the CSV.

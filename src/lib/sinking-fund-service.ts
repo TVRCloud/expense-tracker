@@ -3,6 +3,7 @@ import connectDB from "@/lib/mongodb";
 import SinkingFund from "@/models/SinkingFund";
 import Notification from "@/models/Notification";
 import logger from "@/lib/logger";
+import { lockBaseCurrency } from "@/lib/base-currency";
 
 // Sinking funds: money put aside each month for a cost with a due date.
 // Shared by the browser routes (/api/sinking-funds) and the integration
@@ -195,6 +196,7 @@ export type CreateSinkingFundInput = z.infer<typeof sinkingFundCreateSchema> & {
 export async function createSinkingFund(input: CreateSinkingFundInput, now: Date = new Date()) {
   const { userId, dueDate, ...rest } = input;
   await connectDB();
+  await lockBaseCurrency(userId);
   const reached = rest.savedAmount >= rest.targetAmount;
   const doc = await SinkingFund.create({
     ...rest,

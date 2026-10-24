@@ -51,6 +51,13 @@ export const tagListSchema = z
     }
   });
 
+/** Tags from outside (a CSV file): cleaned, link tags dropped, at most MAX_TAGS. */
+export function userTagsOnly(tags: readonly string[]): string[] {
+  return normaliseTags(tags)
+    .filter((t) => t.length <= MAX_TAG_LENGTH && !isReservedTag(t))
+    .slice(0, MAX_TAGS);
+}
+
 /** A user's edit of the tags: their list plus every server tag already on the row. */
 export function mergeUserTags(existing: readonly unknown[] | undefined, userTags: readonly string[]): string[] {
   const kept = (existing ?? []).filter((t): t is string => typeof t === "string" && isReservedTag(t));

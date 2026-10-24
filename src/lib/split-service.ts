@@ -54,6 +54,8 @@ type Row = {
   recurringId?: unknown;
   isRecurring?: boolean;
   splitGroupId?: Types.ObjectId;
+  originalCurrency?: string | null;
+  deductible?: boolean | null;
   attachments?: string[];
 };
 
@@ -165,6 +167,9 @@ export async function replaceSplits(input: {
       }
       for (const r of rows) {
         if (r.type !== "expense") throw new TransactionServiceError("INVALID_SPLIT", "Only expenses can be split");
+        if (r.originalCurrency) {
+          throw new TransactionServiceError("INVALID_SPLIT", "Split transactions must be in the base currency");
+        }
         if (r.isRecurring || r.recurringId) {
           throw new TransactionServiceError("INVALID_SPLIT", "Recurring payments can't be split");
         }
@@ -224,6 +229,8 @@ export async function replaceSplits(input: {
           currency: base.currency,
           subcategory: base.subcategory,
           note: base.note,
+          // The tax helper's per-row choice carries over to the new lines.
+          ...(typeof base.deductible === "boolean" ? { deductible: base.deductible } : {}),
           date: base.date,
           // Link tags (loan:, repayment:, credit_statement:) belong to one row; never copied.
           tags: (base.tags ?? []).filter((t) => !isReservedTag(t)),

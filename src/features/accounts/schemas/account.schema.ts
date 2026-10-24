@@ -1,11 +1,13 @@
 import { z } from "zod";
+import { isSupportedCurrency } from "@/lib/currency";
+import { MAX_MINOR_AMOUNT } from "@/lib/currency";
 
 // Single source of truth for account-create validation — imported by both
 // the client form (AccountsClient.tsx, via react-hook-form) and the server
 // route (src/app/api/accounts/route.ts), so client and server enforce
 // identical rules.
 export const creditMetaSchema = z.object({
-  creditLimit: z.number().int().positive().optional(),
+  creditLimit: z.number().int().positive().max(MAX_MINOR_AMOUNT).optional(),
   billingCycleDay: z.number().int().min(1).max(31).optional(),
   paymentDueDay: z.number().int().min(1).max(31).optional(),
   apr: z.number().min(0).max(100).optional(),
@@ -18,8 +20,8 @@ export const creditMetaSchema = z.object({
 export const accountCreateSchema = z.object({
   name: z.string().min(1, "Name your account").max(100),
   type: z.enum(["cash", "bank", "credit_card", "savings", "investment", "wallet"]),
-  balance: z.number().int().default(0),
-  currency: z.string().default("INR"),
+  balance: z.number().int().min(-MAX_MINOR_AMOUNT).max(MAX_MINOR_AMOUNT).default(0),
+  currency: z.string().refine(isSupportedCurrency, "Unsupported currency").default("INR"),
   color: z.string().optional(),
   icon: z.string().optional(),
   creditMeta: creditMetaSchema.optional(),

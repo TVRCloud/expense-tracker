@@ -8,6 +8,10 @@ const UserSchema = new Schema(
     role: { type: String, enum: ["user", "admin"], default: "user" },
     avatar: { type: String },
     currency: { type: String, default: "INR" },
+    // Set the first time a money row (transaction, balance, budget, goal, loan,
+    // fund, asset, limit) is written: from then on the base currency cannot
+    // change (src/lib/base-currency.ts). Absent on accounts that never had one.
+    baseLocked: { type: Boolean },
     isActive: { type: Boolean, default: true },
     deletedAt: { type: Date },
     // Original address of a self-deleted account; `email` itself is rewritten
@@ -33,6 +37,11 @@ const UserSchema = new Schema(
       weeklyReview: {
         enabled: { type: Boolean, default: false },
         day: { type: Number, default: 1, min: 0, max: 6 },
+      },
+      // Tax helper (src/lib/tax-settings.ts): lower-case category names whose
+      // spending counts as deductible in the financial-year summary.
+      tax: {
+        deductibleCategories: [{ type: String }],
       },
     },
     passwordResetToken: { type: String },
