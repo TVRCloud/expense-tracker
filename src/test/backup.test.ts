@@ -1167,15 +1167,136 @@ describe("encrypted backup and restore", () => {
       expect(await Account.countDocuments({ user: fresh })).toBe(1);
     });
 
-    it("a file with no base currency (older files) is INR", async () => {
-      const usd = await newUser("usd-key-for-backup-test-5", "USD");
+    it("an older file (no base recorded) is never taken as INR for another base, and never sets the base", async () => {
+      const { default: User } = await import("@/models/User");
       const { default: Account } = await import("@/models/Account");
-      await Account.create({ user: usd, name: "US bank", type: "bank", balance: 5000 });
       const old = await craftFile({ version: 1 }, { accounts: [{ id: oidHex(), name: "Old", type: "bank", balance: 5 }] });
-      const res = await restore({ passphrase: PASS, backup: old }, { key: "usd-key-for-backup-test-5" });
+
+      // a USD person with money data, and a USD person with none: both refused, base untouched
+      const withData = await newUser("usd-key-for-backup-test-5", "USD");
+      await Account.create({ user: withData, name: "US bank", type: "bank", balance: 5000 });
+      const empty = await newUser("usd-key-for-backup-test-6", "USD");
+      for (const [key, who] of [["usd-key-for-backup-test-5", withData], ["usd-key-for-backup-test-6", empty]] as const) {
+        for (const dryRun of [true, false]) {
+          const res = await restore({ passphrase: PASS, backup: old, dryRun }, { key, idem: dryRun ? null : `old-${who}` });
+          expect(res.status).toBe(400);
+          expect((await res.json()).error.code).toBe("BASE_CURRENCY_UNKNOWN");
+        }
+      }
+      const user = (await User.findById(empty).lean<{ preferences?: { currency?: string }; baseLocked?: boolean }>())!;
+      expect(user.preferences?.currency).toBe("USD");
+      expect(user.baseLocked).not.toBe(true);
+      expect(await Account.countDocuments({ user: empty })).toBe(0);
+
+      // an INR person restores it, with a warning, and the base is not set from the file
+      const res = await restore({ passphrase: PASS, backup: old });
+      expect(res.status).toBe(200);
+      const body = (await res.json()).data;
+      expect(body.warnings.join(" ")).toContain("did not record its currency");
+      expect(body.baseCurrency).toEqual({ inBackup: null, current: "INR", willSet: false });
+    });
+
+    it("a version 2 file without a base currency is invalid", async () => {
+      const file = await craftFile({}, { accounts: [{ id: oidHex(), name: "X", type: "bank", balance: 1 }] });
+      const res = await restore({ passphrase: PASS, backup: file });
       expect(res.status).toBe(400);
-      expect((await res.json()).error.code).toBe("BASE_CURRENCY_MISMATCH");
-      expect((await restore({ passphrase: PASS, backup: old })).status).toBe(200); // INR user
+      expect((await res.json()).error.reason).toBe("invalid");
+    });
+
+    it("checks the money fields: currencies, exponent, an all-or-none foreign group, and the row currency", async () => {
+      const acct = oidHex();
+      const tx = (over: Record<string, unknown>) => ({
+        id: oidHex(), account: acct, type: "expense", amount: 8350, category: "x", date: new Date().toISOString(), ...over,
+      });
+      const foreign = { originalAmount: 1000, originalCurrency: "USD", originalExponent: 2, rate: 83.5 };
+      // straight through the schema and the restore checks (no key derivation, so it is quick)
+      const status = async (t: Record<string, unknown>) => {
+        const { parsePayload, restoreBackup } = await import("@/lib/backup-service");
+        try {
+          const payload = parsePayload({
+            app: "expense-tracker", version: 2, createdAt: new Date().toISOString(), baseCurrency: "INR",
+            data: { accounts: [{ id: acct, name: "A", type: "bank", balance: 0 }], transactions: [t] },
+          });
+          await restoreBackup(a, payload, { dryRun: true });
+          return 200;
+        } catch {
+          return 400;
+        }
+      };
+
+      expect(await status(tx({ ...foreign }))).toBe(200); // the good case
+      expect(await status(tx({ ...foreign, originalCurrency: "XXX" }))).toBe(400); // unknown code
+      expect(await status(tx({ ...foreign, originalExponent: 3 }))).toBe(400); // USD has 2 digits
+      expect(await status(tx({ ...foreign, originalCurrency: "JPY" }))).toBe(400); // JPY has 0
+      expect(await status(tx({ ...foreign, originalAmount: 0 }))).toBe(400);
+      expect(await status(tx({ originalAmount: 1000, rate: 83.5, originalExponent: 2 }))).toBe(400); // no currency
+      expect(await status(tx({ originalCurrency: "USD" }))).toBe(400); // currency alone
+      expect(await status(tx({ ...foreign, rate: undefined }))).toBe(400); // no rate
+      expect(await status(tx({ rateSource: "provider" }))).toBe(400); // a rate source with no foreign amount
+      expect(await status(tx({ currency: "ZZZ" }))).toBe(400); // unknown row currency
+      expect(await status(tx({ currency: "USD" }))).toBe(400); // not the file's base
+      expect(await status(tx({ currency: "INR" }))).toBe(200);
+      expect(await status(tx({ ...foreign, rateDate: new Date().toISOString(), rateSource: "provider" }))).toBe(200);
+      expect(await status(tx({ ...foreign, rateSource: "client" }))).toBe(200); // a client rate has no date
+    });
+
+    it("labels restored rows with the file's base, not the model default", async () => {
+      const usd = await newUser("usd-key-for-backup-test-7", "USD");
+      const { default: Account } = await import("@/models/Account");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const { default: Budget } = await import("@/models/Budget");
+      const acct = await Account.create({ user: usd, name: "US", type: "bank", balance: 10 });
+      await Transaction.create({ user: usd, account: acct._id, type: "expense", amount: 5, category: "x", date: new Date(), currency: "INR" }); // a writer left the default
+      await Budget.create({ user: usd, category: "x", month: 3, year: 2026, limitAmount: 100 });
+      const { data } = await (await exportBackup(PASS, "usd-key-for-backup-test-7")).json();
+      const fresh = await newUser("usd-key-for-backup-test-8");
+      expect((await restore({ passphrase: PASS, backup: data.backup }, { key: "usd-key-for-backup-test-8" })).status).toBe(200);
+      expect((await Transaction.findOne({ user: fresh }).lean())!.currency).toBe("USD");
+      expect((await Budget.findOne({ user: fresh }).lean())!.currency).toBe("USD");
+      expect((await Account.findOne({ user: fresh }).lean())!.currency).toBe("INR"); // an account's own label is kept
+    });
+
+    it("a file with only settings sets and locks nothing", async () => {
+      const { default: User } = await import("@/models/User");
+      const fresh = await newUser("fresh-key-for-backup-test-9");
+      const file = await craftFile({ baseCurrency: "USD", tax: { deductibleCategories: ["health"] } }, {});
+      const res = await restore({ passphrase: PASS, backup: file }, { key: "fresh-key-for-backup-test-9" });
+      expect(res.status).toBe(200);
+      const body = (await res.json()).data;
+      expect(body.baseCurrency.willSet).toBe(false);
+      const user = (await User.findById(fresh).lean<{ preferences?: { currency?: string; tax?: { deductibleCategories?: string[] } }; baseLocked?: boolean }>())!;
+      expect(user.preferences?.currency).toBe("INR");
+      expect(user.baseLocked).not.toBe(true);
+      expect(user.preferences?.tax?.deductibleCategories).toEqual(["health"]);
+    });
+
+    it("a dry run leaves the deductible categories unwritten, and a re-run with the same list says nothing", async () => {
+      const { default: User } = await import("@/models/User");
+      const file = await craftFile({ baseCurrency: "INR", tax: { deductibleCategories: ["Health", "travel"] } }, {});
+      const dry = await restore({ passphrase: PASS, backup: file, dryRun: true }, { idem: null });
+      expect((await dry.json()).data.warnings.join(" ")).toContain("will be restored");
+      const unset = (await User.findById(a).lean<{ preferences?: { tax?: { deductibleCategories?: string[] } } }>())!;
+      expect(unset.preferences?.tax?.deductibleCategories ?? []).toEqual([]);
+
+      const real = await restore({ passphrase: PASS, backup: file });
+      expect((await real.json()).data.warnings.join(" ")).toContain("were restored");
+      const again = await restore({ passphrase: PASS, backup: file }, { idem: "tax-again" });
+      expect((await again.json()).data.warnings.join(" ")).not.toContain("deductible");
+      // an explicit null (not just a missing field) counts as unset
+      await User.updateOne({ _id: b }, { $set: { "preferences.tax.deductibleCategories": null } });
+      const nulled = await restore({ passphrase: PASS, backup: file }, { key: KEY_B });
+      expect((await nulled.json()).data.warnings.join(" ")).toContain("were restored");
+    });
+
+    it("counts only the receipts on rows that are in the file", async () => {
+      const ids = await seed(a);
+      const { default: Transaction } = await import("@/models/Transaction");
+      await Transaction.create({ user: a, account: ids.bank, type: "expense", amount: 5, category: "Kept", date: new Date(), attachments: [oidHex()] });
+      // a row the export cannot read (an amount out of range) is left out, and so are its receipts
+      await Transaction.create({ user: a, account: ids.bank, type: "expense", amount: 1e20, category: "Bad", date: new Date(), attachments: [oidHex(), oidHex(), oidHex()] });
+      const { data } = await (await exportBackup()).json();
+      expect(data.omitted).toEqual({ transactions: 1 });
+      expect(data.warnings.join(" ")).toContain("1 receipt is not included");
     });
 
     it("an older file with link-style attachments still restores, without them", async () => {
@@ -1205,23 +1326,31 @@ describe("encrypted backup and restore", () => {
         await SubscriptionDecision.countDocuments({ user: b }),
         await Account.countDocuments({ user: b }),
       ];
-      // two runs at the same time under different keys: either may fail, none may duplicate
+      // two runs at the same time under different keys: either may fail, and a clean run after them leaves exactly one of each
       await Promise.all([
         restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B, idem: "race-1" }),
         restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B, idem: "race-2" }),
       ]);
-      const [bud, rul, dec, acc] = await counts();
-      expect(bud).toBeLessThanOrEqual(1);
-      expect(rul).toBeLessThanOrEqual(1);
-      expect(dec).toBeLessThanOrEqual(1);
-      expect(acc).toBeLessThanOrEqual(3);
-
       // then a clean run finishes the job and a further run adds nothing
       expect((await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B, idem: "race-3" })).status).toBe(200);
       expect(await counts()).toEqual([1, 1, 1, 3]);
       const again = (await (await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B, idem: "race-4" })).json()).data;
       for (const k of ["budgets", "rules", "subscriptionDecisions"]) expect(again.counts[k].toCreate).toBe(0);
       expect(await counts()).toEqual([1, 1, 1, 3]);
+    });
+
+    it("a budget in the trash is not brought back or copied by a re-run, and the report says so", async () => {
+      await seed(a);
+      const { data } = await (await exportBackup()).json();
+      const { default: Budget } = await import("@/models/Budget");
+      expect((await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B, idem: "tr-1" })).status).toBe(200);
+      await Budget.updateOne({ user: b }, { $set: { isDeleted: true, deletedAt: new Date() } });
+      const again = await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B, idem: "tr-2" });
+      const body = (await again.json()).data;
+      expect(body.counts.budgets).toEqual({ inBackup: 1, toCreate: 0, existing: 1 });
+      expect(body.warnings.join(" ")).toContain("already exist in your trash");
+      expect(await Budget.countDocuments({ user: b })).toBe(1);
+      expect(await Budget.countDocuments({ user: b, isDeleted: { $ne: true } })).toBe(0);
     });
 
     it("the restore route has a duration limit above the gate's job limit", async () => {
