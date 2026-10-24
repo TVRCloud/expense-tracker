@@ -68,6 +68,9 @@ export async function DELETE() {
     await connectDB();
     const existing = await User.findById(user.id).select("email").lean<{ email: string }>();
     if (!existing) return NextResponse.json({ error: "User not found" }, { status: 404 });
+    // Private receipt images go for good. First, while the account is still active: if this
+    // fails the request fails and nothing is locked, so it can simply be tried again.
+    await deleteAllReceiptsOfUser(user.id);
     // Tombstone the email so the same address can register a fresh account.
     await User.findByIdAndUpdate(user.id, {
       $set: {
@@ -83,9 +86,13 @@ export async function DELETE() {
     await Session.updateMany({ user: user.id, isActive: true }, { $set: { isActive: false } });
     forgetUserSessions(user.id);
     forgetUserKeys(user.id);
-    // The account is only deactivated (its rows stay), but the private receipt images go for
-    // good. Last, and safe to run again: the account is already locked, so nothing can add more.
-    await deleteAllReceiptsOfUser(user.id);
+    // Once more, last: catches a receipt added by a request that was already running. The account
+    // is locked by now, so a failure here is retried once and then only logged.
+    try {
+      await deleteAllReceiptsOfUser(user.id);
+    } catch {
+      await deleteAllReceiptsOfUser(user.id).catch((err) => logger.error({ err, userId: user.id }, "final receipt purge failed"));
+    }
 
     return NextResponse.json({ data: { message: "Account deleted" } });
   } catch (err) {

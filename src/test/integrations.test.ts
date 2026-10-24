@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import mongoose from "mongoose";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { MongoMemoryReplSet } from "mongodb-memory-server";
 import { NextRequest } from "next/server";
 
 // Redis is optional in this app (returns null when REDIS_URL is unset) — the
@@ -27,10 +27,11 @@ vi.mock("@/lib/auth-guard", async () => {
 // Raw captured SMS text is encrypted at rest (src/lib/crypto.ts).
 process.env.CAPTURE_ENCRYPTION_KEY = "test-capture-encryption-key-at-least-32-chars";
 
-let mongod: MongoMemoryServer;
+// A one-node replica set, like production (realtime needs one): split edits use a database transaction.
+let mongod: MongoMemoryReplSet;
 
 beforeAll(async () => {
-  mongod = await MongoMemoryServer.create();
+  mongod = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
   // Set before any test imports/calls connectDB() (src/lib/mongodb.ts), which
   // lazily connects using this env var and caches the connection globally.
   process.env.MONGODB_URI = mongod.getUri();
@@ -6978,33 +6979,19 @@ describe("tags, split edits and receipts", () => {
       expect((await live(groupId)).map((r) => r.description)).toEqual(["bread", "soap", "Mart"]);
     });
 
-    it("two edits at once cannot both apply: one wins, the other is a 409, the lines still add up", async () => {
+    it("two edits at once apply one after the other and the lines always add up", async () => {
       const { id, groupId } = await splitOf(["a", "b"]);
-      const mk = (cats: string[]) => cats.map((c, i) => ({ category: c, amount: 2000 / cats.length + (i === 0 ? 0 : 0) }));
+      const mk = (cats: string[]) => cats.map((c) => ({ category: c, amount: 2000 / cats.length }));
       const [r1, r2] = await Promise.all([
         putSplits(id, mk(["x", "y"])),
         putSplits(id, mk(["p", "q", "r", "s"])),
       ]);
-      expect([r1.status, r2.status].sort()).toEqual([200, 409]);
+      expect([r1.status, r2.status]).toEqual([200, 200]);
       const rows = await live(groupId);
       expect(rows.reduce((n, r) => n + r.amount, 0)).toBe(2000);
-      const loser = r1.status === 409 ? r1 : r2;
-      expect((await loser.json()).error.code).toBe("CONFLICT");
-    });
-
-    it("a clash is not stored under the Idempotency-Key, so the same key works on a retry", async () => {
-      const { id } = await splitOf(["a", "b"]);
-      const lines = [{ category: "x", amount: 1000 }, { category: "y", amount: 1000 }];
-      const { default: Transaction } = await import("@/models/Transaction");
-      const first = await Transaction.findOne({ splitGroupId: { $exists: true } }).sort({ _id: 1 }).lean<{ splitRev?: number }>();
-      // Simulate another edit landing between this edit's read and write.
-      const spy = (await import("vitest")).vi.spyOn(Transaction, "updateOne").mockResolvedValueOnce({ modifiedCount: 0 } as never);
-      const clash = await putSplits(id, lines, { "idempotency-key": "retry-me" });
-      spy.mockRestore();
-      expect(clash.status).toBe(409);
-      expect(first).toBeTruthy();
-      const again = await putSplits(id, lines, { "idempotency-key": "retry-me" });
-      expect(again.status).toBe(200);
+      expect([2, 4]).toContain(rows.length);
+      // Exactly one of the two edits is what is left, never a mix.
+      expect(rows.map((r) => r.amount)).toEqual(rows.length === 2 ? [1000, 1000] : [500, 500, 500, 500]);
     });
 
     it("refuses to merge lines when their receipts would not fit on the first line, and changes nothing", async () => {
@@ -7162,11 +7149,10 @@ describe("tags, split edits and receipts", () => {
       const spy = vi.spyOn(Transaction, "insertMany").mockRejectedValueOnce(new Error("boom"));
       await expect((await import("@/lib/split-service")).replaceSplits({ userId, transactionId: id, splits: lines, actor })).rejects.toThrow("boom");
       spy.mockRestore();
-      const rows = await Transaction.find({ user: userId, isDeleted: { $ne: true } }).lean<{ category: string; amount: number; splitGroupId?: unknown; splitBusyUntil?: unknown; description?: string }[]>();
+      const rows = await Transaction.find({ user: userId, isDeleted: { $ne: true } }).lean<{ category: string; amount: number; splitGroupId?: unknown; description?: string }[]>();
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ category: "food", amount: 9000, description: "Mart" });
       expect(rows[0].splitGroupId).toBeUndefined();
-      expect(rows[0].splitBusyUntil).toBeUndefined();
       expect((await putSplits(id, lines)).status).toBe(200);
     });
 
@@ -7189,18 +7175,6 @@ describe("tags, split edits and receipts", () => {
       expect((await Receipt.findById(r.id).lean<{ transaction: { toString(): string } }>())!.transaction.toString()).toBe(before[2]._id.toString());
       expect((await putSplits(id, merged)).status).toBe(200);
       expect((await Transaction.findById(before[0]._id).lean<{ attachments: string[] }>())!.attachments).toEqual([r.id]);
-    });
-
-    it("an edit that starts while another is half-written is refused, and a stale marker is ignored", async () => {
-      const { default: Transaction } = await import("@/models/Transaction");
-      const { id, groupId } = await splitOf(["a", "b"]);
-      const rows = await live(groupId);
-      const lines = [{ category: "x", amount: 1000 }, { category: "y", amount: 1000 }];
-      await Transaction.updateOne({ _id: rows[0]._id }, { $set: { splitBusyUntil: new Date(Date.now() + 60_000) } });
-      expect((await putSplits(id, lines)).status).toBe(409);
-      await Transaction.updateOne({ _id: rows[0]._id }, { $set: { splitBusyUntil: new Date(Date.now() - 1000) } });
-      expect((await putSplits(id, lines)).status).toBe(200);
-      expect((await Transaction.findById(rows[0]._id).lean<{ splitBusyUntil?: unknown }>())!.splitBusyUntil).toBeUndefined();
     });
 
     it("a receipt whose link step fails is taken back out", async () => {
@@ -7239,6 +7213,112 @@ describe("tags, split edits and receipts", () => {
       await addTxn({ tags: parsed.tags });
       const list = await (await GET(req("transactions?tag=WORK%20%20%20lunch"), undefined as never)).json();
       expect(list.data.total).toBe(1);
+    });
+
+    it("a clone insert that half-works and then fails leaves no clones behind", async () => {
+      const { vi } = await import("vitest");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const t = await addTxn({ amount: 9000, category: "food" });
+      const real = Transaction.insertMany.bind(Transaction);
+      const spy = vi.spyOn(Transaction, "insertMany").mockImplementationOnce((async (...args: unknown[]) => {
+        await (real as (...a: unknown[]) => Promise<unknown>)(...args);
+        throw new Error("boom");
+      }) as never);
+      const lines = [{ category: "a", amount: 3000 }, { category: "b", amount: 3000 }, { category: "c", amount: 3000 }];
+      await expect((await import("@/lib/split-service")).replaceSplits({ userId, transactionId: t._id.toString(), splits: lines, actor })).rejects.toThrow("boom");
+      spy.mockRestore();
+      const rows = await Transaction.find({ user: userId }).lean<{ category: string; amount: number; splitGroupId?: unknown }[]>();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ category: "food", amount: 9000 });
+      expect(rows[0].splitGroupId).toBeUndefined();
+    });
+
+    it("a split edit writes its ledger blocks once, after it commits, and none when it fails", async () => {
+      const { vi } = await import("vitest");
+      const { default: LedgerBlock } = await import("@/models/LedgerBlock");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const t = await addTxn({ amount: 9000 });
+      const lines = [{ category: "a", amount: 4000 }, { category: "b", amount: 5000 }];
+      const spy = vi.spyOn(Transaction, "insertMany").mockRejectedValueOnce(new Error("boom"));
+      await expect((await import("@/lib/split-service")).replaceSplits({ userId, transactionId: t._id.toString(), splits: lines, actor })).rejects.toThrow("boom");
+      spy.mockRestore();
+      expect(await LedgerBlock.countDocuments({ user: userId })).toBe(0);
+      expect((await putSplits(t._id.toString(), lines)).status).toBe(200);
+      expect(await LedgerBlock.countDocuments({ user: userId, scope: "transaction" })).toBe(2);
+    });
+
+    it("the sweep leaves a receipt that was moved to another line while it was deciding", async () => {
+      const { vi } = await import("vitest");
+      const { sweepOrphanReceipts } = await import("@/lib/receipt-service");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const from = await addTxn();
+      const to = await addTxn();
+      const old = new Date(Date.now() - 3600_000);
+      const r = await Receipt.create({
+        user: userId, transaction: from._id, contentType: "image/jpeg", size: 10,
+        iv: Buffer.alloc(12), tag: Buffer.alloc(16), data: Buffer.alloc(10),
+      });
+      await Receipt.collection.updateOne({ _id: r._id }, { $set: { createdAt: old } });
+      // Old and not listed: an orphan. Just before it is deleted, a split edit moves it.
+      const realDelete = Receipt.deleteOne.bind(Receipt);
+      const spy = vi.spyOn(Receipt, "deleteOne").mockImplementationOnce(((filter: unknown) => {
+        return (async () => {
+          await Receipt.collection.updateOne({ _id: r._id }, { $set: { transaction: to._id } });
+          return (realDelete as (f: unknown) => Promise<unknown>)(filter);
+        })();
+      }) as never);
+      await sweepOrphanReceipts(userId);
+      spy.mockRestore();
+      expect(await Receipt.countDocuments({ _id: r._id, transaction: to._id })).toBe(1);
+    });
+
+    it("the sweep keeps a fresh unlinked receipt for 10 minutes and removes it after", async () => {
+      const { sweepOrphanReceipts } = await import("@/lib/receipt-service");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const t = await addTxn();
+      const mk = async (ageMs: number) => {
+        const r = await Receipt.create({
+          user: userId, transaction: t._id, contentType: "image/jpeg", size: 10,
+          iv: Buffer.alloc(12), tag: Buffer.alloc(16), data: Buffer.alloc(10),
+        });
+        await Receipt.collection.updateOne({ _id: r._id }, { $set: { createdAt: new Date(Date.now() - ageMs) } });
+        return r._id;
+      };
+      const fresh = await mk(60_000);
+      const stale = await mk(11 * 60_000);
+      expect(await sweepOrphanReceipts(userId)).toBe(1);
+      expect(await Receipt.countDocuments({ _id: fresh })).toBe(1);
+      expect(await Receipt.countDocuments({ _id: stale })).toBe(0);
+    });
+
+    it("self-delete purges receipts before the account is locked, and fails without locking if it cannot", async () => {
+      const { vi } = await import("vitest");
+      const { addReceipt } = await import("@/lib/receipt-service");
+      const { default: Receipt } = await import("@/models/Receipt");
+      const { default: User } = await import("@/models/User");
+      const { DELETE } = await import("@/app/api/me/route");
+      const t = await addTxn();
+      await addReceipt({ userId, transactionId: t._id.toString(), bytes: JPEG });
+      sessionUser.current = { id: userId, name: "TR User", email: "tr@x.com", role: "user" };
+
+      const fail = vi.spyOn(Receipt, "deleteMany").mockRejectedValue(new Error("boom"));
+      expect((await DELETE()).status).toBe(500);
+      fail.mockRestore();
+      expect((await User.findById(userId).lean<{ isActive: boolean }>())!.isActive).toBe(true);
+      expect(await Receipt.countDocuments({ user: userId })).toBe(1);
+
+      // The first purge works, the final one keeps failing: still deleted, only logged.
+      const real = Receipt.deleteMany.bind(Receipt);
+      let calls = 0;
+      const flaky = vi.spyOn(Receipt, "deleteMany").mockImplementation(((...a: unknown[]) => {
+        calls += 1;
+        return calls === 1 ? (real as (...x: unknown[]) => unknown)(...a) : Promise.reject(new Error("boom"));
+      }) as never);
+      expect((await DELETE()).status).toBe(200);
+      flaky.mockRestore();
+      sessionUser.current = null;
+      expect((await User.findById(userId).lean<{ isActive: boolean }>())!.isActive).toBe(false);
+      expect(await Receipt.countDocuments({ user: userId })).toBe(0);
     });
 
     it("the browser split route answers 400 to a body that is not JSON", async () => {

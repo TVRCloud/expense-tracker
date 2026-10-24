@@ -77,8 +77,6 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `isRecurring` | Boolean | |
 | `recurringId`, `recurrence*`, `installmentIndex`, `installmentStatus`, `paidAt` | | recurring series fields |
 | `splitGroupId` | ObjectId | shared by split-purchase siblings (2 to 20 lines, amounts add up to the purchase) |
-| `splitRev` | Number | counter on a split's first line, raised by each edit of its lines; a second edit made at the same moment fails the compare and is refused |
-| `splitBusyUntil` | Date | set while an edit of the lines runs, stale after 30 s; unset otherwise |
 | `attachments` | [String] | ids of the `receipts` on this row, at most 5 |
 | `source` | String | `manual\|sms\|notification\|n8n\|recurring\|import`, default `manual` |
 | `sourceCapture` | ObjectId | ref: CapturedMessage, the message whose values are in use |

@@ -162,8 +162,20 @@ export async function sweepOrphanReceipts(userId: string): Promise<number> {
       if (!listed) return true;
       return !listed.has(r._id.toString()) && new Date(r.createdAt).getTime() < cutoff;
     });
-    if (orphans.length) await Receipt.deleteMany({ _id: { $in: orphans.map((r) => r._id) }, user: userId });
-    return orphans.length;
+    // One at a time, each checked again right before it goes: a receipt moved to another line
+    // (a split edit) since the reads above no longer matches `transaction`, and a transaction
+    // that came alive or now lists it is left alone.
+    let removed = 0;
+    for (const r of orphans) {
+      const parent = await Transaction.findOne({ _id: r.transaction, user: userId, ...LIVE_PARENT })
+        .select("attachments")
+        .lean<{ attachments?: string[] }>();
+      const stillOrphan = !parent || (!(parent.attachments ?? []).includes(r._id.toString()) && new Date(r.createdAt).getTime() < cutoff);
+      if (!stillOrphan) continue;
+      const res = await Receipt.deleteOne({ _id: r._id, user: userId, transaction: r.transaction });
+      removed += res.deletedCount ?? 0;
+    }
+    return removed;
   } catch (err) {
     logger.error({ err, userId }, "receipt sweep failed");
     return 0;

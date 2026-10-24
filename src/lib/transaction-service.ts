@@ -126,7 +126,6 @@ export type TransactionServiceErrorCode =
   | "TRANSACTION_LOCKED"
   | "INSTALLMENT_NOT_FOUND"
   | "INVALID_SPLIT"
-  | "SPLIT_CONFLICT"
   | "TOO_MANY_RECEIPTS";
 
 export class TransactionServiceError extends Error {

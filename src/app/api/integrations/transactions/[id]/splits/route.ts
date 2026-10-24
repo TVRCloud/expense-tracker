@@ -9,7 +9,7 @@ type Ctx = { params: Promise<{ id: string }> };
 
 function errorCode(code: string) {
   if (code === "TRANSACTION_NOT_FOUND") return "NOT_FOUND" as const;
-  if (code === "TRANSACTION_LOCKED" || code === "SPLIT_CONFLICT" || code === "TOO_MANY_RECEIPTS") return "CONFLICT" as const;
+  if (code === "TRANSACTION_LOCKED" || code === "TOO_MANY_RECEIPTS") return "CONFLICT" as const;
   return "VALIDATION_ERROR" as const;
 }
 
@@ -38,33 +38,24 @@ export const PUT = withIntegrationRoute("transactions", async ({ req, user, requ
     return integrationError("VALIDATION_ERROR", "Split data is invalid", requestId, { details: parsed.error.flatten() });
   }
 
-  let outcome;
-  try {
-    outcome = await withIdempotency({
-      userId: user.id,
-      endpoint: "integrations:transactions:splits:PUT",
-      key,
-      // Flat on purpose: the fingerprint only reads top-level keys, so the lines go in as one string.
-      body: { id, splits: JSON.stringify(parsed.data.splits) },
-      execute: async (): Promise<{ status: number; body: Record<string, unknown> }> => {
-        try {
-          const result = await replaceSplits({ userId: user.id, transactionId: id, splits: parsed.data.splits, actor: user });
-          return { status: 200, body: result };
-        } catch (err) {
-          // A clash with another edit is not stored under the key, so the same key can be tried again.
-          if (err instanceof TransactionServiceError && err.code !== "SPLIT_CONFLICT") {
-            return { status: 400, body: { errorCode: err.code, message: err.message } };
-          }
-          throw err;
+  const outcome = await withIdempotency({
+    userId: user.id,
+    endpoint: "integrations:transactions:splits:PUT",
+    key,
+    // Flat on purpose: the fingerprint only reads top-level keys, so the lines go in as one string.
+    body: { id, splits: JSON.stringify(parsed.data.splits) },
+    execute: async (): Promise<{ status: number; body: Record<string, unknown> }> => {
+      try {
+        const result = await replaceSplits({ userId: user.id, transactionId: id, splits: parsed.data.splits, actor: user });
+        return { status: 200, body: result };
+      } catch (err) {
+        if (err instanceof TransactionServiceError) {
+          return { status: 400, body: { errorCode: err.code, message: err.message } };
         }
-      },
+        throw err;
+      }
+    },
     });
-  } catch (err) {
-    if (err instanceof TransactionServiceError && err.code === "SPLIT_CONFLICT") {
-      return integrationError("CONFLICT", err.message, requestId);
-    }
-    throw err;
-  }
   if (outcome.kind === "conflict") {
     return integrationError("IDEMPOTENCY_CONFLICT", conflictMessage(outcome.reason), requestId);
   }
