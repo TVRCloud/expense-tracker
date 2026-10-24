@@ -1,4 +1,4 @@
-import { Types } from "mongoose";
+import { type ClientSession, Types } from "mongoose";
 import { z } from "zod";
 import connectDB from "@/lib/mongodb";
 import Transaction from "@/models/Transaction";
@@ -13,6 +13,8 @@ import { computeInstallmentDates, OPEN_ENDED_WINDOW } from "@/lib/recurrence";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { ruleOverridesForTransaction } from "@/lib/rule-service";
 import logger from "@/lib/logger";
+import { isReservedTag, MAX_TAGS, mergeUserTags, normaliseTags, tagListSchema } from "@/lib/tags";
+import { deleteReceiptsOfTransaction } from "@/lib/receipt-service";
 import { getBaseState, lockBaseCurrency, type BaseState } from "@/lib/base-currency";
 import { convertMinor, CurrencyError, isSupportedCurrency, MAX_MINOR_AMOUNT, minorExponent } from "@/lib/currency";
 import { getRate, RateUnavailableError } from "@/lib/exchange-rate-service";
@@ -24,6 +26,14 @@ import { getRate, RateUnavailableError } from "@/lib/exchange-rate-service";
 // This preserves the app's existing (weaker) consistency model exactly: no
 // mongoose sessions/transactions are used anywhere in this codebase, so
 // mutations below remain sequential and non-atomic, same as before extraction.
+
+export const MAX_SPLIT_LINES = 20;
+
+export const splitLineSchema = z.object({
+  category: z.string().trim().min(1),
+  amount: z.number().int().positive().max(MAX_MINOR_AMOUNT),
+  description: z.string().optional(),
+});
 
 export const transactionCreateSchema = z
   .object({
@@ -46,7 +56,7 @@ export const transactionCreateSchema = z
     description: z.string().optional(),
     note: z.string().optional(),
     date: z.string(),
-    tags: z.array(z.string()).default([]),
+    tags: tagListSchema.default([]),
     transferToId: z.string().optional(),
     isRecurring: z.boolean().default(false),
     recurrenceFrequency: z.enum(["daily", "weekly", "monthly", "yearly"]).optional(),
@@ -57,11 +67,7 @@ export const transactionCreateSchema = z
     // Split-purchase lines — when present, `category` above is ignored and
     // one sibling Transaction document is created per split line instead
     // (see splitGroupId on the model). Sum of split amounts must equal `amount`.
-    splits: z.array(z.object({
-      category: z.string().min(1),
-      amount: z.number().int().positive().max(MAX_MINOR_AMOUNT),
-      description: z.string().optional(),
-    })).min(2).optional(),
+    splits: z.array(splitLineSchema).min(2).max(MAX_SPLIT_LINES).optional(),
   })
   .superRefine((data, ctx) => {
     if (!Types.ObjectId.isValid(data.accountId)) {
@@ -165,7 +171,9 @@ export type TransactionServiceErrorCode =
   | "CURRENCY_MISMATCH"
   | "TRANSACTION_NOT_FOUND"
   | "TRANSACTION_LOCKED"
-  | "INSTALLMENT_NOT_FOUND";
+  | "INSTALLMENT_NOT_FOUND"
+  | "INVALID_SPLIT"
+  | "TOO_MANY_RECEIPTS";
 
 export class TransactionServiceError extends Error {
   code: TransactionServiceErrorCode;
@@ -182,7 +190,7 @@ export const transactionUpdateSchema = z.object({
   note: z.string().optional(),
   category: z.string().optional(),
   subcategory: z.string().optional(),
-  tags: z.array(z.string()).optional(),
+  tags: tagListSchema.optional(),
   date: z.string().optional(),
 });
 
@@ -196,12 +204,12 @@ function hasRepaymentTag(tags?: unknown[]) {
   return (tags ?? []).some((tag) => typeof tag === "string" && tag.startsWith("repayment:"));
 }
 
-export async function getLinkedTransactionBlocker(userId: string, transactionId: string, tags?: unknown[]) {
+export async function getLinkedTransactionBlocker(userId: string, transactionId: string, tags?: unknown[], session?: ClientSession) {
   const linkedStatement = await CreditStatement.findOne({
     user: userId,
     paymentTransactionId: transactionId,
     isDeleted: { $ne: true },
-  }).select("_id").lean();
+  }).select("_id").session(session ?? null).lean();
   if (linkedStatement) return "This transaction is linked to a credit statement payment.";
   if (hasRepaymentTag(tags)) return "This transaction is linked to a loan repayment.";
   return null;
@@ -341,7 +349,8 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     if (overrides) {
       if (overrides.category) rest.category = overrides.category;
       if (overrides.description) rest.description = overrides.description;
-      if (overrides.tags) rest.tags = overrides.tags;
+      // A rule can only add plain tags, never the link tags the server owns.
+      if (overrides.tags) rest.tags = normaliseTags(overrides.tags).filter((t) => !isReservedTag(t)).slice(0, MAX_TAGS);
     }
   }
 
@@ -350,23 +359,26 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   // !rest.isRecurring, and splits summing to rest.amount when this is set)
   if (rest.splits) {
     const splitGroupId = new Types.ObjectId();
-    const accountBefore = account.toObject();
-    // Atomic $inc (not read-modify-write + save) so concurrent captures on
-    // the same account can't overwrite each other's balance change.
-    const accountAfter = await Account.findOneAndUpdate(
-      { _id: account._id, user: userId },
-      { $inc: { balance: -rest.amount } },
-      { new: true }
-    );
-    await appendLedgerBlock({
-      userId,
-      scope: "account",
-      entityId: account._id.toString(),
-      action: "update",
-      before: accountBefore,
-      after: accountAfter,
-      actor,
-    });
+    // An import of history (skipBalance) leaves the balance alone, as for a single row.
+    if (!skipBalance) {
+      const accountBefore = account.toObject();
+      // Atomic $inc (not read-modify-write + save) so concurrent captures on
+      // the same account can't overwrite each other's balance change.
+      const accountAfter = await Account.findOneAndUpdate(
+        { _id: account._id, user: userId },
+        { $inc: { balance: -rest.amount } },
+        { new: true }
+      );
+      await appendLedgerBlock({
+        userId,
+        scope: "account",
+        entityId: account._id.toString(),
+        action: "update",
+        before: accountBefore,
+        after: accountAfter,
+        actor,
+      });
+    }
 
     const { splits, category: _unusedCategory, ...sharedRest } = rest;
     const docs = splits.map((s) => ({
@@ -391,13 +403,16 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
       });
     }
     await invalidateStatsCache(userId, startDate);
-    for (const s of splits) {
-      void checkBudgetAlert(userId, s.category, s.amount, startDate);
+    // An import is history: no alerts and no round-up, as for a single row.
+    if (!quiet) {
+      for (const s of splits) {
+        void checkBudgetAlert(userId, s.category, s.amount, startDate);
+      }
+      void checkSpendLimitAlert(userId);
+      void applyRoundUp(userId, rest.amount, actor).catch((err) =>
+        logger.error({ err, userId }, "applyRoundUp failed")
+      );
     }
-    void checkSpendLimitAlert(userId);
-    void applyRoundUp(userId, rest.amount, actor).catch((err) =>
-      logger.error({ err, userId }, "applyRoundUp failed")
-    );
 
     logger.info({ userId, splitGroupId: splitGroupId.toString(), count: docs.length }, "Split transaction created");
     return { kind: "split", transaction: inserted[0], splitGroupId: splitGroupId.toString(), count: docs.length };
@@ -550,6 +565,8 @@ export async function updateTransaction(input: UpdateTransactionInput) {
   }
 
   const update: Record<string, unknown> = { ...rest };
+  // The server's own link tags stay on the row whatever the caller sends.
+  if (rest.tags) update.tags = mergeUserTags(existing.tags, rest.tags);
   if (rest.date) update.date = new Date(rest.date);
 
   const transaction = await Transaction.findOneAndUpdate(
@@ -676,6 +693,9 @@ export async function deleteTransaction(userId: string, transactionId: string, a
     actor,
   });
   await invalidateStatsCacheSingle(userId, new Date(txn.date));
+  // A receipt is private and has no meaning without its transaction. Done last: a failure here is
+  // logged and swept later (reads already hide receipts of a deleted row), never undoes the delete.
+  await deleteReceiptsOfTransaction(userId, transactionId);
 
   return deleted;
 }

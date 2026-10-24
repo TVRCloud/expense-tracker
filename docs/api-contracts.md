@@ -56,6 +56,7 @@ All monetary amounts are in **cents** (integers).
 - `category` — category string
 - `accountId` — filter by account
 - `includeIncomingTransfers=true` (integrations only) — with `accountId`, also list transfers that moved money into that account
+- `tag` — only rows with this tag (lower-cased before the match)
 - `search` — full-text search
 - `dateFrom` / `dateTo` — ISO date strings
 - `skip` / `limit` — pagination
@@ -73,6 +74,38 @@ All monetary amounts are in **cents** (integers).
   "transferToId": "string (transfer only)"
 }
 ```
+
+### Tags, split edits and receipts
+Added in Phase 6. Everything here is additive. Integration routes answer `{success, data, requestId}`; browser routes answer `{data}` or `{error}` and need the session.
+
+**Tags.** `tags` on create and `PATCH` are lower-cased, trimmed and de-duplicated. At most 10, each at most 40 characters, none with a colon or a semicolon (the server keeps `loan:`, `repayment:` and `credit_statement:` link tags itself; an edit never removes them). Too many, too long, a colon or a semicolon is 400. The CSV export joins tags with `;` and import splits the tags cell on `;` only, so a tag like `food, cafe` or `a|b` survives a round trip.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/integrations/transactions/tags`, `/api/transactions/tags` | `[{tag, count}]`, most used first, link tags, voided and deleted rows left out |
+| GET | `/api/integrations/transactions?tag=trip` | Same list, only rows with the tag |
+
+**Splits.** A split is one row per line sharing `splitGroupId` (create already took `splits`). Create now allows 2 to 20 lines and the integration create answers with `tags` and `splitGroupId` (null unless split). Lines are `{category, amount (positive whole paise), description?}` and must add up to the total.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/integrations/transactions/:id/splits`, `/api/transactions/:id/splits` | `{splitGroupId, total, lines: [{id, category, amount, description}]}` for any line's id; a plain transaction answers one line and `splitGroupId: null` |
+| PUT | `/api/integrations/transactions/:id/splits`, `/api/transactions/:id/splits` | Body `{splits: [...]}`. Replaces the lines (needs `Idempotency-Key` on the integration route); a plain expense becomes a split. Total never changes so no balance moves. 400 lines do not add up, fewer than 2 or more than 20, not an expense, recurring; 409 unreviewed capture, linked to a statement payment, a loan or a loan repayment, a refund is matched to it, or removing lines would leave more than 5 receipts on the first line; 404 not yours |
+
+The edit is one database transaction: a failure changes nothing, and two edits at once apply one after the other. If another change keeps getting in the way it answers 409 `CONFLICT` (browser: 409), not stored under the `Idempotency-Key`: send it again. On a standalone MongoDB (no replica set) it answers 500 `INTERNAL_ERROR` (browser: 501) with "This server needs a MongoDB replica set to edit split purchases." Business 400s are stored under the `Idempotency-Key` and replayed like every other write.
+
+Existing line ids and each line's own description are kept for lines that stay (a line without `description` keeps its old one; a new line gets the first line's); extra lines are new rows and never copy `loan:`, `repayment:`, `credit_statement:` or `loan_principal` tags; removed lines are soft-deleted and their receipts move to the first line.
+
+**Receipts.** A photo on a transaction (up to 5 per transaction, 3 MB each, 200 files and 150 MB per user). JPEG, PNG, WebP or HEIC, decided from the file's own bytes. Stored encrypted; no public URL.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/integrations/transactions/:id/receipts`, `/api/transactions/:id/receipts` | The request body is the raw image bytes (the `Content-Type` header is ignored). Integration route needs `Idempotency-Key`. 201 `{id, transactionId, contentType, size, createdAt}`. 400 empty or not an image of those four types, or over 3 MB (integration: `error.reason` is `TOO_LARGE` or `UNSUPPORTED_TYPE`; browser: 413 and 415); 404 not yours, deleted or voided; 409 five already or quota full (`error.reason` `TOO_MANY` or `QUOTA_EXCEEDED`) |
+| GET | `/api/integrations/transactions/:id/receipts`, `/api/transactions/:id/receipts` | `[{id, transactionId, contentType, size, createdAt}]`, oldest first, no image bytes |
+| GET | `/api/integrations/receipts/:id`, `/api/receipts/:id` | The image; 404 when the transaction is deleted, voided or not yours. `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff`, a `sandbox` CSP. Another user's id is 404 |
+| DELETE | `/api/integrations/receipts/:id` (needs `Idempotency-Key`), `/api/receipts/:id` | `{id, deleted: true}` |
+
+A transaction row lists its receipt ids in `attachments`. Deleting a transaction (also void, series cancel, loan delete) deletes its receipts for good, after the delete itself (tried twice, then logged). A receipt of a deleted or voided transaction cannot be read, does not count toward the quota and is swept the next time the user lists or adds a receipt. A receipt that is not listed by its transaction and is older than 10 minutes is swept too. Deleting the account deletes all of the user's receipts. `GET /api/me/export` lists receipt metadata (`id, transactionId, contentType, size, createdAt`) under `receipts`; the images are not exported because they are encrypted with the server key. The user quota is enforced by inserting, then counting: uploads at the same moment cannot exceed it (at the edge two can both be refused).
 
 ### Transfers (integrations only)
 A transfer is one `type: "transfer"` row (`account` is the source, `transferTo` the destination). It moves both balances and counts as neither income nor spending in stats, budgets and spend limits.

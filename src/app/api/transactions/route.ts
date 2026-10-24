@@ -1,3 +1,4 @@
+import { normaliseTag } from "@/lib/tags";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
@@ -17,6 +18,7 @@ export async function GET(req: NextRequest) {
     const limit = Math.min(parseInt(searchParams.get("limit") ?? "20", 10), 100);
     const type = searchParams.get("type");
     const category = searchParams.get("category");
+    const tag = searchParams.get("tag");
     const accountId = searchParams.get("accountId");
     const search = searchParams.get("search");
     const dateFrom = searchParams.get("dateFrom");
@@ -47,6 +49,7 @@ export async function GET(req: NextRequest) {
       const query: Record<string, unknown> = { user: user.id, isDeleted: { $ne: true } };
       if (type) query.type = type;
       if (category) query.category = category;
+      if (tag) query.tags = normaliseTag(tag);
       if (accountId) query.account = accountId;
       if (dateFrom || dateTo) {
         query.date = {};
@@ -82,6 +85,7 @@ export async function GET(req: NextRequest) {
       limit,
       type,
       category,
+      tag,
       accountId,
       search,
       dateFrom,

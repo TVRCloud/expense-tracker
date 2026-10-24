@@ -9,6 +9,7 @@ import ImportLock from "@/models/ImportLock";
 import type { AuthUser } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { createTransaction } from "@/lib/transaction-service";
+import { userTagsOnly } from "@/lib/tags";
 import { DEFAULT_TIME_ZONE, isValidTimeZone, localDateKey } from "@/lib/spend-limit-time";
 import {
   CsvImportError,
@@ -290,7 +291,8 @@ export async function commitImport(userId: string, actor: AuthUser, input: Impor
           description: c.description || undefined,
           note: c.note,
           date: c.date.toISOString(),
-          tags: c.tags,
+          // A file (our own export includes link tags) can never write the tags the server owns.
+          tags: userTagsOnly(c.tags),
           isRecurring: false,
           provenance: { source: "import" },
           skipBalance: !input.adjustBalance,

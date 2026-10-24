@@ -4,13 +4,14 @@ Purpose: list, filter, add, view, edit and delete income, expense and transfer e
 ## Files
 - components/TransactionsClient.tsx: `/transactions` list with debounced search, filters, paging.
 - components/AddTransactionForm.tsx: `/transactions/add`, incl. recurrence, split and transfer.
+- components/ReceiptsSection.tsx: receipt photos on the detail page (add with in-browser shrink, open, remove).
 - components/TransactionDetailClient.tsx: `/transactions/[id]`, includes provenance from reconcile.
 - components/TransactionRow.tsx, DayGroup.tsx, FilterChips.tsx: list pieces.
 - hooks/useTransactions.ts: query `["transactions", filters]`, keeps previous rows while paging.
 - utils/activity-date.ts: client copy of the activity-date rule; compare with src/lib/transaction-activity.ts before changing either.
 
 ## Talks to
-- `GET/POST /api/transactions` (`?format=csv`), `GET/PATCH/DELETE /api/transactions/:id`; split rows via `?splitGroupId=`.
+- `GET/POST /api/transactions` (`?format=csv`), `GET/PATCH/DELETE /api/transactions/:id`; split rows via `?splitGroupId=`; `/api/transactions/tags`, `/api/transactions/:id/splits` (GET, PUT), `/api/transactions/:id/receipts`, `/api/receipts/:id`.
 - Models: Transaction, Account. Server: src/lib/transaction-service.ts, transaction-query.ts.
 - Mobile: Activity tab; `GET/POST/PATCH/DELETE /api/integrations/transactions`.
 
