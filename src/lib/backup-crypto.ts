@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scrypt, type ScryptOptions } from "crypto";
+import { AsyncLocalStorage } from "async_hooks";
 import { gunzip, gzip } from "zlib";
 import { z } from "zod";
 
@@ -101,6 +102,20 @@ export function keyGateOpen() {
   return active < MAX_ACTIVE || waiting.length < MAX_QUEUE;
 }
 
+// Work running inside withKeyGate already holds a slot, so a derivation inside it
+// does not ask for a second one (two nested jobs could otherwise deadlock the gate).
+const holdsSlot = new AsyncLocalStorage<true>();
+
+/**
+ * Hold a slot for the whole of a job. A route takes it BEFORE the database and
+ * compression work, so "busy" always comes back before any expensive work has
+ * started (and only then may a caller get a rate limit count back). It throws
+ * "busy" only while waiting to start, never once `work` is running.
+ */
+export function withKeyGate<T>(work: () => Promise<T>): Promise<T> {
+  return withKeySlot(() => holdsSlot.run(true, work));
+}
+
 async function withKeySlot<T>(work: () => Promise<T>): Promise<T> {
   if (active >= MAX_ACTIVE) {
     if (waiting.length >= MAX_QUEUE) throw new BackupError("busy", "The server is busy opening backups; try again in a moment");
@@ -120,12 +135,11 @@ async function withKeySlot<T>(work: () => Promise<T>): Promise<T> {
 
 function deriveKey(passphrase: string, salt: Buffer, n: number): Promise<Buffer> {
   const options: ScryptOptions = { N: n, r: SCRYPT_R, p: SCRYPT_P, maxmem: maxmemFor(n) };
-  return withKeySlot(
-    () =>
-      new Promise<Buffer>((resolve, reject) => {
-        scrypt(passphrase.normalize("NFKC"), salt, 32, options, (err, key) => (err ? reject(err) : resolve(key)));
-      })
-  );
+  const run = () =>
+    new Promise<Buffer>((resolve, reject) => {
+      scrypt(passphrase.normalize("NFKC"), salt, 32, options, (err, key) => (err ? reject(err) : resolve(key)));
+    });
+  return holdsSlot.getStore() ? run() : withKeySlot(run);
 }
 
 const gzipAsync = (data: Buffer) =>

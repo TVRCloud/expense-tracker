@@ -19,18 +19,24 @@ const notJson = (requestId: string) => integrationError("VALIDATION_ERROR", "Req
 // missing or false Content-Length cannot make the server hold a huge body.
 export type BodyRead = { ok: true; body: unknown } | { ok: false; res: Response; busy?: true };
 
-// At most this many bodies are being read at once in one process; others are told
-// to retry, so a crowd of slow uploads cannot hold a pile of buffers.
+// Body reads are bounded three ways: at most four at once per process, one at a
+// time per person (so one person cannot hold every slot), and a deadline (a total
+// time, and a longest wait for the next chunk). A read that runs out is
+// cancelled and its slot freed.
 const MAX_BODY_READS = 4;
+export const BODY_LIMITS = { totalMs: 30_000, idleMs: 10_000 };
 let bodyReads = 0;
+const readersNow = new Set<string>();
 
-export async function readBackupBody(req: NextRequest, requestId: string): Promise<BodyRead> {
-  if (bodyReads >= MAX_BODY_READS) return { ok: false, res: busyResponse(requestId), busy: true };
+export async function readBackupBody(req: NextRequest, requestId: string, userId: string): Promise<BodyRead> {
+  if (bodyReads >= MAX_BODY_READS || readersNow.has(userId)) return { ok: false, res: busyResponse(requestId), busy: true };
   bodyReads += 1;
+  readersNow.add(userId);
   try {
     return await readCounted(req, requestId);
   } finally {
     bodyReads -= 1;
+    readersNow.delete(userId);
   }
 }
 
@@ -43,16 +49,34 @@ async function readCounted(req: NextRequest, requestId: string): Promise<BodyRea
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
+  const deadline = Date.now() + BODY_LIMITS.totalMs;
+  const giveUp = async (): Promise<BodyRead> => {
+    await reader.cancel().catch(() => undefined);
+    return {
+      ok: false,
+      res: integrationError("VALIDATION_ERROR", "The upload took too long", requestId, { reason: "timeout" }),
+    };
+  };
   try {
     for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
+      const wait = Math.min(BODY_LIMITS.idleMs, deadline - Date.now());
+      if (wait <= 0) return await giveUp();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const next = await Promise.race([
+        reader.read(),
+        new Promise<"timeout">((resolve) => {
+          timer = setTimeout(() => resolve("timeout"), wait);
+        }),
+      ]);
+      clearTimeout(timer);
+      if (next === "timeout") return await giveUp();
+      if (next.done) break;
+      size += next.value.byteLength;
       if (size > MAX_BODY_BYTES) {
         await reader.cancel().catch(() => undefined);
         return { ok: false, res: tooLarge(requestId) };
       }
-      chunks.push(value);
+      chunks.push(next.value);
     }
   } catch {
     return { ok: false, res: notJson(requestId) };
@@ -101,16 +125,10 @@ export async function refundBackupBuckets(userId: string, buckets: BackupBucket[
 }
 
 // Never logs the error object: a failed bulk insert can carry backup documents.
-// `counted` are the buckets this call already used; if it is turned away as
-// "busy" (other people's load, not the caller's doing) they get them back.
-export async function backupFailure(
-  err: unknown,
-  requestId: string,
-  route: string,
-  counted?: { userId: string; buckets: BackupBucket[] }
-): Promise<Response> {
+// No count is given back here: a refund is only safe for a refusal that came
+// before any expensive work, and the routes do that themselves.
+export function backupFailure(err: unknown, requestId: string, route: string): Response {
   if (err instanceof BackupError) {
-    if (err.reason === "busy" && counted) await refundBackupBuckets(counted.userId, counted.buckets);
     if (err.reason === "too_large_for_response") {
       return integrationError("TOO_LARGE_FOR_RESPONSE", err.message, requestId, { reason: "too_large_for_response" });
     }

@@ -669,7 +669,7 @@ describe("encrypted backup and restore", () => {
     const { encryptBackup, decryptBackup } = await import("@/lib/backup-crypto");
     const env = await encryptBackup({ ok: true }, PASS);
     // two running and four queued fill the gate; anything past that is refused at once
-    const crowd = Array.from({ length: 10 }, () => decryptBackup(env, PASS));
+    const crowd = Array.from({ length: 10 }, () => decryptBackup(env, PASS).catch(() => undefined));
     const { POST } = await import("@/app/api/integrations/backup/restore/route");
     const res = await POST(
       new NextRequest("http://localhost/api/integrations/backup/restore", {
@@ -750,32 +750,75 @@ describe("encrypted backup and restore", () => {
     const { encryptBackup, decryptBackup } = await import("@/lib/backup-crypto");
     const { default: SecurityRateLimit } = await import("@/models/SecurityRateLimit");
     const env = await encryptBackup({ ok: true }, PASS);
-    const crowd = Array.from({ length: 10 }, () => decryptBackup(env, PASS));
+    const crowd = Array.from({ length: 10 }, () => decryptBackup(env, PASS).catch(() => undefined));
     const { POST } = await import("@/app/api/integrations/backup/route");
     for (let i = 0; i < 3; i += 1) expect((await POST(req("backup", { passphrase: PASS }), {})).status).toBe(429);
     expect(await SecurityRateLimit.countDocuments({ key: `backup:request:${a}` })).toBe(0);
     await Promise.allSettled(crowd);
   });
 
-  it("gives the buckets back when a call is turned away as busy after it was counted", async () => {
-    const { checkSecurityRateLimit } = await import("@/lib/security-rate-limit");
-    const { default: SecurityRateLimit } = await import("@/models/SecurityRateLimit");
-    const { BackupError } = await import("@/lib/backup-crypto");
-    const { backupFailure } = await import("@/lib/integrations/backup-http");
-    for (const bucket of ["request", "export"]) {
-      await checkSecurityRateLimit({ key: `backup:${bucket}:${a}`, limit: 6, windowMs: 600000 });
-      await checkSecurityRateLimit({ key: `backup:${bucket}:${a}`, limit: 6, windowMs: 600000 });
+  // The gate is full, but the early "is it open" check is made to say yes, so the
+  // call is counted and then meets the full gate: the busy-at-the-gate path.
+  async function withFullGate<T>(run: () => Promise<T>): Promise<T> {
+    const crypto = await import("@/lib/backup-crypto");
+    const env = await crypto.encryptBackup({ ok: true }, PASS);
+    const crowd = Array.from({ length: 10 }, () => crypto.decryptBackup(env, PASS).catch(() => undefined));
+    const open = vi.spyOn(crypto, "keyGateOpen").mockReturnValue(true);
+    try {
+      return await run();
+    } finally {
+      open.mockRestore();
+      await Promise.allSettled(crowd);
     }
-    const res = await backupFailure(new BackupError("busy", "busy"), "rid", "backup", { userId: a, buckets: ["request", "export"] });
+  }
+  const countOf = async (bucket: string, user: string) => {
+    const { default: SecurityRateLimit } = await import("@/models/SecurityRateLimit");
+    return (await SecurityRateLimit.findOne({ key: `backup:${bucket}:${user}` }).lean())?.count ?? 0;
+  };
+
+  it("export: a busy gate answers before any database or compression work, and gives the counts back", async () => {
+    await seed(a);
+    const service = await import("@/lib/backup-service");
+    const build = vi.spyOn(service, "buildBackup");
+    const res = await withFullGate(() => exportBackup());
     expect(res.status).toBe(429);
-    const count = async (b: string) => (await SecurityRateLimit.findOne({ key: `backup:${b}:${a}` }).lean())!.count;
-    expect(await count("request")).toBe(1);
-    expect(await count("export")).toBe(1);
-    // other failures keep the count, and a refund never goes below zero
-    await backupFailure(new BackupError("invalid", "x"), "rid", "backup", { userId: a, buckets: ["request"] });
-    expect(await count("request")).toBe(1);
-    for (let i = 0; i < 3; i += 1) await backupFailure(new BackupError("busy", "busy"), "rid", "backup", { userId: a, buckets: ["export"] });
-    expect(await count("export")).toBe(0);
+    expect((await res.json()).error.reason).toBe("busy");
+    expect(build).not.toHaveBeenCalled();
+    build.mockRestore();
+    expect(await countOf("request", a)).toBe(0);
+    expect(await countOf("export", a)).toBe(0);
+  });
+
+  it("restore: a busy gate answers before the file is opened, and gives the counts back", async () => {
+    await seed(a);
+    const { data } = await (await exportBackup()).json();
+    const crypto = await import("@/lib/backup-crypto");
+    const service = await import("@/lib/backup-service");
+    const res = await withFullGate(async () => {
+      const open = vi.spyOn(crypto, "decryptBackup");
+      const restoreSpy = vi.spyOn(service, "restoreBackup");
+      const out = await restore({ passphrase: PASS, backup: data.backup });
+      expect(open).not.toHaveBeenCalled();
+      expect(restoreSpy).not.toHaveBeenCalled();
+      open.mockRestore();
+      restoreSpy.mockRestore();
+      return out;
+    });
+    expect(res.status).toBe(429);
+    expect(await countOf("restore", a)).toBe(0);
+    expect(await countOf("request", a)).toBe(1); // the export above; this one was given back
+  });
+
+  it("once work has started a busy error is not refunded (no way to get free expensive work)", async () => {
+    await seed(a);
+    const { BackupError } = await import("@/lib/backup-crypto");
+    const service = await import("@/lib/backup-service");
+    const build = vi.spyOn(service, "buildBackup").mockRejectedValue(new BackupError("busy", "busy"));
+    const res = await exportBackup();
+    build.mockRestore();
+    expect(res.status).toBe(429);
+    expect(await countOf("request", a)).toBe(1);
+    expect(await countOf("export", a)).toBe(1);
   });
 
   it("holds at most four body reads at once and refuses the rest as busy", async () => {
@@ -793,18 +836,97 @@ describe("encrypted backup and restore", () => {
       const fake = { headers: new Headers(), body: stream } as unknown as NextRequest;
       return { fake, release };
     };
-    const reads = Array.from({ length: 4 }, () => stalled());
-    const pending = reads.map((r) => readBackupBody(r.fake, "rid"));
-    const fifth = await readBackupBody(stalled().fake, "rid");
+    const reads = Array.from({ length: 4 }, (_, i) => stalled());
+    const pending = reads.map((r, i) => readBackupBody(r.fake, "rid", `user-${i}`));
+    const fifth = await readBackupBody(stalled().fake, "rid", "user-5");
     expect(fifth).toMatchObject({ ok: false, busy: true });
     expect((fifth as { res: Response }).res.status).toBe(429);
     reads.forEach((r) => r.release());
     expect((await Promise.all(pending)).every((r) => r.ok)).toBe(true);
     // the slots are free again
     const again = stalled();
-    const next = readBackupBody(again.fake, "rid");
+    const next = readBackupBody(again.fake, "rid", "user-1");
     again.release();
     expect((await next).ok).toBe(true);
+  });
+
+  it("lets one person read one body at a time, so they cannot take every slot", async () => {
+    const { readBackupBody } = await import("@/lib/integrations/backup-http");
+    let release!: () => void;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        release = () => {
+          controller.enqueue(new TextEncoder().encode("{}"));
+          controller.close();
+        };
+      },
+    });
+    const first = readBackupBody({ headers: new Headers(), body: stream } as unknown as NextRequest, "rid", "same-user");
+    const second = await readBackupBody({ headers: new Headers(), body: new Blob(["{}"]).stream() } as unknown as NextRequest, "rid", "same-user");
+    expect(second).toMatchObject({ ok: false, busy: true });
+    // someone else is not held up
+    const other = await readBackupBody({ headers: new Headers(), body: new Blob(["{}"]).stream() } as unknown as NextRequest, "rid", "other-user");
+    expect(other.ok).toBe(true);
+    release();
+    expect((await first).ok).toBe(true);
+    // and the same person can read again once done
+    const later = await readBackupBody({ headers: new Headers(), body: new Blob(["{}"]).stream() } as unknown as NextRequest, "rid", "same-user");
+    expect(later.ok).toBe(true);
+  });
+
+  describe("body read deadlines", () => {
+    afterEach(async () => {
+      const { BODY_LIMITS } = await import("@/lib/integrations/backup-http");
+      BODY_LIMITS.totalMs = 30_000;
+      BODY_LIMITS.idleMs = 10_000;
+    });
+
+    it("gives up on a stream that stops sending, cancels it and frees the slot", async () => {
+      const { readBackupBody, BODY_LIMITS } = await import("@/lib/integrations/backup-http");
+      BODY_LIMITS.idleMs = 60;
+      let cancelled = false;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("{"));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      const out = await readBackupBody({ headers: new Headers(), body: stream } as unknown as NextRequest, "rid", "slow-user");
+      expect(out.ok).toBe(false);
+      expect(((await (out as { res: Response }).res.json()) as { error: { reason: string } }).error.reason).toBe("timeout");
+      expect(cancelled).toBe(true);
+      const again = await readBackupBody({ headers: new Headers(), body: new Blob(["{}"]).stream() } as unknown as NextRequest, "rid", "slow-user");
+      expect(again.ok).toBe(true);
+    });
+
+    it("gives up on a slow trickle that never ends, by the total deadline", async () => {
+      const { readBackupBody, BODY_LIMITS } = await import("@/lib/integrations/backup-http");
+      BODY_LIMITS.totalMs = 150;
+      BODY_LIMITS.idleMs = 100;
+      let cancelled = false;
+      let timer: ReturnType<typeof setInterval>;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          timer = setInterval(() => {
+            try {
+              controller.enqueue(new TextEncoder().encode(" "));
+            } catch {
+              clearInterval(timer);
+            }
+          }, 30);
+        },
+        cancel() {
+          cancelled = true;
+          clearInterval(timer);
+        },
+      });
+      const out = await readBackupBody({ headers: new Headers(), body: stream } as unknown as NextRequest, "rid", "trickle-user");
+      expect(out.ok).toBe(false);
+      expect(((await (out as { res: Response }).res.json()) as { error: { reason: string } }).error.reason).toBe("timeout");
+      expect(cancelled).toBe(true);
+    });
   });
 
   it("a normal export does call the encryption step once", async () => {
