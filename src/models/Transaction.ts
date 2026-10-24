@@ -56,6 +56,15 @@ const TransactionSchema = new Schema(
     },
     reviewedAt: { type: Date },
     reviewedBy: { type: Schema.Types.ObjectId, ref: "User" },
+    // Refund and reversal matching (src/lib/refund-service.ts). Set on an
+    // income row that looks like the money coming back for an earlier expense:
+    // refundOf is that expense, refundStatus where the link stands. Only
+    // "confirmed" nets the pair out of the stats; "rejected" keeps refundOf so
+    // the same pair is never suggested again. The category the row had before
+    // the original's was carried over is kept to undo a confirmed link.
+    refundOf: { type: Schema.Types.ObjectId, ref: "Transaction" },
+    refundStatus: { type: String, enum: ["suggested", "confirmed", "rejected", null], default: null },
+    refundPriorCategory: { type: String },
     isDeleted: { type: Boolean, default: false },
     deletedAt: { type: Date },
     deletedBy: { type: Schema.Types.ObjectId, ref: "User" },
@@ -76,6 +85,8 @@ TransactionSchema.index({ isDeleted: 1, recurrenceIsOpenEnded: 1, recurrenceCanc
 TransactionSchema.index({ user: 1, tags: 1 });
 TransactionSchema.index({ user: 1, isDeleted: 1, splitGroupId: 1 });
 TransactionSchema.index({ user: 1, isDeleted: 1, reviewStatus: 1, date: -1 });
+TransactionSchema.index({ user: 1, isDeleted: 1, refundStatus: 1, date: -1 });
+TransactionSchema.index({ user: 1, refundOf: 1 }, { sparse: true });
 // Paid recurring installments count on their paidAt (see
 // transaction-activity.ts): lets the monthly stats and the recent list read
 // them by paidAt from an index instead of scanning every row.

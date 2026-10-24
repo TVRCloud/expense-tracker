@@ -8,6 +8,7 @@ Purpose: server business logic shared by browser routes, integration routes, ser
 - Subscriptions: subscription-detector.ts (pure: finds repeating merchant charges, cadence, next date, yearly cost) and subscription-service.ts (reads 24 months of expenses, merges the user's confirm and dismiss decisions; shared by browser and integration routes).
 - Bills: bills.ts (upcoming bills from recurring payments, card statements and loans owed; mark paid), bill-settings.ts (`preferences.billReminders`), bill-reminders.ts (once per bill per due date, from 09:00 local; `sendBillReminders`).
 - Recurring and reminders: recurrence.ts, recurring-topup.ts, recurring-series.ts (series list, get, cancel; shared by browser and integration routes), reminder-scheduler.ts, emi-notifications.ts, credit-notifications.ts, push.ts.
+- refund-service.ts (match a credit to the expense it refunds, suggest, confirm, reject; stats and budgets net confirmed refunds out), see [docs/reconcile.md](../../docs/reconcile.md).
 - capture/ (ingest, parsers, source priority, account matching), reconcile/ (correct, inbox, http): [docs/reconcile.md](../../docs/reconcile.md).
 - integrations/ (API-key auth, handler, idempotency, rate-limit, response, sms-parser), app-update.ts: [docs/n8n-integration.md](../../docs/n8n-integration.md).
 - realtime/ (changes, sse, invalidation, changed-since): resources: transactions, accounts, budgets, goals, loans, notifications, captures, repayments, statements, spendLimits, subscriptions; a new one goes in `RESOURCES`, `MODELS` and `INVALIDATION_MAP`, see [docs/realtime.md](../../docs/realtime.md).
@@ -21,6 +22,7 @@ Purpose: server business logic shared by browser routes, integration routes, ser
 - budget-service and goal-service own create, update and soft delete; the browser `[id]` routes and the integration `[id]` routes both call them.
 - transfer-service owns transfer edit (amount, accounts, date: balances fixed in one pass); create and delete call transaction-service. A transfer row is never income or spending.
 - subscription-service never stores detections, only the user's choice per merchant and cadence (`SubscriptionDecision`); it leaves out recurring series the user already tracks (`isRecurring`).
+- A confirmed refund (`refundStatus: confirmed` income row) is netted out in stats-service, budget-service and budget-alert; a new aggregation over income or expense must do the same.
 - loan-service owns loan create, update, delete and repayments; the browser and integration loan routes both call it.
 - Put logic here, not in routes. transaction-service, loan-service, goal-service, budget-service and stats-service exist so web and integration routes cannot drift.
 - No mongoose sessions anywhere; multi-step writes are sequential.

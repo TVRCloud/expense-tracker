@@ -89,6 +89,9 @@ Authorization: Bearer <YOUR_API_KEY>
 | GET, PATCH, DELETE | `/api/integrations/transfers/[id]` | Read, edit (amount, accounts, date, notes; both balances are corrected) and delete a transfer, which puts both balances back (writes need `Idempotency-Key`) |
 | GET | `/api/integrations/subscriptions` | Detected repeating charges (`status`, `includeLapsed`), with `totals`; see below |
 | PATCH | `/api/integrations/subscriptions/[id]` | Confirm, dismiss or restore one (`{status}`, needs `Idempotency-Key`) |
+| GET | `/api/integrations/refunds` | Credits that look like the money back for an earlier expense, each with the expense it probably refunds |
+| POST | `/api/integrations/refunds/[id]/confirm` | Link the credit to its expense, optional `{originalId}` (needs `Idempotency-Key`) |
+| POST | `/api/integrations/refunds/[id]/reject` | Not a refund: drop the suggestion, or unlink a confirmed one (needs `Idempotency-Key`) |
 | GET | `/api/integrations/spend-limit` | Daily and weekly limit settings, today and week progress, safe to spend |
 | PUT | `/api/integrations/spend-limit` | Set, change or clear the limits (needs `Idempotency-Key`) |
 | GET | `/api/integrations/bills` | What is coming due: recurring payments, card statements, loans you owe. `days` 0 to 60, default 14; overdue from the last 60 days included. Returns `{bills, settings, days}` |
@@ -281,6 +284,25 @@ The `Submit SMS to API` node's credential (reusing the workflow's existing
 `yarn api-keys create --label n8n --email <...>`) needs attaching
 by hand in the n8n UI — the same one-time step every HTTP Request node in
 this workflow needs; it isn't set automatically.
+
+### Refunds and reversals
+
+A captured credit that matches an earlier expense (same merchant once words like "refund", "pvt", "ltd" are ignored; the same or a smaller amount; within 60 days before the credit; the expense not yet refunded up to its amount) is marked `refundStatus: "suggested"` with `refundOf` pointing at the expense. Suggesting changes nothing in the stats or balances.
+
+`GET /api/integrations/refunds` returns the suggestions, newest first:
+
+```json
+{ "success": true, "data": [ {
+  "id": "<credit id>", "accountId": "...", "accountName": "HDFC Savings", "amount": 25000, "currency": "INR",
+  "category": "other", "description": "Swiggy refund", "date": "2026-09-26T06:30:00.000Z", "status": "suggested",
+  "original": { "id": "<expense id>", "accountId": "...", "accountName": "HDFC Savings", "amount": 25000, "currency": "INR", "category": "food", "description": "Swiggy", "date": "2026-09-24T06:30:00.000Z" }
+} ], "requestId": "..." }
+```
+
+- `POST /api/integrations/refunds/:id/confirm` with an optional body `{ "originalId": "<expense id>" }` links the credit to that expense (the suggested one when omitted; a credit with no suggestion needs `originalId`). The refund takes the expense's category, and from then on it comes off expense and that category in `GET /api/integrations/summary`, `stats` and the budget `spent`, not onto income. Balances are not touched: the credit already raised the balance. Answers `{ "refund": { ...same shape, "status": "confirmed" } }`.
+- `POST /api/integrations/refunds/:id/reject` drops a suggestion for good (the credit is not suggested again), or unlinks a confirmed refund and gives it back the category it had. Answers `{ "refund": { ..., "status": "rejected" } }`.
+- Both writes need `Idempotency-Key`. Errors: `400` bad body or key, `404` credit or expense not found (also another user's), `409` already linked, no suggestion, the expense is already refunded up to its amount, or a credit linked to itself.
+- The reconcile inbox (`GET /api/integrations/review`) adds `refundSuggestion` (the expense, same shape as `original`, or `null`) to each `needsReview` item.
 
 ## Idempotency
 

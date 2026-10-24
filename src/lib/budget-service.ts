@@ -29,7 +29,8 @@ async function spendByCategoryMonth(
         user: userObjectId,
         isDeleted: { $ne: true },
         category: { $in: categories },
-        type: "expense",
+        // A confirmed refund comes off the category it was carried over to.
+        $and: [{ $or: [{ type: "expense" }, { type: "income", refundStatus: "confirmed" }] }],
         $or: ranges.map((date) => ({ date })),
         $nor: [
           {
@@ -54,11 +55,16 @@ async function spendByCategoryMonth(
         },
       },
     },
-    { $group: { _id: { b: "$bucket", category: "$category" }, total: { $sum: "$amount" } } },
+    {
+      $group: {
+        _id: { b: "$bucket", category: "$category" },
+        total: { $sum: { $cond: [{ $eq: ["$type", "expense"] }, "$amount", { $multiply: ["$amount", -1] }] } },
+      },
+    },
   ]);
   for (const r of rows) {
     const m = months[r._id.b];
-    if (m) out.set(`${m.year}-${m.month}:${r._id.category}`, r.total);
+    if (m) out.set(`${m.year}-${m.month}:${r._id.category}`, Math.max(0, r.total));
   }
   return out;
 }

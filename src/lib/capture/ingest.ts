@@ -8,6 +8,7 @@ import User from "@/models/User";
 import type { AuthUser } from "@/lib/auth-guard";
 import { encryptField } from "@/lib/crypto";
 import { createTransaction, TransactionServiceError } from "@/lib/transaction-service";
+import { suggestRefundSafely } from "@/lib/refund-service";
 import { createRepayment, LoanServiceError } from "@/lib/loan-service";
 import { correctTransaction, ReconcileError } from "@/lib/reconcile/correct";
 import { sendPushToUser } from "@/lib/push";
@@ -244,6 +245,8 @@ async function createFromCapture(
     if (supporting.length) {
       await CapturedMessage.updateMany({ _id: { $in: supporting } }, { $set: { transaction: txnId } });
     }
+    // A credit may be the money back for an earlier expense: suggest the match.
+    if (parse.type === "income") await suggestRefundSafely(user.id, txnId);
     return {
       httpStatus: 201,
       body: { status: "created", kind: "transaction", id: txnId, transactionId: txnId, captureId },

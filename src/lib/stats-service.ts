@@ -8,6 +8,10 @@ import { redis } from "@/lib/redis";
 // (browser) and GET /api/integrations/summary (n8n) so both surfaces see the
 // exact same numbers from one aggregation pipeline. Reuses the existing
 // Redis cache key/TTL — no new cache namespace is introduced.
+//
+// A confirmed refund (an income row with refundStatus "confirmed", see
+// refund-service.ts) is not income: it comes off expense, and off the category
+// it was carried over to, in the month it arrived. Net stays the same.
 
 export type MonthlyStats = {
   income: number;
@@ -15,6 +19,11 @@ export type MonthlyStats = {
   net: number;
   byCategory: Array<{ category: string; total: number }>;
   dailyAverage: number;
+};
+
+// Groups confirmed refunds apart from income and expense.
+const REFUND_AWARE_TYPE = {
+  $cond: [{ $and: [{ $eq: ["$type", "income"] }, { $eq: ["$refundStatus", "confirmed"] }] }, "refund", "$type"],
 };
 
 export function statsCacheKey(userId: string, year: number, month: number) {
@@ -60,10 +69,16 @@ export async function getMonthlyStats(userId: string, year: number, month: numbe
     { $match: { activityDate: inRange } },
     {
       $facet: {
-        byType: [{ $group: { _id: "$type", total: { $sum: "$amount" } } }],
+        byType: [{ $group: { _id: REFUND_AWARE_TYPE, total: { $sum: "$amount" } } }],
         byCategory: [
-          { $match: { type: "expense" } },
-          { $group: { _id: "$category", total: { $sum: "$amount" } } },
+          { $match: { $or: [{ type: "expense" }, { type: "income", refundStatus: "confirmed" }] } },
+          {
+            $group: {
+              _id: "$category",
+              total: { $sum: { $cond: [{ $eq: ["$type", "expense"] }, "$amount", { $multiply: ["$amount", -1] }] } },
+            },
+          },
+          { $match: { total: { $gt: 0 } } },
           { $sort: { total: -1 } },
           { $limit: 10 },
           { $project: { _id: 0, category: "$_id", total: 1 } },
@@ -75,7 +90,8 @@ export async function getMonthlyStats(userId: string, year: number, month: numbe
   const catAgg: Array<{ category: string; total: number }> = result?.byCategory ?? [];
 
   const income = agg.find((a) => a._id === "income")?.total ?? 0;
-  const expense = agg.find((a) => a._id === "expense")?.total ?? 0;
+  const refunds = agg.find((a) => a._id === "refund")?.total ?? 0;
+  const expense = (agg.find((a) => a._id === "expense")?.total ?? 0) - refunds;
   const daysInMonth = new Date(year, month, 0).getDate();
 
   const stats: MonthlyStats = {
@@ -141,7 +157,7 @@ export async function getRangeStats(userId: string, months: MonthRef[]): Promise
     // Regular transactions (no recurringId) always count.
     $nor: [{ recurringId: { $exists: true }, installmentStatus: { $nin: ["paid"] } }],
   })
-    .select("type amount category date recurringId installmentStatus paidAt")
+    .select("type amount category date recurringId installmentStatus paidAt refundStatus")
     .lean<
       Array<{
         type: "income" | "expense" | "transfer";
@@ -151,6 +167,7 @@ export async function getRangeStats(userId: string, months: MonthRef[]): Promise
         recurringId?: unknown;
         installmentStatus?: string;
         paidAt?: Date;
+        refundStatus?: string | null;
       }>
     >();
 
@@ -169,7 +186,12 @@ export async function getRangeStats(userId: string, months: MonthRef[]): Promise
     const stats = statsByMonth.get(k);
     if (!stats) continue;
 
-    if (tx.type === "income") {
+    if (tx.type === "income" && tx.refundStatus === "confirmed") {
+      // A refund comes off what was spent, not onto what was earned.
+      stats.expense -= tx.amount;
+      const categoryMap = categoryTotals.get(k);
+      if (categoryMap) categoryMap.set(tx.category, (categoryMap.get(tx.category) ?? 0) - tx.amount);
+    } else if (tx.type === "income") {
       stats.income += tx.amount;
     } else if (tx.type === "expense") {
       stats.expense += tx.amount;
@@ -186,6 +208,7 @@ export async function getRangeStats(userId: string, months: MonthRef[]): Promise
     const daysInMonth = new Date(year, month, 0).getDate();
     stats.byCategory = Array.from(categoryMap.entries())
       .map(([category, total]) => ({ category, total }))
+      .filter((c) => c.total > 0)
       .sort((a, b) => b.total - a.total)
       .slice(0, 10);
     stats.dailyAverage = Math.round(stats.expense / daysInMonth);
@@ -218,7 +241,7 @@ export async function getDailyTotals(
     },
     { $addFields: activityDateAddFields() },
     { $match: { activityDate: inRange } },
-    { $group: { _id: { day: { $dayOfMonth: "$activityDate" }, type: "$type" }, total: { $sum: "$amount" } } },
+    { $group: { _id: { day: { $dayOfMonth: "$activityDate" }, type: REFUND_AWARE_TYPE }, total: { $sum: "$amount" } } },
   ]);
 
   const daysInMonth = new Date(year, month, 0).getDate();
@@ -227,6 +250,7 @@ export async function getDailyTotals(
     const d = days[r._id.day - 1];
     if (!d) continue;
     if (r._id.type === "income") d.income += r.total;
+    else if (r._id.type === "refund") d.expense -= r.total;
     else d.expense += r.total;
   }
   return days;

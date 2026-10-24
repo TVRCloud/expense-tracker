@@ -138,6 +138,16 @@ Auto-captured payments (SMS, n8n, bank-app notifications) and their review / cor
 | POST | `/api/captures/:id/resolve` | Act on a queued message `{action: create\|link\|keep_mine\|use_sms}` |
 | DELETE | `/api/captures/:id` | Discard a queued message (kept on record) |
 
+### Refunds (phone only)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/integrations/refunds` | Suggested refund matches, each with the expense it probably refunds |
+| POST | `/api/integrations/refunds/:id/confirm` | Link the credit to its expense `{originalId?}`; needs `Idempotency-Key` |
+| POST | `/api/integrations/refunds/:id/reject` | Drop a suggestion or unlink a confirmed refund; needs `Idempotency-Key` |
+
+Shapes and errors: [docs/n8n-integration.md](n8n-integration.md#refunds-and-reversals).
+
 ## Goals
 
 | Method | Path | Description |

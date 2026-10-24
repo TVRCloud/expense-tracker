@@ -34,7 +34,8 @@ export async function checkBudgetAlert(userId: string, category: string, _amount
           user: userObjectId,
           isDeleted: { $ne: true },
           category,
-          type: "expense",
+          // A confirmed refund comes off what was spent (see refund-service.ts).
+          $or: [{ type: "expense" }, { type: "income", refundStatus: "confirmed" }],
           // Only count paid installments toward budget
           $nor: [{
             recurringId: { $exists: true },
@@ -51,10 +52,15 @@ export async function checkBudgetAlert(userId: string, category: string, _amount
           },
         },
       },
-      { $group: { _id: null, total: { $sum: "$amount" } } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: { $cond: [{ $eq: ["$type", "expense"] }, "$amount", { $multiply: ["$amount", -1] }] } },
+        },
+      },
     ]);
 
-    const totalSpent = spent[0]?.total ?? 0;
+    const totalSpent = Math.max(0, spent[0]?.total ?? 0);
     const pct = (totalSpent / budget.limitAmount) * 100;
 
     if (pct >= budget.alertAt) {
