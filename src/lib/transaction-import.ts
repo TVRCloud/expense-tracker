@@ -246,10 +246,11 @@ export async function previewImport(userId: string, input: ImportRequest) {
   return summary(await analyze(userId, input), input.dateOrder !== undefined);
 }
 
-async function takeLock(userId: string, accountId: string) {
+async function takeLock(userId: string, accountId: string): Promise<string> {
   await ImportLock.init();
   try {
-    await ImportLock.create({ user: userId, account: accountId, expiresAt: new Date(Date.now() + LOCK_SECONDS * 1000) });
+    const lock = await ImportLock.create({ user: userId, account: accountId, expiresAt: new Date(Date.now() + LOCK_SECONDS * 1000) });
+    return lock._id.toString();
   } catch (err) {
     if ((err as { code?: number }).code === 11000) {
       throw new TransactionImportError("IMPORT_IN_PROGRESS", "Another import into this account is still running; try again shortly");
@@ -262,7 +263,7 @@ export async function commitImport(userId: string, actor: AuthUser, input: Impor
   await connectDB();
   // One import per account at a time, so the duplicate check below sees every
   // row an earlier import wrote and a retry under a new key cannot double up.
-  await takeLock(userId, input.accountId);
+  const lockId = await takeLock(userId, input.accountId);
   try {
     const a = await analyze(userId, input);
     if (a.ambiguousDates && input.dateOrder === undefined) {
@@ -305,7 +306,8 @@ export async function commitImport(userId: string, actor: AuthUser, input: Impor
       errors: a.errors.slice(0, ERROR_LIMIT),
     };
   } finally {
-    await ImportLock.deleteOne({ user: userId, account: input.accountId }).catch((err) =>
+    // By id: if this run outlived its lock, another run may hold a new one.
+    await ImportLock.deleteOne({ _id: lockId }).catch((err) =>
       logger.error({ err, userId }, "could not release the import lock")
     );
   }

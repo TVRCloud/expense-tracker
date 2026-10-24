@@ -7082,6 +7082,14 @@ describe("csv import helpers", () => {
     expect(parseAmountCell("(500.00)")).toBe(-50000);
     expect(parseAmountCell("250 Dr")).toBe(-25000);
     expect(parseAmountCell("250 Cr")).toBe(25000);
+    // Any negative marker makes it negative; Cr with one is refused, not guessed.
+    expect(parseAmountCell("-250 Dr")).toBe(-25000);
+    expect(parseAmountCell("(-500.00)")).toBe(-50000);
+    expect(parseAmountCell("(500 Dr)")).toBe(-50000);
+    expect(parseAmountCell("500 Cr")).toBe(50000);
+    expect(parseAmountCell("(500 Cr)")).toBeNull();
+    expect(parseAmountCell("-250 Cr")).toBeNull();
+    expect(parseAmountCell("--5")).toBeNull();
     expect(parseAmountCell("0.10")).toBe(10);
     expect(parseAmountCell("1,23,456.78")).toBe(12345678);
     expect(parseAmountCell("1,234")).toBe(123400);
@@ -7123,6 +7131,29 @@ describe("csv import helpers", () => {
     expect(Date.now() - t0).toBeLessThan(500);
   });
 
+  it("stays linear on short adversarial amount cells", async () => {
+    const { parseAmountCell } = await import("@/lib/csv-import");
+    const start = Date.now();
+    for (let i = 0; i < 2000; i += 1) {
+      for (const cell of ["1,".repeat(31) + "x", "1,111".repeat(12) + "x", "(" + "1,".repeat(30), "9".repeat(60) + "dr x", "-".repeat(63) + "1", " ".repeat(30) + "1" + " ".repeat(30) + "cr"]) {
+        expect(cell.length).toBeLessThanOrEqual(64);
+        parseAmountCell(cell);
+      }
+    }
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it("reads year-first dates when told ymd, and refuses a day-first cell then", async () => {
+    const { parseDateCell } = await import("@/lib/csv-import");
+    expect(parseDateCell("2026/10/05", "ymd")).toEqual({ y: 2026, m: 10, d: 5 });
+    expect(parseDateCell("2026-10-05", "ymd")).toEqual({ y: 2026, m: 10, d: 5 });
+    expect(parseDateCell("26-10-05", "ymd")).toEqual({ y: 2026, m: 10, d: 5 });
+    expect(parseDateCell("26.1.5", "ymd")).toEqual({ y: 2026, m: 1, d: 5 });
+    expect(parseDateCell("05/10/2026", "ymd")).toBeNull();
+    expect(parseDateCell("2026-13-01", "ymd")).toBeNull();
+    expect(parseDateCell("26-02-30", "ymd")).toBeNull();
+  });
+
   it("flags only dates that read two ways", async () => {
     const { dateIsAmbiguous } = await import("@/lib/csv-import");
     expect(dateIsAmbiguous("03/04/2026")).toBe(true);
@@ -7140,6 +7171,36 @@ describe("csv import helpers", () => {
       const out = rowToCandidate(["05/10/2026", "10"], 1, { date: 0, amount: 1 }, { mapping: {}, dateOrder: "dmy", amountSign: "signed", now: new Date(), timeZone: tz });
       if (!out.ok) throw new Error("row should read");
       expect(localDateKey(out.candidate.date, tz)).toBe("2026-10-05");
+    }
+  });
+
+  it("starts a day at its first real instant where a clock change skips midnight", async () => {
+    const { localMidnight, localDateKey, dayWindow } = await import("@/lib/spend-limit-time");
+    const keyOf = (y: number, m: number, d: number) => `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    // Midnight does not exist on these days: 00:00 jumps to 01:00.
+    for (const [tz, y, m, d, utc] of [
+      ["America/Santiago", 2026, 9, 6, "2026-09-06T04:00:00.000Z"],
+      ["Asia/Beirut", 2026, 3, 29, "2026-03-28T22:00:00.000Z"],
+    ] as const) {
+      const start = localMidnight(tz, y, m, d);
+      expect(start.toISOString()).toBe(utc);
+      expect(localDateKey(start, tz)).toBe(keyOf(y, m, d));
+      expect(localDateKey(new Date(start.getTime() - 1000), tz)).not.toBe(keyOf(y, m, d));
+      // That day is an hour short, and the day window agrees.
+      expect(localMidnight(tz, y, m, d + 1).getTime() - start.getTime()).toBe(23 * 3_600_000);
+      const win = dayWindow(new Date(start.getTime() + 3_600_000), tz, 1);
+      expect(win.dayStart.toISOString()).toBe(utc);
+    }
+    // Every day around every kind of change starts on its own date, in order.
+    for (const [tz, y, m] of [["America/Santiago", 2026, 9], ["Asia/Beirut", 2026, 3], ["America/Havana", 2026, 11], ["Australia/Lord_Howe", 2026, 10], ["Pacific/Auckland", 2026, 9], ["America/New_York", 2026, 11]] as const) {
+      let prev = 0;
+      for (let d = 1; d <= 30; d += 1) {
+        const start = localMidnight(tz, y, m, d);
+        expect(localDateKey(start, tz)).toBe(keyOf(y, m, d));
+        expect(localDateKey(new Date(start.getTime() - 1000), tz)).not.toBe(keyOf(y, m, d));
+        expect(start.getTime()).toBeGreaterThan(prev);
+        prev = start.getTime();
+      }
     }
   });
 
@@ -7428,6 +7489,62 @@ describe("integration export and import", () => {
     await new Promise((r) => setTimeout(r, 300));
   }
   const todayKey = async () => (await import("@/lib/spend-limit-time")).localDateKey(new Date(), "Asia/Kolkata");
+
+  it("a day whose midnight is skipped still imports on its own date and re-imports as a duplicate", async () => {
+    const { default: User } = await import("@/models/User");
+    const { default: Transaction } = await import("@/models/Transaction");
+    await User.updateOne({ _id: userId }, { $set: { "preferences.timezone": "America/Santiago" } });
+    const csv = "Date,Description,Amount\n2026-09-06,Brunch,-80.00\n2026-09-05,Dinner,-90.00\n2026-09-07,Lunch,-70.00";
+    await commit({ csv });
+    const rows = await Transaction.find({ user: userId }).sort({ date: 1 }).lean<{ date: Date; description: string }[]>();
+    expect(rows.map((r) => [r.description, r.date.toISOString()])).toEqual([
+      ["Dinner", "2026-09-05T04:00:00.000Z"],
+      ["Brunch", "2026-09-06T04:00:00.000Z"],
+      ["Lunch", "2026-09-07T03:00:00.000Z"],
+    ]);
+    const text = (await (await exportCsv()).text()).split("\n");
+    expect(text.slice(1).map((l) => l.slice(0, 10))).toEqual(["2026-09-05", "2026-09-06", "2026-09-07"]);
+    expect((await (await preview({ csv })).json()).data).toMatchObject({ duplicateCount: 3, importCount: 0 });
+    const ranged = await exportCsv("?dateFrom=2026-09-06&dateTo=2026-09-06");
+    expect(ranged.headers.get("x-export-rows")).toBe("1");
+  });
+
+  it("an export-defanged cell that starts with a quote comes back exactly", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { default: Account } = await import("@/models/Account");
+    const base = { user: userId, account: accountId, type: "expense", amount: 100, category: "food" };
+    const values = ["'-5", "''x", "'", "'plain", "=1+1", "-5", "x'y"];
+    for (const [i, description] of values.entries()) {
+      await Transaction.create({ ...base, description, note: description, date: new Date(Date.UTC(2026, 9, i + 1, 6)) });
+    }
+    const csv = await (await exportCsv()).text();
+    const fresh = await Account.create({ user: userId, name: "Fresh", type: "bank", balance: 0, currency: "INR" });
+    await commit({ csv, accountId: fresh._id.toString() });
+    const rows = await Transaction.find({ account: fresh._id }).sort({ date: 1 }).lean();
+    expect(rows.map((r) => r.description)).toEqual(values);
+    expect(rows.map((r) => r.note)).toEqual(values);
+  });
+
+  it("a run that outlived its lock does not delete the lock another run now holds", async () => {
+    const { default: ImportLock } = await import("@/models/ImportLock");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const spy = vi.spyOn(Transaction, "create");
+    let swapped = false;
+    spy.mockImplementation(async function (this: unknown, ...args: unknown[]) {
+      if (!swapped) {
+        swapped = true;
+        // The first run's lock expired and a second run took its own.
+        await ImportLock.deleteMany({ user: userId });
+        await ImportLock.create({ user: userId, account: accountId, expiresAt: new Date(Date.now() + 60_000) });
+      }
+      spy.mockRestore();
+      return (Transaction.create as unknown as (...a: unknown[]) => Promise<unknown>).apply(Transaction, args);
+    } as never);
+    const res = await commit({ csv: "Date,Amount\n2026-10-05,-5.00" });
+    expect(res.status).toBe(201);
+    expect(swapped).toBe(true);
+    expect(await ImportLock.countDocuments({ user: userId, account: accountId })).toBe(1);
+  });
 
   it("control: a manual expense over the budget and limit does alert and round up", async () => {
     const { createTransaction } = await import("@/lib/transaction-service");

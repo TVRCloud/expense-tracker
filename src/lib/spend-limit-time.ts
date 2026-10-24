@@ -43,11 +43,28 @@ function offsetAt(ms: number, timeZone: string) {
   return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - whole;
 }
 
-// The UTC instant at which the local calendar day y-m-d starts.
+// The UTC instant at which the local calendar day y-m-d starts. Where a clock
+// change skips midnight (America/Santiago, Asia/Beirut: 00:00 becomes 01:00),
+// the day starts at the first instant that exists, not an hour before it on the
+// day before.
 export function localMidnight(timeZone: string, year: number, month: number, day: number) {
   const wall = Date.UTC(year, month - 1, day);
   const first = wall - offsetAt(wall, timeZone);
-  return new Date(wall - offsetAt(first, timeZone));
+  const guess = wall - offsetAt(first, timeZone);
+  const wallDayAt = (ms: number) => {
+    const p = localParts(new Date(ms), timeZone);
+    return Date.UTC(p.year, p.month - 1, p.day);
+  };
+  if (wallDayAt(guess) >= wall) return new Date(guess);
+  // guess is still on the day before; the day has started by guess + 24 h.
+  let lo = guess;
+  let hi = guess + 86_400_000;
+  while (hi - lo > 1000) {
+    const mid = lo + Math.floor((hi - lo) / 2000) * 1000;
+    if (wallDayAt(mid) >= wall) hi = mid;
+    else lo = mid;
+  }
+  return new Date(hi);
 }
 
 /** The calendar date on the user's wall clock at this instant (dayOfWeek: 0 is Sunday). */

@@ -11,8 +11,10 @@ function escapeCsvCell(value: unknown): string {
   // opened, letting a user-controlled field (description/note/tags) run
   // arbitrary formulas (data exfiltration, or DDE command execution) in
   // whoever's spreadsheet app opens the export. Prefixing with a literal
-  // quote forces it to be read as text instead.
-  if (/^[=+\-@\t\r]/.test(str)) str = `'${str}`;
+  // quote forces it to be read as text instead. A value that already starts
+  // with a quote gets one too, so the import can strip exactly one and get the
+  // original back.
+  if (/^['=+\-@\t\r]/.test(str)) str = `'${str}`;
 
   if (/[",\r\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
   return str;

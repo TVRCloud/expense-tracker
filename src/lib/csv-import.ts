@@ -150,8 +150,9 @@ function twoDigitYear(y: number) {
 
 /**
  * A date cell to a calendar date. Takes 2026-10-24 (and a time after it),
- * 24/10/2026, 24-10-26, 24.10.2026 and 24 Oct 2026; the day-first or
- * month-first order of the numeric forms is the caller's choice.
+ * 24/10/2026, 24-10-26, 24.10.2026 and 24 Oct 2026; the day-first,
+ * month-first or year-first (26-10-05) order of the short numeric forms is the
+ * caller's choice.
  */
 export function parseDateCell(raw: string, order: DateOrder): { y: number; m: number; d: number } | null {
   const s = raw.trim();
@@ -164,6 +165,13 @@ export function parseDateCell(raw: string, order: DateOrder): { y: number; m: nu
   if (m) {
     const month = MONTHS.indexOf(m[2].slice(0, 3).toLowerCase()) + 1;
     return month ? validDate(twoDigitYear(Number(m[3])), month, Number(m[1])) : null;
+  }
+
+  if (order === "ymd") {
+    // Year first: 26-10-05 (2026-10-05). A day-first or month-first cell is not
+    // this order, so it is refused rather than read the wrong way.
+    m = /^(\d{2})[-/.](\d{1,2})[-/.](\d{1,2})(?:[T\s,].*)?$/.exec(s);
+    return m ? validDate(twoDigitYear(Number(m[1])), Number(m[2]), Number(m[3])) : null;
   }
 
   m = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2}|\d{4})(?:[T\s,].*)?$/.exec(s);
@@ -186,23 +194,28 @@ export function parseAmountCell(raw: string): number | null {
   if (raw.length > 64) return null;
   let s = raw.trim();
   if (!s) return null;
+  // Any marker of a negative (brackets, a minus sign, Dr) makes it negative; Cr
+  // is a positive marker, so a cell that says both is refused, not guessed.
   let negative = false;
+  let credit = false;
   if (s.startsWith("(") && s.endsWith(")")) {
     negative = true;
     s = s.slice(1, -1);
   }
   const suffix = /(dr|cr)\.?$/i.exec(s);
   if (suffix) {
-    if (suffix[1].toLowerCase() === "dr") negative = !negative;
+    if (suffix[1].toLowerCase() === "dr") negative = true;
+    else credit = true;
     s = s.slice(0, suffix.index).trimEnd();
   }
   s = s.replace(/^(rs\.?|inr|₹)\s*/i, "").replace(/[\s₹]/g, "");
   if (s.startsWith("-")) {
-    negative = !negative;
+    negative = true;
     s = s.slice(1);
   } else if (s.startsWith("+")) {
     s = s.slice(1);
   }
+  if (negative && credit) return null;
   if (s.includes(",")) {
     if (!GROUPED.test(s)) return null;
     s = s.replace(/,/g, "");
@@ -225,7 +238,7 @@ export function dateIsAmbiguous(raw: string): boolean {
 
 // A cell the export defanged (leading ') comes back as it was written.
 function unquoteCell(s: string): string {
-  return s.length > 1 && s[0] === "'" && /^[=+\-@\t\r]/.test(s[1]) ? s.slice(1) : s;
+  return s.length > 1 && s[0] === "'" && /^['=+\-@\t\r]/.test(s[1]) ? s.slice(1) : s;
 }
 
 const EXPENSE_WORDS = /^(expense|debit|dr|withdrawal|withdraw|spent|paid|payment|out|d)$/i;
