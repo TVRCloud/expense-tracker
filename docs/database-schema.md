@@ -20,6 +20,8 @@ All monetary fields are stored as **integers (cents)** — divide by 100 for dis
 | `preferences.weekStartsOn` | Number | 0=Sun, 1=Mon |
 | `preferences.timezone` | String | IANA zone, default `Asia/Kolkata`; decides where a day starts for spend limits |
 | `preferences.currency` | String | ISO 4217 |
+| `preferences.billReminders.enabled` | Boolean | default false; turns on bill due reminders |
+| `preferences.billReminders.leadDays` | Number | 1 to 14, default 3; how many days ahead to remind |
 | `passwordResetToken` | String | hashed, single-use |
 | `passwordResetExpires` | Date | 1hr window |
 

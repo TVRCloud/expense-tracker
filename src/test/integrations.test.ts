@@ -3188,3 +3188,338 @@ describe("integration subscriptions", () => {
     expect((await listSubscriptions(otherUserId)).subscriptions).toHaveLength(1);
   });
 });
+
+// ── Bill due reminders ─────────────────────────────────────────────────────
+
+describe("bills: upcoming list, mark paid, settings and reminders", () => {
+  const KEY = "test-bills-api-key";
+  const DAY = 86_400_000;
+  // 10:00 on 24 Oct in Kolkata (04:30Z), and 08:00 the same day.
+  const now = new Date("2026-10-24T04:30:00Z");
+  const early = new Date("2026-10-24T02:30:00Z");
+  let userId: string;
+  let otherUserId: string;
+  let accountId: string;
+  let actor: { id: string; name: string; email: string; role: string };
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Bill User", email: `bill${Date.now()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `billo${Date.now()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    const account = await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 1000000, currency: "INR" });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+    accountId = account._id.toString();
+    actor = { id: userId, name: user.name, email: user.email, role: "user" };
+  });
+
+  function req(path: string, method: "GET" | "POST" | "PATCH" = "GET", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/bills${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${KEY}`,
+        "content-type": "application/json",
+        ...(method === "GET" ? {} : { "idempotency-key": `bill-key-${n}` }),
+        ...headers,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+  const payCtx = (id: string) => ({ params: Promise.resolve({ id }) });
+
+  async function installment(label: string, due: Date, over: Record<string, unknown> = {}) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { Types } = await import("mongoose");
+    return Transaction.create({
+      user: userId,
+      account: accountId,
+      type: "expense",
+      amount: 200000,
+      category: "Rent",
+      date: due,
+      isRecurring: true,
+      recurringId: new Types.ObjectId(),
+      recurrenceLabel: label,
+      recurrenceFrequency: "monthly",
+      installmentIndex: 1,
+      installmentStatus: "upcoming",
+      ...over,
+    });
+  }
+  async function loan(due: Date | undefined, over: Record<string, unknown> = {}) {
+    const { default: Loan } = await import("@/models/Loan");
+    return Loan.create({
+      user: userId,
+      direction: "received",
+      counterparty: "Asha",
+      principalAmount: 500000,
+      remainingAmount: 500000,
+      startDate: new Date(now.getTime() - 30 * DAY),
+      dueDate: due,
+      ...over,
+    });
+  }
+  async function enable(leadDays = 3, timezone = "Asia/Kolkata") {
+    const { default: User } = await import("@/models/User");
+    await User.updateOne(
+      { _id: userId },
+      { $set: { "preferences.billReminders": { enabled: true, leadDays }, "preferences.timezone": timezone } }
+    );
+  }
+  const notices = async () => {
+    const { default: Notification } = await import("@/models/Notification");
+    return Notification.find({ user: userId, "meta.kind": "bill_reminder" }).sort({ createdAt: 1 }).lean<Array<{ type: string; title: string; body: string }>>();
+  };
+
+  it("daysUntil counts calendar days on the user's wall clock", async () => {
+    const { daysUntil } = await import("@/lib/bills");
+    const due = new Date("2026-10-24T20:00:00Z"); // 01:30 on the 25th in Kolkata, 16:00 on the 24th in New York
+    expect(daysUntil(due, now, "Asia/Kolkata")).toBe(1);
+    expect(daysUntil(due, now, "America/New_York")).toBe(0);
+    expect(daysUntil(new Date(now.getTime() - 2 * DAY), now, "Asia/Kolkata")).toBe(-2);
+    expect(daysUntil(due, now, "Not/AZone")).toBe(1); // falls back to Asia/Kolkata
+  });
+
+  it("lists recurring payments and loans owed, soonest first, with overdue marked", async () => {
+    const { listUpcomingBills } = await import("@/lib/bills");
+    await installment("Rent", new Date(now.getTime() + 5 * DAY));
+    await installment("Gym", new Date(now.getTime() - 2 * DAY));
+    await installment("Far away", new Date(now.getTime() + 40 * DAY));
+    await installment("Old news", new Date(now.getTime() - 90 * DAY));
+    await installment("Salary", new Date(now.getTime() + 2 * DAY), { type: "income" });
+    await installment("Paid already", new Date(now.getTime() + 1 * DAY), { installmentStatus: "paid" });
+    await loan(new Date(now.getTime() + 1 * DAY));
+    await loan(new Date(now.getTime() + 1 * DAY), { direction: "given", counterparty: "Ravi" });
+    await loan(new Date(now.getTime() + 1 * DAY), { isSettled: true, counterparty: "Settled" });
+    await loan(undefined, { counterparty: "No due date" });
+
+    const bills = await listUpcomingBills(userId, { days: 14, now });
+    expect(bills.map((b) => [b.title, b.kind, b.status, b.daysUntil])).toEqual([
+      ["Gym", "recurring", "overdue", -2],
+      ["Loan from Asha", "loan", "upcoming", 1],
+      ["Rent", "recurring", "upcoming", 5],
+    ]);
+    expect(bills[0]).toMatchObject({ amount: 200000, currency: "INR", canMarkPaid: true, accountId });
+    expect(bills[1]).toMatchObject({ amount: 500000, canMarkPaid: true });
+  });
+
+  it("only lists this user's bills", async () => {
+    const { listUpcomingBills } = await import("@/lib/bills");
+    await installment("Mine", new Date(now.getTime() + DAY));
+    expect(await listUpcomingBills(otherUserId, { days: 14, now })).toEqual([]);
+  });
+
+  it("lists the next unpaid statement of a credit card", async () => {
+    const { listUpcomingBills } = await import("@/lib/bills");
+    const { default: Account } = await import("@/models/Account");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const today = new Date();
+    const closeDay = Math.min(new Date(today.getTime() - 10 * DAY).getDate(), 28);
+    const card = await Account.create({
+      user: userId,
+      name: "Axis",
+      type: "credit_card",
+      balance: 0,
+      currency: "INR",
+      creditMeta: { billingCycleDay: closeDay, paymentDueDay: 28, creditLimit: 5000000, minPaymentPct: 5 },
+    });
+    await Transaction.create({ user: userId, account: card._id, type: "expense", amount: 123400, category: "shopping", date: new Date(today.getTime() - 15 * DAY) });
+    const bills = await listUpcomingBills(userId, { days: 60, now: today });
+    const cardBill = bills.find((b) => b.kind === "card");
+    expect(cardBill).toMatchObject({ title: "Axis payment", amount: 123400, canMarkPaid: false, accountId: String(card._id) });
+    expect(cardBill!.id).toMatch(new RegExp(`^card:${String(card._id)}:\\d{4}-\\d{2}-\\d{2}$`));
+  });
+
+  it("marking a recurring payment paid takes the money from its account, once", async () => {
+    const { markBillPaid } = await import("@/lib/bills");
+    const { default: Account } = await import("@/models/Account");
+    const { default: Transaction } = await import("@/models/Transaction");
+    const t = await installment("Rent", new Date(now.getTime() + DAY));
+    const result = await markBillPaid(userId, `recurring:${String(t._id)}`, actor);
+    expect(result).toMatchObject({ kind: "recurring", paid: true, amount: 200000 });
+    expect((await Transaction.findById(t._id).lean<{ installmentStatus: string }>())!.installmentStatus).toBe("paid");
+    expect((await Account.findById(accountId).lean<{ balance: number }>())!.balance).toBe(800000);
+    await expect(markBillPaid(userId, `recurring:${String(t._id)}`, actor)).rejects.toMatchObject({ code: "ALREADY_PAID" });
+    expect((await Account.findById(accountId).lean<{ balance: number }>())!.balance).toBe(800000);
+  });
+
+  it("marking a loan paid records a repayment and settles it; a part payment leaves the rest", async () => {
+    const { markBillPaid } = await import("@/lib/bills");
+    const { default: Loan } = await import("@/models/Loan");
+    const { default: Account } = await import("@/models/Account");
+    const first = await loan(new Date(now.getTime() + DAY));
+    await markBillPaid(userId, `loan:${String(first._id)}`, actor, { amount: 200000, accountId });
+    expect((await Loan.findById(first._id).lean<{ remainingAmount: number; isSettled: boolean }>())).toMatchObject({ remainingAmount: 300000, isSettled: false });
+    expect((await Account.findById(accountId).lean<{ balance: number }>())!.balance).toBe(800000);
+    const rest = await markBillPaid(userId, `loan:${String(first._id)}`, actor, { accountId });
+    expect(rest.amount).toBe(300000);
+    expect((await Loan.findById(first._id).lean<{ isSettled: boolean }>())!.isSettled).toBe(true);
+    await expect(markBillPaid(userId, `loan:${String(first._id)}`, actor)).rejects.toMatchObject({ code: "ALREADY_PAID" });
+  });
+
+  it("refuses cards, bad ids and other people's bills", async () => {
+    const { markBillPaid } = await import("@/lib/bills");
+    const t = await installment("Rent", new Date(now.getTime() + DAY));
+    const l = await loan(new Date(now.getTime() + DAY));
+    const strangerActor = { ...actor, id: otherUserId };
+    await expect(markBillPaid(userId, `card:${accountId}:2026-10-05`, actor)).rejects.toMatchObject({ code: "NOT_PAYABLE" });
+    await expect(markBillPaid(userId, "nonsense", actor)).rejects.toMatchObject({ code: "INVALID_BILL" });
+    await expect(markBillPaid(userId, "recurring:not-an-id", actor)).rejects.toMatchObject({ code: "INVALID_BILL" });
+    await expect(markBillPaid(otherUserId, `recurring:${String(t._id)}`, strangerActor)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(markBillPaid(otherUserId, `loan:${String(l._id)}`, strangerActor)).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("GET /api/integrations/bills returns bills and the settings, and needs the key", async () => {
+    const { GET } = await import("@/app/api/integrations/bills/route");
+    await installment("Rent", new Date(Date.now() + 2 * DAY));
+    const res = await GET(req("?days=7"), {});
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json.data.settings).toEqual({ enabled: false, leadDays: 3 });
+    expect(json.data.days).toBe(7);
+    expect(json.data.bills).toHaveLength(1);
+    expect(json.data.bills[0]).toMatchObject({ kind: "recurring", title: "Rent", status: "upcoming" });
+    expect((await GET(req("", "GET", undefined, { authorization: "Bearer wrong" }), {})).status).toBe(401);
+    const clamped = await (await GET(req("?days=9999"), {})).json();
+    expect(clamped.data.days).toBe(60);
+  });
+
+  it("POST /api/integrations/bills/[id]/pay marks it paid, replays on the same key and rejects a card", async () => {
+    const { POST } = await import("@/app/api/integrations/bills/[id]/pay/route");
+    const t = await installment("Rent", new Date(Date.now() + DAY));
+    const id = `recurring:${String(t._id)}`;
+    const headers = { "idempotency-key": "pay-once" };
+    const first = await POST(req(`/${encodeURIComponent(id)}/pay`, "POST", undefined, headers), payCtx(encodeURIComponent(id)));
+    expect(first.status).toBe(200);
+    expect((await first.json()).data).toMatchObject({ id, paid: true, kind: "recurring" });
+    const replay = await POST(req(`/${encodeURIComponent(id)}/pay`, "POST", undefined, headers), payCtx(encodeURIComponent(id)));
+    expect(replay.status).toBe(200);
+    const again = await POST(req(`/${encodeURIComponent(id)}/pay`, "POST", undefined), payCtx(encodeURIComponent(id)));
+    expect(again.status).toBe(400);
+    expect((await again.json()).error.reason).toBe("ALREADY_PAID");
+
+    const card = await POST(req(`/card:${accountId}:2026-10-05/pay`, "POST"), payCtx(`card:${accountId}:2026-10-05`));
+    expect(card.status).toBe(400);
+    expect((await card.json()).error.reason).toBe("NOT_PAYABLE");
+    const missing = await POST(req(`/recurring:${otherUserId}/pay`, "POST"), payCtx(`recurring:${otherUserId}`));
+    expect(missing.status).toBe(404);
+    const noKey = await POST(
+      new NextRequest("http://localhost/api/integrations/bills/x/pay", { method: "POST", headers: { authorization: `Bearer ${KEY}` } }),
+      payCtx("x")
+    );
+    expect(noKey.status).toBe(400);
+    const badBody = await POST(req(`/${encodeURIComponent(id)}/pay`, "POST", { amount: -5 }), payCtx(encodeURIComponent(id)));
+    expect(badBody.status).toBe(400);
+  });
+
+  it("settings default to off, validate, and change only what is sent", async () => {
+    const { GET, PATCH } = await import("@/app/api/integrations/bills/settings/route");
+    expect((await (await GET(req("/settings"), {})).json()).data).toEqual({ enabled: false, leadDays: 3 });
+    for (const bad of [{}, { leadDays: 0 }, { leadDays: 15 }, { leadDays: 2.5 }, { enabled: "yes" }, { other: 1 }]) {
+      expect((await PATCH(req("/settings", "PATCH", bad), {})).status).toBe(400);
+    }
+    const noKey = await PATCH(
+      new NextRequest("http://localhost/api/integrations/bills/settings", {
+        method: "PATCH",
+        headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ enabled: true }),
+      }),
+      {}
+    );
+    expect(noKey.status).toBe(400);
+    expect((await (await PATCH(req("/settings", "PATCH", { enabled: true }), {})).json()).data).toEqual({ enabled: true, leadDays: 3 });
+    expect((await (await PATCH(req("/settings", "PATCH", { leadDays: 7 }), {})).json()).data).toEqual({ enabled: true, leadDays: 7 });
+    expect((await (await GET(req("/settings"), {})).json()).data).toEqual({ enabled: true, leadDays: 7 });
+  });
+
+  it("reminds once when a bill enters the lead time, waits for 09:00 and never repeats", async () => {
+    const { sendBillReminders } = await import("@/lib/bill-reminders");
+    await enable(3);
+    await installment("Rent", new Date(now.getTime() + 2 * DAY));
+    await installment("Later", new Date(now.getTime() + 10 * DAY));
+    await loan(new Date(now.getTime() + 1 * DAY));
+
+    expect(await sendBillReminders(early)).toEqual({ checked: 1, sent: 0 }); // 08:00 in Kolkata
+    expect(await notices()).toHaveLength(0);
+
+    expect(await sendBillReminders(now)).toEqual({ checked: 1, sent: 2 });
+    expect(await sendBillReminders(new Date(now.getTime() + 30 * 60_000))).toEqual({ checked: 1, sent: 0 });
+    const sent = await notices();
+    expect(sent.map((s) => [s.type, s.title])).toEqual(
+      expect.arrayContaining([
+        ["emi_due", "Rent is due in 2 days"],
+        ["loan_due", "Loan from Asha is due tomorrow"],
+      ])
+    );
+    expect(sent.find((s) => s.type === "emi_due")!.body).toBe("Rent (₹2,000.00) is due in 2 days.");
+
+    // Eight days on, the far bill is inside the lead time and the first two went overdue:
+    // each gets its own reminder, and nothing is sent twice.
+    const later = new Date(now.getTime() + 8 * DAY);
+    expect((await sendBillReminders(later)).sent).toBe(3);
+    expect((await notices()).map((s) => s.title)).toEqual(
+      expect.arrayContaining(["Later is due in 2 days", "Overdue: Rent", "Overdue: Loan from Asha"])
+    );
+    expect((await sendBillReminders(later)).sent).toBe(0);
+  });
+
+  it("sends one overdue reminder, separate from the due-soon one", async () => {
+    const { sendBillReminders } = await import("@/lib/bill-reminders");
+    await enable(3);
+    await installment("Gym", new Date(now.getTime() + 1 * DAY));
+    expect((await sendBillReminders(now)).sent).toBe(1);
+    const dayAfter = new Date(now.getTime() + 3 * DAY);
+    expect((await sendBillReminders(dayAfter)).sent).toBe(1);
+    expect((await sendBillReminders(new Date(dayAfter.getTime() + 60 * 60_000))).sent).toBe(0);
+    const sent = await notices();
+    expect(sent.map((s) => s.title)).toEqual(["Gym is due tomorrow", "Overdue: Gym"]);
+    expect(sent[1].body).toBe("Gym (₹2,000.00) was due 2 days ago.");
+  });
+
+  it("uses each user's own time zone for 09:00", async () => {
+    const { sendBillReminders } = await import("@/lib/bill-reminders");
+    await enable(3, "America/New_York");
+    await installment("Rent", new Date(now.getTime() + 2 * DAY));
+    // 10:00 in Kolkata is 00:30 in New York: not yet.
+    expect((await sendBillReminders(now)).sent).toBe(0);
+    // 14:00Z is 10:00 in New York.
+    expect((await sendBillReminders(new Date("2026-10-24T14:00:00Z"))).sent).toBe(1);
+  });
+
+  it("skips users who have not turned reminders on, and the older due pushes stand down for those who have", async () => {
+    const { sendBillReminders } = await import("@/lib/bill-reminders");
+    const { checkEmiDueNotifications } = await import("@/lib/emi-notifications");
+    const { default: Notification } = await import("@/models/Notification");
+    const dueToday = new Date();
+    dueToday.setHours(12, 0, 0, 0);
+    await installment("Rent", dueToday);
+
+    expect(await sendBillReminders(now)).toEqual({ checked: 0, sent: 0 });
+    await checkEmiDueNotifications(userId);
+    expect(await Notification.countDocuments({ user: userId, type: "emi_due" })).toBe(1); // the old push still works
+
+    await Notification.deleteMany({ user: userId });
+    await enable(3);
+    await checkEmiDueNotifications(userId);
+    expect(await Notification.countDocuments({ user: userId, type: "emi_due" })).toBe(0);
+  });
+
+  it("the cron route needs the secret and reports what it did", async () => {
+    process.env.CRON_SECRET = "cron-secret-for-tests";
+    const { GET } = await import("@/app/api/cron/bill-reminders/route");
+    const call = (headers: Record<string, string> = {}) =>
+      GET(new NextRequest("http://localhost/api/cron/bill-reminders", { headers }));
+    expect((await call()).status).toBe(401);
+    expect((await call({ authorization: "Bearer wrong" })).status).toBe(401);
+    const ok = await call({ authorization: "Bearer cron-secret-for-tests" });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ ok: true, checked: 0, sent: 0 });
+  });
+});

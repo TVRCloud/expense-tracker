@@ -4,6 +4,7 @@ import Notification from "@/models/Notification";
 import { sendPushToUser } from "@/lib/push";
 import logger from "@/lib/logger";
 import { formatCurrency } from "@/lib/utils";
+import { billRemindersOn } from "@/lib/bill-settings";
 
 const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -20,6 +21,8 @@ async function alreadySent(userId: string, key: string): Promise<boolean> {
 export async function checkEmiDueNotifications(userId: string): Promise<void> {
   try {
     await connectDB();
+    // Unified bill reminders (bill-reminders.ts) cover EMIs for users who turned them on.
+    if (await billRemindersOn(userId)) return;
 
     const now = new Date();
     now.setHours(0, 0, 0, 0);

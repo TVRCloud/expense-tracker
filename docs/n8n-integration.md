@@ -91,6 +91,9 @@ Authorization: Bearer <YOUR_API_KEY>
 | PATCH | `/api/integrations/subscriptions/[id]` | Confirm, dismiss or restore one (`{status}`, needs `Idempotency-Key`) |
 | GET | `/api/integrations/spend-limit` | Daily and weekly limit settings, today and week progress, safe to spend |
 | PUT | `/api/integrations/spend-limit` | Set, change or clear the limits (needs `Idempotency-Key`) |
+| GET | `/api/integrations/bills` | What is coming due: recurring payments, card statements, loans you owe. `days` 0 to 60, default 14; overdue from the last 60 days included. Returns `{bills, settings, days}` |
+| POST | `/api/integrations/bills/[id]/pay` | Mark a bill paid (needs `Idempotency-Key`; optional `{amount, accountId}` for loans). Cards answer 400 `NOT_PAYABLE` |
+| GET, PATCH | `/api/integrations/bills/settings` | Reminder settings `{enabled, leadDays}` (off by default, `leadDays` 1 to 14); PATCH changes only what is sent (needs `Idempotency-Key`) |
 | GET | `/api/integrations/summary` | Snapshot: accounts, monthly stats, budgets |
 | POST | `/api/integrations/sms` | Parse a bank/NBFC SMS and create a transaction or loan repayment |
 
@@ -391,3 +394,21 @@ this server. `404 NOT_FOUND` when there is no release.
 Only releases tagged `vMAJOR.MINOR.PATCH+BUILD` with one `.apk` asset, and that
 are neither drafts nor prereleases, count. The mobile repo's CI publishes them
 in exactly that shape. Release lookups are cached for 5 minutes.
+
+
+## Bills and reminders
+
+`GET /api/integrations/bills` returns one list of bills, soonest first (overdue at the top):
+
+```json
+{ "bills": [{ "id": "recurring:66f0...", "kind": "recurring", "title": "Rent", "amount": 1200000, "currency": "INR",
+              "dueDate": "2026-10-27T00:00:00.000Z", "daysUntil": 3, "status": "upcoming", "accountId": "66e0...",
+              "canMarkPaid": true, "recurringId": "66d0..." }],
+  "settings": { "enabled": false, "leadDays": 3 }, "days": 14 }
+```
+
+- `kind` is `recurring` (an unpaid expense installment), `card` (the oldest unpaid statement of a credit card) or `loan` (an unsettled loan you received, with a due date). `id` is `recurring:<installmentId>`, `card:<accountId>:<statement close date>` or `loan:<loanId>`; pass it to `/pay` URL-encoded.
+- `status` is `upcoming`, `due_today` or `overdue`; `daysUntil` is whole days on the user's wall clock (`preferences.timezone`) and negative once overdue. `amount` is in minor units.
+- `/pay` marks a recurring payment paid through the same code as the installment route (balance and ledger updated), or records a loan repayment (full amount left unless `amount` is sent; `accountId` also records the transaction). A card statement cannot be marked paid here: record the payment on the card.
+- Errors: 400 `VALIDATION_ERROR` with `error.reason` `INVALID_BILL`, `NOT_PAYABLE` or `ALREADY_PAID`; 404 `NOT_FOUND` for a bill that is not the user's.
+- Reminders: with `enabled`, a notification (and push) is created once per bill per due date when it comes within `leadDays`, from 09:00 on the user's clock, plus one more when it goes overdue. Types are `emi_due` (recurring), `credit_due` (card) and `loan_due`; `meta.kind` is `bill_reminder`. For these users the older EMI day-before and card due-soon pushes stand down so nothing arrives twice. The job runs every 30 minutes from `server.ts`; on Vercel call `GET /api/cron/bill-reminders` with `Authorization: Bearer $CRON_SECRET` from a scheduler every 30 minutes (safe to call often).
