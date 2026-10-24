@@ -5,6 +5,9 @@ import User from "@/models/User";
 import { activityDateAddFields } from "@/lib/transaction-activity";
 import { DEFAULT_TIME_ZONE, isValidTimeZone } from "@/lib/spend-limit-time";
 import { currentFy, fyBounds, fyLabel, fyMonthKeys } from "@/lib/tax-year";
+import { getBaseCurrency } from "@/lib/base-currency";
+import { minorExponent } from "@/lib/currency";
+import { minorToMajor } from "@/lib/money-format";
 import { categoryKey, normaliseCategories } from "@/lib/tax-settings";
 
 // Financial-year summary for the tax helper (April to March, in the user's
@@ -36,7 +39,10 @@ export interface TaxSummary {
   start: string;
   end: string;
   timeZone: string;
-  /** Paise. `expense` is net of confirmed refunds. */
+  /** The base currency every figure is in, and its decimals (JPY 0, INR 2, KWD 3). */
+  currency: string;
+  exponent: number;
+  /** Minor units of that currency (paise for INR). `expense` is net of confirmed refunds. */
   income: number;
   expense: number;
   /** income - expense; negative when more was spent than earned. */
@@ -170,7 +176,7 @@ export async function refundedExpenses(userObjectId: Types.ObjectId, ids: Array<
 
 export async function getTaxSummary(userId: string, fyArg?: number, now: Date = new Date()): Promise<TaxSummary> {
   await connectDB();
-  const { timeZone, categories } = await readUser(userId);
+  const [{ timeZone, categories }, currency] = await Promise.all([readUser(userId), getBaseCurrency(userId)]);
   const fy = fyArg ?? currentFy(now, timeZone);
   const { start, end } = fyBounds(fy, timeZone);
   const userObjectId = new Types.ObjectId(userId);
@@ -263,6 +269,8 @@ export async function getTaxSummary(userId: string, fyArg?: number, now: Date = 
     start: start.toISOString(),
     end: end.toISOString(),
     timeZone,
+    currency,
+    exponent: minorExponent(currency),
     ...foldTaxGroups(groups, fy, categories),
     deductibleCategories: categories,
     availableYears: await availableYears(userObjectId, timeZone, fy),
@@ -312,30 +320,27 @@ async function availableYears(userObjectId: Types.ObjectId, timeZone: string, fy
   return [...new Set([fy, ...list])].sort((a, b) => b - a);
 }
 
-// "1234.5" style rupee figure for the CSV (a number, so a negative stays numeric).
-const rupees = (paise: number) => Number((paise / 100).toFixed(2));
+// The amount column is headed with the currency code, and its numbers are
+// that currency's major units (a number, so a negative stays numeric).
+export const taxCsvColumns = (currency: string) => ["section", "name", `amount (${currency})`];
 
 export function taxCsvRows(s: TaxSummary): Array<Record<string, unknown>> {
+  const col = taxCsvColumns(s.currency)[2];
+  const major = (minor: number) => minorToMajor(minor, s.currency);
   const out: Array<Record<string, unknown>> = [
-    { section: "Summary", name: "Financial year", amount: s.label },
-    { section: "Summary", name: "Income", amount: rupees(s.income) },
-    { section: "Summary", name: "Spending", amount: rupees(s.expense) },
-    { section: "Summary", name: "Saved", amount: rupees(s.saved) },
-    { section: "Summary", name: "Deductible spending", amount: rupees(s.deductible.total) },
+    { section: "Summary", name: "Financial year", [col]: s.label },
+    { section: "Summary", name: "Income", [col]: major(s.income) },
+    { section: "Summary", name: "Spending", [col]: major(s.expense) },
+    { section: "Summary", name: "Saved", [col]: major(s.saved) },
+    { section: "Summary", name: "Deductible spending", [col]: major(s.deductible.total) },
   ];
-  for (const m of s.byMonth) {
-    out.push({ section: "Income by month", name: m.month, amount: rupees(m.income) });
-  }
-  for (const m of s.byMonth) {
-    out.push({ section: "Spending by month", name: m.month, amount: rupees(m.expense) });
-  }
-  for (const r of s.deductible.byCategory) out.push({ section: "Deductible by category", name: r.category, amount: rupees(r.total) });
-  for (const r of s.incomeByCategory) out.push({ section: "Income by category", name: r.category, amount: rupees(r.total) });
-  for (const r of s.expenseByCategory) out.push({ section: "Spending by category", name: r.category, amount: rupees(r.total) });
+  for (const m of s.byMonth) out.push({ section: "Income by month", name: m.month, [col]: major(m.income) });
+  for (const m of s.byMonth) out.push({ section: "Spending by month", name: m.month, [col]: major(m.expense) });
+  for (const r of s.deductible.byCategory) out.push({ section: "Deductible by category", name: r.category, [col]: major(r.total) });
+  for (const r of s.incomeByCategory) out.push({ section: "Income by category", name: r.category, [col]: major(r.total) });
+  for (const r of s.expenseByCategory) out.push({ section: "Spending by category", name: r.category, [col]: major(r.total) });
   return out;
 }
-
-export const TAX_CSV_COLUMNS = ["section", "name", "amount"];
 
 /** Marks one expense deductible (true), not deductible (false) or back to the category rule (null). */
 export async function setTransactionDeductible(

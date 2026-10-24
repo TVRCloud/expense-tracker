@@ -10,7 +10,7 @@ Purpose: the financial year (April to March) summary for an accountant: income, 
 - Libs: src/lib/tax-service.ts, tax-year.ts, tax-settings.ts. Mobile: none yet (TVRCloud/expense-tracker-mobile#63).
 
 ## Rules and gotchas
-- Amounts are cents, shown with `useCurrency().formatCurrency`.
+- Amounts are minor units of the base currency (`currency`, `exponent` in the answer), shown with `formatMinor` from src/lib/money-format.ts so JPY has no decimals and KWD three.
 - No PDF library: Print uses the browser, and `html[data-print="tax"]` in globals.css hides the navigation while the page is open.
 - Realtime `transactions` invalidates `["tax"]`.
 

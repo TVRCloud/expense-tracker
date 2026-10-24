@@ -21,6 +21,8 @@ export interface TaxSummary {
   start: string;
   end: string;
   timeZone: string;
+  currency: string;
+  exponent: number;
   income: number;
   expense: number;
   saved: number;
