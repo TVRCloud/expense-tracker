@@ -5678,3 +5678,291 @@ describe("browser card rewards routes", () => {
     expect((await GET()).status).toBe(401);
   });
 });
+
+
+describe("net worth", () => {
+  const KEY = "test-net-worth-api-key";
+  let userId: string;
+  let otherUserId: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "NW User", email: `nw${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "NW Other", email: `nwo${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    userId = user._id.toString();
+    otherUserId = other._id.toString();
+  });
+
+  const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+  function req(path: string, method = "GET", body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/net-worth${path}`, {
+      method,
+      headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json", "idempotency-key": `nw-key-${n}`, ...headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+  const getReport = async (query = "") => {
+    const { GET } = await import("@/app/api/integrations/net-worth/route");
+    const res = await GET(req(query), {});
+    expect(res.status).toBe(200);
+    return (await res.json()).data as {
+      assets: number; liabilities: number; netWorth: number;
+      breakdown: { assets: { key: string; amount: number; count: number }[]; liabilities: { key: string; amount: number }[] };
+      range: string;
+      history: { date: string; netWorth: number }[];
+      change: { amount: number; percent: number | null; since: string | null };
+    };
+  };
+
+  async function seed(user: string) {
+    const { default: Account } = await import("@/models/Account");
+    const { default: Loan } = await import("@/models/Loan");
+    const { default: ManualAsset } = await import("@/models/ManualAsset");
+    await Account.create([
+      { user, name: "Bank", type: "bank", balance: 100000 },
+      { user, name: "Savings", type: "savings", balance: 50000 },
+      { user, name: "Cash", type: "cash", balance: 20000 },
+      { user, name: "Card", type: "credit_card", balance: -30000 },
+      { user, name: "Overdrawn", type: "bank", balance: -5000 },
+      { user, name: "Old", type: "bank", balance: 999999, isArchived: true },
+    ]);
+    const base = { user, startDate: new Date(), principalAmount: 100000 };
+    await Loan.create([
+      { ...base, direction: "given", counterparty: "Friend", remainingAmount: 40000 },
+      { ...base, direction: "received", counterparty: "Bank loan", remainingAmount: 25000 },
+      { ...base, direction: "received", counterparty: "Paid off", remainingAmount: 0, isSettled: true },
+      { ...base, direction: "given", counterparty: "Removed", remainingAmount: 77777, isDeleted: true },
+    ]);
+    await ManualAsset.create([
+      { user, name: "Gold", kind: "gold", value: 70000 },
+      { user, name: "Sold car", kind: "vehicle", value: 500000, isArchived: true },
+    ]);
+  }
+
+  it("needs an API key", async () => {
+    const { GET } = await import("@/app/api/integrations/net-worth/route");
+    const res = await GET(new NextRequest("http://localhost/api/integrations/net-worth"), {});
+    expect(res.status).toBe(401);
+  });
+
+  it("is zero with nothing to count, and still returns today's point", async () => {
+    const r = await getReport();
+    expect(r).toMatchObject({ assets: 0, liabilities: 0, netWorth: 0, range: "90d" });
+    expect(r.breakdown).toEqual({ assets: [], liabilities: [] });
+    expect(r.history).toHaveLength(1);
+    expect(r.change).toEqual({ amount: 0, percent: null, since: null });
+  });
+
+  it("adds up accounts, loans both ways, cards as debt and manual assets, skipping archived, settled and deleted", async () => {
+    await seed(userId);
+    await seed(otherUserId); // someone else's money never counts
+    const r = await getReport();
+    expect(r.assets).toBe(100000 + 50000 + 20000 + 40000 + 70000);
+    expect(r.liabilities).toBe(30000 + 5000 + 25000);
+    expect(r.netWorth).toBe(280000 - 60000);
+    expect(r.breakdown.assets.map((b) => [b.key, b.amount])).toEqual([
+      ["bank", 100000],
+      ["savings", 50000],
+      ["cash", 20000],
+      ["loansGiven", 40000],
+      ["manual", 70000],
+    ]);
+    expect(r.breakdown.liabilities.map((b) => [b.key, b.amount])).toEqual([
+      ["cards", 30000],
+      ["overdrafts", 5000],
+      ["loansReceived", 25000],
+    ]);
+  });
+
+  it("a card with a credit balance counts as an asset", async () => {
+    const { default: Account } = await import("@/models/Account");
+    await Account.create({ user: userId, name: "Card", type: "credit_card", balance: 1200 });
+    const r = await getReport();
+    expect(r.breakdown.assets).toEqual([{ key: "cardCredit", label: "Card credit balances", amount: 1200, count: 1 }]);
+    expect(r.liabilities).toBe(0);
+  });
+
+  it("returns the trend oldest first, filtered by range, with the change since the first point", async () => {
+    await seed(userId);
+    const { default: NetWorthSnapshot } = await import("@/models/NetWorthSnapshot");
+    const { localDayKey } = await import("@/lib/net-worth");
+    const day = (ago: number) => localDayKey(new Date(Date.now() - ago * 86400000), "Asia/Kolkata");
+    await NetWorthSnapshot.create([
+      { user: userId, day: day(200), assets: 1, liabilities: 0, netWorth: 1 },
+      { user: userId, day: day(20), assets: 200000, liabilities: 60000, netWorth: 140000 },
+      { user: userId, day: day(5), assets: 250000, liabilities: 60000, netWorth: 190000 },
+      { user: otherUserId, day: day(5), assets: 9, liabilities: 0, netWorth: 9 },
+    ]);
+
+    const r30 = await getReport("?range=30d");
+    expect(r30.range).toBe("30d");
+    expect(r30.history.map((p) => p.netWorth)).toEqual([140000, 190000, 220000]);
+    expect(r30.history.map((p) => p.date)).toEqual([day(20), day(5), day(0)]);
+    expect(r30.change).toEqual({ amount: 80000, percent: 57.1, since: day(20) });
+
+    const all = await getReport("?range=all");
+    expect(all.history).toHaveLength(4);
+    expect(all.history[0].netWorth).toBe(1);
+
+    const odd = await getReport("?range=nonsense");
+    expect(odd.range).toBe("90d");
+    expect(odd.history).toHaveLength(3);
+  });
+
+  it("reading twice in a day keeps one point for the day", async () => {
+    await seed(userId);
+    await getReport();
+    await getReport();
+    const { default: NetWorthSnapshot } = await import("@/models/NetWorthSnapshot");
+    expect(await NetWorthSnapshot.countDocuments({ user: userId })).toBe(1);
+  });
+
+  it("the day follows the user's time zone", async () => {
+    const { localDayKey } = await import("@/lib/net-worth");
+    const instant = new Date("2026-03-01T20:00:00Z"); // 01:30 on 2 March in Kolkata, still 1 March in UTC and New York
+    expect(localDayKey(instant, "Asia/Kolkata")).toBe("2026-03-02");
+    expect(localDayKey(instant, "UTC")).toBe("2026-03-01");
+    expect(localDayKey(instant, "America/New_York")).toBe("2026-03-01");
+    expect(localDayKey(instant, "Not/AZone")).toBe("2026-03-02");
+    expect(localDayKey(instant, undefined)).toBe("2026-03-02");
+  });
+
+  describe("manual assets", () => {
+    const list = async () => {
+      const { GET } = await import("@/app/api/integrations/net-worth/assets/route");
+      return (await (await GET(req("/assets"), {})).json()).data as { id: string; name: string; value: number; kind: string; note: string | null }[];
+    };
+    const create = async (body: unknown, headers: Record<string, string> = {}) => {
+      const { POST } = await import("@/app/api/integrations/net-worth/assets/route");
+      return POST(req("/assets", "POST", body, headers), {});
+    };
+
+    it("creates with an Idempotency-Key and replays the same answer", async () => {
+      const first = await create({ name: "Flat", kind: "property", value: 5000000, note: "Pune" }, { "idempotency-key": "asset-1" });
+      expect(first.status).toBe(201);
+      const asset = (await first.json()).data;
+      expect(asset).toMatchObject({ name: "Flat", kind: "property", value: 5000000, note: "Pune" });
+      const replay = await create({ name: "Flat", kind: "property", value: 5000000, note: "Pune" }, { "idempotency-key": "asset-1" });
+      expect((await replay.json()).data.id).toBe(asset.id);
+      expect(await list()).toHaveLength(1);
+      expect((await getReport()).netWorth).toBe(5000000);
+      const clash = await create({ name: "Other", value: 1 }, { "idempotency-key": "asset-1" });
+      expect(clash.status).toBe(409);
+    });
+
+    it("rejects a missing key and bad data", async () => {
+      expect((await create({ name: "Flat", value: 1 }, { "idempotency-key": "" })).status).toBe(400);
+      expect((await create({ name: "", value: 1 })).status).toBe(400);
+      expect((await create({ name: "Flat", value: -5 })).status).toBe(400);
+      expect((await create({ name: "Flat", value: 1.5 })).status).toBe(400);
+      expect((await create({ name: "Flat", value: 1, kind: "boat" })).status).toBe(400);
+    });
+
+    it("edits, clears the note, and archives so it stops counting", async () => {
+      const { PATCH, DELETE } = await import("@/app/api/integrations/net-worth/assets/[id]/route");
+      const made = (await (await create({ name: "Gold", kind: "gold", value: 100000, note: "coins" })).json()).data;
+
+      const edited = await PATCH(req(`/assets/${made.id}`, "PATCH", { value: 150000, note: null }), ctx(made.id));
+      expect(edited.status).toBe(200);
+      expect((await edited.json()).data).toMatchObject({ value: 150000, note: null, name: "Gold" });
+      expect((await getReport()).assets).toBe(150000);
+
+      expect((await PATCH(req(`/assets/${made.id}`, "PATCH", {}), ctx(made.id))).status).toBe(400);
+      expect((await PATCH(req(`/assets/${made.id}`, "PATCH", { value: -1 }), ctx(made.id))).status).toBe(400);
+      expect((await PATCH(req(`/assets/nope`, "PATCH", { value: 1 }), ctx("nope"))).status).toBe(400);
+
+      const gone = await DELETE(req(`/assets/${made.id}`, "DELETE"), ctx(made.id));
+      expect(gone.status).toBe(200);
+      expect((await gone.json()).data).toEqual({ id: made.id, deleted: true });
+      expect(await list()).toEqual([]);
+      expect((await getReport()).assets).toBe(0);
+      expect((await DELETE(req(`/assets/${made.id}`, "DELETE"), ctx(made.id))).status).toBe(404);
+    });
+
+    it("never touches or lists another user's assets", async () => {
+      const { default: ManualAsset } = await import("@/models/ManualAsset");
+      const theirs = await ManualAsset.create({ user: otherUserId, name: "Theirs", value: 10 });
+      const id = theirs._id.toString();
+      const { PATCH, DELETE } = await import("@/app/api/integrations/net-worth/assets/[id]/route");
+      expect((await PATCH(req(`/assets/${id}`, "PATCH", { value: 5 }), ctx(id))).status).toBe(404);
+      expect((await DELETE(req(`/assets/${id}`, "DELETE"), ctx(id))).status).toBe(404);
+      expect(await list()).toEqual([]);
+      expect((await ManualAsset.findById(id).lean<{ value: number; isArchived: boolean }>())).toMatchObject({ value: 10, isArchived: false });
+    });
+  });
+
+  describe("snapshots for everyone and the cron route", () => {
+    it("records a point for each active user that has something, and skips the rest", async () => {
+      await seed(userId);
+      const { default: User } = await import("@/models/User");
+      await User.create({ name: "Inactive", email: `nwi${Date.now()}@x.com`, password: "hash", isActive: false });
+      const { default: Account } = await import("@/models/Account");
+      const inactive = await User.findOne({ name: "Inactive" });
+      await Account.create({ user: inactive!._id, name: "Bank", type: "bank", balance: 5 });
+      const { recordSnapshotsForAllUsers } = await import("@/lib/net-worth");
+      const out = await recordSnapshotsForAllUsers();
+      expect(out).toEqual({ checked: 2, recorded: 1 }); // the key's second user (otherUser) has nothing; the inactive one is skipped
+      const { default: NetWorthSnapshot } = await import("@/models/NetWorthSnapshot");
+      const rows = await NetWorthSnapshot.find({}).lean<{ user: { toString(): string }; netWorth: number }[]>();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].user.toString()).toBe(userId);
+      expect(rows[0].netWorth).toBe(220000);
+    });
+
+    it("the cron route needs the secret", async () => {
+      process.env.CRON_SECRET = "cron-secret-for-tests";
+      const { GET } = await import("@/app/api/cron/net-worth-snapshot/route");
+      const call = (headers: Record<string, string> = {}) =>
+        GET(new NextRequest("http://localhost/api/cron/net-worth-snapshot", { headers }));
+      expect((await call()).status).toBe(401);
+      expect((await call({ authorization: "Bearer wrong" })).status).toBe(401);
+      const ok = await call({ authorization: "Bearer cron-secret-for-tests" });
+      expect(ok.status).toBe(200);
+      expect(await ok.json()).toEqual({ ok: true, checked: 2, recorded: 0 });
+    });
+  });
+
+  describe("browser routes", () => {
+    afterEach(() => {
+      sessionUser.current = null;
+    });
+
+    it("GET /api/net-worth is the same report; the asset routes work on the session user", async () => {
+      sessionUser.current = { id: userId, name: "NW", email: "nw@x.com", role: "user" };
+      await seed(userId);
+      const { GET } = await import("@/app/api/net-worth/route");
+      const res = await GET(new NextRequest("http://localhost/api/net-worth?range=30d"));
+      const body = (await res.json()).data;
+      expect(body).toMatchObject({ netWorth: 220000, range: "30d" });
+
+      const assets = await import("@/app/api/net-worth/assets/route");
+      const made = await assets.POST(
+        new NextRequest("http://localhost/api/net-worth/assets", { method: "POST", body: JSON.stringify({ name: "Car", kind: "vehicle", value: 30000 }) })
+      );
+      expect(made.status).toBe(201);
+      const id = (await made.json()).data.id;
+      expect((await (await assets.GET()).json()).data.map((a: { name: string }) => a.name).sort()).toEqual(["Car", "Gold"]);
+
+      const one = await import("@/app/api/net-worth/assets/[id]/route");
+      const patched = await one.PATCH(
+        new NextRequest(`http://localhost/api/net-worth/assets/${id}`, { method: "PATCH", body: JSON.stringify({ value: 40000 }) }),
+        ctx(id)
+      );
+      expect((await patched.json()).data.value).toBe(40000);
+      expect((await one.DELETE(new NextRequest(`http://localhost/api/net-worth/assets/${id}`, { method: "DELETE" }), ctx(id))).status).toBe(200);
+      expect((await one.DELETE(new NextRequest(`http://localhost/api/net-worth/assets/nope`, { method: "DELETE" }), ctx("nope"))).status).toBe(404);
+    });
+
+    it("needs a signed-in user", async () => {
+      sessionUser.current = null;
+      const { GET } = await import("@/app/api/net-worth/route");
+      expect((await GET(new NextRequest("http://localhost/api/net-worth"))).status).toBe(401);
+    });
+  });
+});

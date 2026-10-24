@@ -23,6 +23,12 @@ describe("INVALIDATION_MAP", () => {
     expect(INVALIDATION_MAP.sinkingFunds).toEqual([["sinking-funds"], ["notifications"]]);
     expect(INVALIDATION_MAP.transactions.map((k) => k[0])).toContain("savings-rate");
   });
+  it("net worth refreshes when money, accounts or loans move, and when a manual asset changes", () => {
+    expect(INVALIDATION_MAP.netWorth).toEqual([["net-worth"]]);
+    for (const r of ["transactions", "accounts", "loans", "repayments"] as const) {
+      expect(INVALIDATION_MAP[r].map((k) => k[0])).toContain("net-worth");
+    }
+  });
   it("captures touch reconcile and notifications", () => {
     expect(INVALIDATION_MAP.captures).toEqual([["reconcile"], ["notifications"]]);
   });

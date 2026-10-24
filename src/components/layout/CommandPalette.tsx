@@ -16,6 +16,7 @@ import {
   Target,
   HandCoins,
   Repeat,
+  Scale,
 } from "lucide-react";
 import {
   CommandDialog,
@@ -38,6 +39,7 @@ const NAV_COMMANDS = [
   { href: "/goals", label: "Goals", icon: Target },
   { href: "/loans", label: "Loans", icon: HandCoins },
   { href: "/subscriptions", label: "Subscriptions", icon: Repeat },
+  { href: "/net-worth", label: "Net worth", icon: Scale },
   { href: "/notifications", label: "Notifications", icon: Bell },
   { href: "/logs", label: "Logs", icon: KeyRound },
   { href: "/settings", label: "Settings", icon: Settings },
