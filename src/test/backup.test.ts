@@ -746,6 +746,76 @@ describe("encrypted backup and restore", () => {
     expect(indexes.find((i) => i.name === "splitGroupId_1")).toMatchObject({ sparse: true });
   });
 
+  it("a busy answer does not use up the caller's request slots", async () => {
+    const { encryptBackup, decryptBackup } = await import("@/lib/backup-crypto");
+    const { default: SecurityRateLimit } = await import("@/models/SecurityRateLimit");
+    const env = await encryptBackup({ ok: true }, PASS);
+    const crowd = Array.from({ length: 10 }, () => decryptBackup(env, PASS));
+    const { POST } = await import("@/app/api/integrations/backup/route");
+    for (let i = 0; i < 3; i += 1) expect((await POST(req("backup", { passphrase: PASS }), {})).status).toBe(429);
+    expect(await SecurityRateLimit.countDocuments({ key: `backup:request:${a}` })).toBe(0);
+    await Promise.allSettled(crowd);
+  });
+
+  it("gives the buckets back when a call is turned away as busy after it was counted", async () => {
+    const { checkSecurityRateLimit } = await import("@/lib/security-rate-limit");
+    const { default: SecurityRateLimit } = await import("@/models/SecurityRateLimit");
+    const { BackupError } = await import("@/lib/backup-crypto");
+    const { backupFailure } = await import("@/lib/integrations/backup-http");
+    for (const bucket of ["request", "export"]) {
+      await checkSecurityRateLimit({ key: `backup:${bucket}:${a}`, limit: 6, windowMs: 600000 });
+      await checkSecurityRateLimit({ key: `backup:${bucket}:${a}`, limit: 6, windowMs: 600000 });
+    }
+    const res = await backupFailure(new BackupError("busy", "busy"), "rid", "backup", { userId: a, buckets: ["request", "export"] });
+    expect(res.status).toBe(429);
+    const count = async (b: string) => (await SecurityRateLimit.findOne({ key: `backup:${b}:${a}` }).lean())!.count;
+    expect(await count("request")).toBe(1);
+    expect(await count("export")).toBe(1);
+    // other failures keep the count, and a refund never goes below zero
+    await backupFailure(new BackupError("invalid", "x"), "rid", "backup", { userId: a, buckets: ["request"] });
+    expect(await count("request")).toBe(1);
+    for (let i = 0; i < 3; i += 1) await backupFailure(new BackupError("busy", "busy"), "rid", "backup", { userId: a, buckets: ["export"] });
+    expect(await count("export")).toBe(0);
+  });
+
+  it("holds at most four body reads at once and refuses the rest as busy", async () => {
+    const { readBackupBody } = await import("@/lib/integrations/backup-http");
+    const stalled = () => {
+      let release!: () => void;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          release = () => {
+            controller.enqueue(new TextEncoder().encode("{}"));
+            controller.close();
+          };
+        },
+      });
+      const fake = { headers: new Headers(), body: stream } as unknown as NextRequest;
+      return { fake, release };
+    };
+    const reads = Array.from({ length: 4 }, () => stalled());
+    const pending = reads.map((r) => readBackupBody(r.fake, "rid"));
+    const fifth = await readBackupBody(stalled().fake, "rid");
+    expect(fifth).toMatchObject({ ok: false, busy: true });
+    expect((fifth as { res: Response }).res.status).toBe(429);
+    reads.forEach((r) => r.release());
+    expect((await Promise.all(pending)).every((r) => r.ok)).toBe(true);
+    // the slots are free again
+    const again = stalled();
+    const next = readBackupBody(again.fake, "rid");
+    again.release();
+    expect((await next).ok).toBe(true);
+  });
+
+  it("a normal export does call the encryption step once", async () => {
+    await seed(a);
+    const crypto = await import("@/lib/backup-crypto");
+    const seal = vi.spyOn(crypto, "sealPacked");
+    expect((await exportBackup()).status).toBe(200);
+    expect(seal).toHaveBeenCalledTimes(1);
+    seal.mockRestore();
+  });
+
   it("a dry run does not use up the real restore quota", async () => {
     await seed(a);
     const { data } = await (await exportBackup()).json();

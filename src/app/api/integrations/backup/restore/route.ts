@@ -3,7 +3,7 @@ import { withIntegrationRoute } from "@/lib/integrations/handler";
 import { integrationOk, integrationError } from "@/lib/integrations/response";
 import { withIdempotency } from "@/lib/integrations/idempotency";
 import { conflictMessage, idempotencyKeyOf } from "@/lib/integrations/write-helpers";
-import { backupBusy, backupFailure, backupRateLimited, readBackupBody } from "@/lib/integrations/backup-http";
+import { type BackupBucket, backupBusy, backupFailure, refundBackupBuckets, backupRateLimited, readBackupBody } from "@/lib/integrations/backup-http";
 import { backupEnvelopeSchema, decryptBackup, envelopeDigest, passphraseSchema } from "@/lib/backup-crypto";
 import { parsePayload, restoreBackup } from "@/lib/backup-service";
 
@@ -21,13 +21,19 @@ const bodySchema = z.object({
 // is opened with the passphrase on every call, a replay included, so a wrong
 // passphrase never gets an old answer back.
 export const POST = withIntegrationRoute("backup-restore", async ({ req, user, requestId }) => {
+  const counted: BackupBucket[] = [];
   try {
-    const early = await backupRateLimited(user.id, "request", requestId);
-    if (early) return early;
+    // Busy first, so a busy answer does not use up one of the caller's request slots.
     const busy = backupBusy(requestId);
     if (busy) return busy;
+    const early = await backupRateLimited(user.id, "request", requestId);
+    if (early) return early;
+    counted.push("request");
     const read = await readBackupBody(req, requestId);
-    if (!read.ok) return read.res;
+    if (!read.ok) {
+      if (read.busy) await refundBackupBuckets(user.id, counted);
+      return read.res;
+    }
     const parsed = bodySchema.safeParse(read.body);
     if (!parsed.success) {
       const envelopeBad = parsed.error.issues.some((i) => i.path[0] === "backup");
@@ -43,8 +49,10 @@ export const POST = withIntegrationRoute("backup-restore", async ({ req, user, r
     const key = idempotencyKeyOf(req);
     if (!dryRun && !key) return integrationError("VALIDATION_ERROR", "Missing or invalid Idempotency-Key header", requestId);
 
-    const limited = await backupRateLimited(user.id, dryRun ? "dryRun" : "restore", requestId);
+    const bucket = dryRun ? "dryRun" : "restore";
+    const limited = await backupRateLimited(user.id, bucket, requestId);
     if (limited) return limited;
+    counted.push(bucket);
 
     const payload = parsePayload(await decryptBackup(backup, passphrase));
     if (dryRun) return integrationOk(await restoreBackup(user.id, payload, { dryRun: true }), requestId);
@@ -64,6 +72,6 @@ export const POST = withIntegrationRoute("backup-restore", async ({ req, user, r
     }
     return integrationOk(outcome.body, requestId, { status: outcome.status });
   } catch (err) {
-    return backupFailure(err, requestId, "backup-restore");
+    return backupFailure(err, requestId, "backup-restore", { userId: user.id, buckets: counted });
   }
 });

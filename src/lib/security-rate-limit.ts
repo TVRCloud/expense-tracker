@@ -53,3 +53,9 @@ export async function checkSecurityRateLimit({ key, limit, windowMs }: RateLimit
   // whole window (an hour for some callers).
   return { allowed: false, retryAfterSeconds: CONTENTION_RETRY_SECONDS };
 }
+
+/** Give back one count (never below 0) for a call that was turned away through no fault of the caller. */
+export async function refundSecurityRateLimit(key: string) {
+  await connectDB();
+  await SecurityRateLimit.updateOne({ key, expiresAt: { $gt: new Date() }, count: { $gt: 0 } }, { $inc: { count: -1 } });
+}

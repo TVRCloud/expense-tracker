@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { BackupError, MAX_BACKUP_BYTES, keyGateOpen } from "@/lib/backup-crypto";
 import logger from "@/lib/logger";
-import { checkSecurityRateLimit } from "@/lib/security-rate-limit";
+import { checkSecurityRateLimit, refundSecurityRateLimit } from "@/lib/security-rate-limit";
 import { integrationError } from "@/lib/integrations/response";
 
 // Shared by the backup routes: a bounded body read, hard per-user limits (key
@@ -17,7 +17,24 @@ const notJson = (requestId: string) => integrationError("VALIDATION_ERROR", "Req
 
 // Reads the stream with a running byte count and cancels it past the cap, so a
 // missing or false Content-Length cannot make the server hold a huge body.
-export async function readBackupBody(req: NextRequest, requestId: string): Promise<{ ok: true; body: unknown } | { ok: false; res: Response }> {
+export type BodyRead = { ok: true; body: unknown } | { ok: false; res: Response; busy?: true };
+
+// At most this many bodies are being read at once in one process; others are told
+// to retry, so a crowd of slow uploads cannot hold a pile of buffers.
+const MAX_BODY_READS = 4;
+let bodyReads = 0;
+
+export async function readBackupBody(req: NextRequest, requestId: string): Promise<BodyRead> {
+  if (bodyReads >= MAX_BODY_READS) return { ok: false, res: busyResponse(requestId), busy: true };
+  bodyReads += 1;
+  try {
+    return await readCounted(req, requestId);
+  } finally {
+    bodyReads -= 1;
+  }
+}
+
+async function readCounted(req: NextRequest, requestId: string): Promise<BodyRead> {
   const declared = Number(req.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return { ok: false, res: tooLarge(requestId) };
 
@@ -49,12 +66,14 @@ export async function readBackupBody(req: NextRequest, requestId: string): Promi
 
 // Asked before the body is read: if the key derivation gate is full there is no
 // point holding another body in memory behind it.
-export function backupBusy(requestId: string): Response | null {
-  if (keyGateOpen()) return null;
-  return integrationError("RATE_LIMITED", "The server is busy opening backups; try again in a moment", requestId, {
+const busyResponse = (requestId: string) =>
+  integrationError("RATE_LIMITED", "The server is busy opening backups; try again in a moment", requestId, {
     retryAfterSeconds: 5,
     reason: "busy",
   });
+
+export function backupBusy(requestId: string): Response | null {
+  return keyGateOpen() ? null : busyResponse(requestId);
 }
 
 // What a bucket counts. The first check runs before the body is read; the
@@ -67,7 +86,9 @@ const BUCKETS = {
   dryRun: { limit: 30, label: "checks" },
 } as const;
 
-export async function backupRateLimited(userId: string, bucket: keyof typeof BUCKETS, requestId: string): Promise<Response | null> {
+export type BackupBucket = keyof typeof BUCKETS;
+
+export async function backupRateLimited(userId: string, bucket: BackupBucket, requestId: string): Promise<Response | null> {
   const check = await checkSecurityRateLimit({ key: `backup:${bucket}:${userId}`, limit: BUCKETS[bucket].limit, windowMs: 10 * 60 * 1000 });
   if (check.allowed) return null;
   return integrationError("RATE_LIMITED", "Too many backup attempts; try again later", requestId, {
@@ -75,9 +96,21 @@ export async function backupRateLimited(userId: string, bucket: keyof typeof BUC
   });
 }
 
+export async function refundBackupBuckets(userId: string, buckets: BackupBucket[]) {
+  await Promise.all(buckets.map((b) => refundSecurityRateLimit(`backup:${b}:${userId}`))).catch(() => undefined);
+}
+
 // Never logs the error object: a failed bulk insert can carry backup documents.
-export function backupFailure(err: unknown, requestId: string, route: string): Response {
+// `counted` are the buckets this call already used; if it is turned away as
+// "busy" (other people's load, not the caller's doing) they get them back.
+export async function backupFailure(
+  err: unknown,
+  requestId: string,
+  route: string,
+  counted?: { userId: string; buckets: BackupBucket[] }
+): Promise<Response> {
   if (err instanceof BackupError) {
+    if (err.reason === "busy" && counted) await refundBackupBuckets(counted.userId, counted.buckets);
     if (err.reason === "too_large_for_response") {
       return integrationError("TOO_LARGE_FOR_RESPONSE", err.message, requestId, { reason: "too_large_for_response" });
     }

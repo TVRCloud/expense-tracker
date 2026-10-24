@@ -24,9 +24,14 @@ const maxmemFor = (n: number) => 128 * n * SCRYPT_R * 2;
 export const PASSPHRASE_MIN = 12;
 export const PASSPHRASE_MAX = 256;
 
-// Largest encrypted body a restore reads, and largest plain text a file may
-// unpack to (guards a compression bomb inside a file that does open).
-export const MAX_BACKUP_BYTES = 24 * 1024 * 1024;
+// Largest encrypted file a restore reads. It is what POST /backup can produce: that
+// route refuses an answer over MAX_RESPONSE_BYTES (4 MB, under Vercel's 4.5 MB
+// response limit), and the base64 of 3,000,000 bytes plus its envelope is about
+// 4 MB. A request body the same size is also under Vercel's 4.5 MB request limit.
+// Self-hosted servers use the same numbers; a bigger account exports as CSV.
+export const MAX_BACKUP_BYTES = 3_000_000;
+// Largest plain text a file may unpack to (guards a compression bomb inside a
+// file that does open).
 export const MAX_PLAIN_BYTES = 48 * 1024 * 1024;
 
 export type BackupFailure = "unreadable" | "invalid" | "too_large" | "too_large_for_response" | "busy";
