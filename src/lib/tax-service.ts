@@ -151,13 +151,12 @@ function countedRows(userObjectId: Types.ObjectId) {
   };
 }
 
-const MAX_REFUND_GROUPS = 20000;
-const ID_CHUNK = 1000;
+export const ID_CHUNK = 1000;
 
 type Refunded = { _id: Types.ObjectId; category?: string; deductible?: boolean; isDeleted?: boolean; reviewStatus?: string | null };
 
 // The expenses refunds point at, this user's only, read in chunks.
-async function refundedExpenses(userObjectId: Types.ObjectId, ids: Array<Types.ObjectId | null>) {
+export async function refundedExpenses(userObjectId: Types.ObjectId, ids: Array<Types.ObjectId | null>) {
   const unique = [...new Map(ids.filter((i): i is Types.ObjectId => !!i).map((i) => [i.toString(), i])).values()];
   const found = new Map<string, Refunded>();
   for (let i = 0; i < unique.length; i += ID_CHUNK) {
@@ -212,8 +211,8 @@ export async function getTaxSummary(userId: string, fyArg?: number, now: Date = 
         },
       },
     ]),
-    // One group per refunded expense, month and category: as many as the
-    // year's refunds, capped.
+    // One group per refunded expense, month and category: at most as many as
+    // the year's refunds. Never cut short: a dropped group would be a wrong total.
     Transaction.aggregate<{
       _id: { refundOf: Types.ObjectId | null; month: string; category: string };
       total: number;
@@ -228,7 +227,6 @@ export async function getTaxSummary(userId: string, fyArg?: number, now: Date = 
           count: { $sum: 1 },
         },
       },
-      { $limit: MAX_REFUND_GROUPS },
     ]),
   ]);
 
@@ -275,7 +273,7 @@ const MAX_YEARS = 100;
 
 type Dated = { date?: Date; paidAt?: Date } | null;
 
-// The four single-row reads behind availableYears, not yet run (so a test can
+// The single-row reads behind availableYears, not yet run (so a test can
 // explain them). `isDeleted` is matched with equality points ($in false or
 // null), not $ne, so the {user, isDeleted, date} and {user, isDeleted, paidAt}
 // indexes give the order and the read stops at the first row.
@@ -287,7 +285,13 @@ export function yearRangeReads(userObjectId: Types.ObjectId) {
   // a scheduled date in the future cannot stretch the range.
   const byDate = { ...live, installmentStatus: { $ne: "paid" } };
   const paid = { ...live, installmentStatus: "paid", paidAt: { $exists: true } };
+  // Paid with no paidAt (older rows): the activity date falls back to `date`.
+  // isRecurring equality lets the {user, isDeleted, isRecurring, installmentStatus,
+  // date} index serve the order; only recurring rows are ever paid.
+  const paidNoStamp = { ...live, isRecurring: true, installmentStatus: "paid", paidAt: { $exists: false } };
   return {
+    firstUnstamped: Transaction.findOne(paidNoStamp).sort({ date: 1 }).select("date").lean<Dated>(),
+    lastUnstamped: Transaction.findOne(paidNoStamp).sort({ date: -1 }).select("date").lean<Dated>(),
     firstDate: Transaction.findOne(byDate).sort({ date: 1 }).select("date").lean<Dated>(),
     lastDate: Transaction.findOne(byDate).sort({ date: -1 }).select("date").lean<Dated>(),
     firstPaid: Transaction.findOne(paid).sort({ paidAt: 1 }).select("paidAt").lean<Dated>(),
@@ -300,8 +304,17 @@ export function yearRangeReads(userObjectId: Types.ObjectId) {
 // transactions. Years in between with no rows are listed too.
 async function availableYears(userObjectId: Types.ObjectId, timeZone: string, fy: number): Promise<number[]> {
   const reads = yearRangeReads(userObjectId);
-  const [firstDate, lastDate, firstPaid, lastPaid] = await Promise.all([reads.firstDate, reads.lastDate, reads.firstPaid, reads.lastPaid]);
-  const stamps = [firstDate?.date, lastDate?.date, firstPaid?.paidAt, lastPaid?.paidAt].filter((d): d is Date => !!d);
+  const [firstDate, lastDate, firstPaid, lastPaid, firstUnstamped, lastUnstamped] = await Promise.all([
+    reads.firstDate,
+    reads.lastDate,
+    reads.firstPaid,
+    reads.lastPaid,
+    reads.firstUnstamped,
+    reads.lastUnstamped,
+  ]);
+  const stamps = [firstDate?.date, lastDate?.date, firstPaid?.paidAt, lastPaid?.paidAt, firstUnstamped?.date, lastUnstamped?.date].filter(
+    (d): d is Date => !!d
+  );
   if (stamps.length === 0) return [fy];
   const years = stamps.map((d) => currentFy(d, timeZone));
   const low = Math.min(...years);

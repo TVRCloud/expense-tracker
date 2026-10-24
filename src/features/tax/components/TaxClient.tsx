@@ -65,6 +65,7 @@ export function TaxClient() {
   const { formatCurrency } = useCurrency();
   const { data, isLoading } = useTaxSummary(fy);
   const setCategories = useChangeDeductibleCategories();
+  const [saving, setSaving] = useState<Set<string>>(new Set());
 
   // The print rule in globals.css only applies while this page is open.
   useEffect(() => {
@@ -94,12 +95,21 @@ export function TaxClient() {
     if (!switches.has(name)) switches.set(name, { category: name, total: 0 });
   }
 
-  const change = setCategories.variables;
-  const pendingName = change ? (change.add?.[0] ?? change.remove?.[0]) : undefined;
-
-  function toggle(category: string, on: boolean) {
+  // Every switch stays off-limits until its own save settles, however many others are saving.
+  async function toggle(category: string, on: boolean) {
     const name = category.toLowerCase();
-    setCategories.mutate(on ? { add: [name] } : { remove: [name] }, { onError: () => toast.error("Could not save this change") });
+    setSaving((s) => new Set(s).add(name));
+    try {
+      await setCategories.mutateAsync(on ? { add: [name] } : { remove: [name] });
+    } catch {
+      toast.error("Could not save this change");
+    } finally {
+      setSaving((s) => {
+        const next = new Set(s);
+        next.delete(name);
+        return next;
+      });
+    }
   }
 
   return (
@@ -181,7 +191,7 @@ export function TaxClient() {
                   <Switch
                     checked={marked.has(r.category.toLowerCase())}
                     onCheckedChange={(on) => toggle(r.category, on)}
-                    disabled={setCategories.isPending && pendingName === r.category.toLowerCase()}
+                    disabled={saving.has(r.category.toLowerCase())}
                     aria-label={`${r.category} is deductible`}
                   />
                 </label>

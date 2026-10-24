@@ -6723,6 +6723,55 @@ describe("tax helper", () => {
     });
   });
 
+  it("totals every refund when they span more than one chunk of expense ids", async () => {
+    const { ID_CHUNK } = await import("@/lib/tax-service");
+    const { default: Transaction } = await import("@/models/Transaction");
+    await setCategories(["food"]);
+    const count = ID_CHUNK + 150;
+    const ids = Array.from({ length: count }, () => new mongoose.Types.ObjectId());
+    const base = { user: userId, account: accountId, currency: "INR", category: "Food" };
+    await Transaction.insertMany(ids.map((_id, i) => ({ ...base, _id, type: "expense", amount: 100, date: new Date(Date.UTC(2025, 5, 1 + (i % 20), 6)) })));
+    await Transaction.insertMany(
+      ids.map((refundOf, i) => ({ ...base, type: "income", amount: 30, refundStatus: "confirmed", refundOf, date: new Date(Date.UTC(2025, 6, 1 + (i % 20), 6)) }))
+    );
+    // one of them was voided after: its refund must drop out, wherever it sits in the id list
+    await Transaction.updateOne({ _id: ids[count - 1] }, { $set: { reviewStatus: "voided" } });
+    const { data } = await (await summary("?fy=2025")).json();
+    expect(data.expense).toBe((count - 1) * 70);
+    expect(data.deductible.total).toBe((count - 1) * 70);
+    expect(data.count).toBe((count - 1) * 2);
+  });
+
+  it("a refund whose expense no longer exists still counts, in its own category", async () => {
+    await setCategories(["food"]);
+    await add("income", 700, "2025-09-05T06:00:00Z", { category: "Food", refundStatus: "confirmed", refundOf: new mongoose.Types.ObjectId() });
+    const { data } = await (await summary("?fy=2025")).json();
+    expect(data.expense).toBe(-700);
+    expect(data.deductible.total).toBe(-700);
+  });
+
+  it("years include paid instalments with no paidAt and rows from before isDeleted existed", async () => {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const rid = new mongoose.Types.ObjectId();
+    await add("expense", 900, "2019-06-10T06:00:00Z", { recurringId: rid, isRecurring: true, installmentStatus: "paid" });
+    // raw insert: no isDeleted field at all, as an old document would be
+    await Transaction.collection.insertOne({
+      user: new mongoose.Types.ObjectId(userId),
+      account: new mongoose.Types.ObjectId(accountId),
+      type: "expense",
+      amount: 400,
+      currency: "INR",
+      category: "Food",
+      date: new Date("2018-06-10T06:00:00Z"),
+    });
+    const { data } = await (await summary("?fy=2025")).json();
+    expect(data.availableYears).toEqual(expect.arrayContaining([2025, 2019, 2018]));
+    expect(data.availableYears.at(-1)).toBe(2018);
+    // and the 2019 instalment is counted, by its date
+    expect((await (await summary("?fy=2019")).json()).data.expense).toBe(900);
+    expect((await (await summary("?fy=2018")).json()).data.expense).toBe(400);
+  });
+
   it("the year reads stop at the first row on the indexes", async () => {
     const { yearRangeReads } = await import("@/lib/tax-service");
     const { default: Transaction } = await import("@/models/Transaction");
@@ -6741,6 +6790,16 @@ describe("tax helper", () => {
     await Transaction.insertMany(rows);
     // paid instalments with far-future scheduled dates must not stretch the date range
     await add("expense", 100, "2031-01-01T06:00:00Z", { recurringId: rid, installmentStatus: "paid", paidAt: new Date("2023-02-01T06:00:00Z") });
+    await Transaction.collection.insertOne({
+      user: new mongoose.Types.ObjectId(userId),
+      account: new mongoose.Types.ObjectId(accountId),
+      type: "expense",
+      amount: 100,
+      currency: "INR",
+      category: "Food",
+      date: new Date(Date.UTC(2023, 0, 1, 5)),
+    });
+    await add("expense", 100, "2023-03-01T06:00:00Z", { recurringId: rid, isRecurring: true, installmentStatus: "paid" });
     const reads = yearRangeReads(new mongoose.Types.ObjectId(userId));
     for (const q of Object.values(reads)) {
       const plan = (await (q as unknown as { explain: (v: string) => Promise<Record<string, unknown>> }).explain("executionStats")) as {
