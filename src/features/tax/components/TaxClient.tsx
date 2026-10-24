@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PageHeader } from "@/components/shared/PageHeader";
-import { useSetDeductibleCategories, useTaxSummary, type TaxMonth, type TaxRow } from "../hooks/useTax";
+import { useChangeDeductibleCategories, useTaxSummary, type TaxMonth, type TaxRow } from "../hooks/useTax";
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const monthName = (key: string) => MONTH_NAMES[Number(key.slice(5, 7)) - 1] ?? key;
@@ -64,7 +64,7 @@ export function TaxClient() {
   const [fy, setFy] = useState<number | undefined>(undefined);
   const { formatCurrency } = useCurrency();
   const { data, isLoading } = useTaxSummary(fy);
-  const setCategories = useSetDeductibleCategories();
+  const setCategories = useChangeDeductibleCategories();
 
   // The print rule in globals.css only applies while this page is open.
   useEffect(() => {
@@ -87,12 +87,16 @@ export function TaxClient() {
   const marked = new Set(data.deductibleCategories);
   const nothing = data.count === 0;
 
+  // Every category with spend this year, plus any saved one with none, so a
+  // saved category can always be switched off.
+  const switches = new Map(data.expenseByCategory.map((r) => [r.category.toLowerCase(), r]));
+  for (const name of data.deductibleCategories) {
+    if (!switches.has(name)) switches.set(name, { category: name, total: 0 });
+  }
+
   function toggle(category: string, on: boolean) {
-    const key = category.toLowerCase();
-    const next = new Set(marked);
-    if (on) next.add(key);
-    else next.delete(key);
-    setCategories.mutate([...next], { onError: () => toast.error("Could not save this change") });
+    const name = category.toLowerCase();
+    setCategories.mutate(on ? { add: [name] } : { remove: [name] }, { onError: () => toast.error("Could not save this change") });
   }
 
   return (
@@ -167,14 +171,13 @@ export function TaxClient() {
           <section className="space-y-2 print:hidden">
             <h2 style={{ font: "var(--text-h2)", color: "var(--ink)" }}>What counts as deductible</h2>
             <div className="inset-group" style={{ "--inset": "16px" } as CSSProperties}>
-              {data.expenseByCategory.map((r) => (
+              {[...switches.values()].map((r) => (
                 <label key={r.category} className="flex items-center gap-3 px-4 min-h-[52px] py-2">
                   <span className="flex-1 min-w-0 text-[15px] truncate capitalize" style={{ color: "var(--ink)" }}>{r.category}</span>
                   <span className="tnum text-sm" style={{ color: "var(--ink-3)" }}>{formatCurrency(r.total)}</span>
                   <Switch
                     checked={marked.has(r.category.toLowerCase())}
                     onCheckedChange={(on) => toggle(r.category, on)}
-                    disabled={setCategories.isPending}
                     aria-label={`${r.category} is deductible`}
                   />
                 </label>

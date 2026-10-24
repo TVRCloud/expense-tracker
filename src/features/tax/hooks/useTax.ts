@@ -43,10 +43,13 @@ export function useTaxSummary(fy: number | undefined) {
   });
 }
 
-export function useSetDeductibleCategories() {
+// Sends what moved (add or remove one name), not the whole list, so two quick
+// switches or a second tab do not overwrite each other. Refetches either way,
+// so a failed change shows the real list again.
+export function useChangeDeductibleCategories() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (deductibleCategories: string[]) => apiClient.put("/tax/settings", { deductibleCategories }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["tax"] }),
+    mutationFn: (diff: { add?: string[]; remove?: string[] }) => apiClient.patch("/tax/settings", diff),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["tax"] }),
   });
 }

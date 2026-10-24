@@ -5,20 +5,26 @@ import User from "@/models/User";
 import { activityDateAddFields } from "@/lib/transaction-activity";
 import { DEFAULT_TIME_ZONE, isValidTimeZone } from "@/lib/spend-limit-time";
 import { currentFy, fyBounds, fyLabel, fyMonthKeys } from "@/lib/tax-year";
-import { normaliseCategories } from "@/lib/tax-settings";
+import { categoryKey, normaliseCategories } from "@/lib/tax-settings";
 
 // Financial-year summary for the tax helper (April to March, in the user's
 // time zone). Income and spending come from the same rows as every other
-// stat: transfers between own accounts (and ATM withdrawals to cash) are never
-// income or spending, voided rows and soft-deleted rows are left out, a recurring
-// instalment counts only once paid and on the day it was paid, and a confirmed
-// refund comes off spending in the category it was carried over to.
+// stat: transfers between own accounts are never income or spending (an ATM
+// withdrawal is one only when the user has a cash account, otherwise it stays
+// an expense), voided rows and soft-deleted rows are left out, and a recurring
+// instalment counts only once paid and on the day it was paid.
+//
+// A confirmed refund comes off spending in the year it arrived (cash basis,
+// by the refund's own date), so a refund in a later year than its purchase
+// makes that later year's spending lower. It is skipped when the expense it
+// refunds is voided or deleted. It is deductible exactly when that expense is.
 //
 // A spend is deductible when its own `deductible` flag is true, or the flag is
 // unset and its category is one the user marked deductible. A flag of false
 // wins over the category. One Mongo pass groups by kind, month, category and
-// that flag; the result is as small as the user's distinct categories times
-// the 12 months, never their number of transactions.
+// flag; the flag and the category match are then worked out in JS with one
+// shared name comparison (categoryKey). The result is as small as the user's
+// distinct categories times the 12 months, never their number of transactions.
 
 export type TaxRow = { category: string; total: number };
 export type TaxMonth = { month: string; income: number; expense: number; deductible: number };
@@ -52,8 +58,12 @@ export type Kind = "income" | "expense" | "refund";
 export interface TaxGroup {
   kind: Kind;
   month: string;
+  /** The category shown. */
   category: string;
-  deductible: boolean;
+  /** The category the deductible rule is matched on: for a refund, the refunded expense's. */
+  ruleCategory: string;
+  /** The row's own flag (for a refund, the refunded expense's); null when unset. */
+  override: boolean | null;
   total: number;
   count: number;
 }
@@ -62,18 +72,19 @@ function rows(map: Map<string, TaxRow>): TaxRow[] {
   return [...map.values()].filter((r) => r.total !== 0).sort((a, b) => b.total - a.total || a.category.localeCompare(b.category));
 }
 
-function add(map: Map<string, TaxRow>, category: string, label: string, amount: number) {
-  const key = category;
+function add(map: Map<string, TaxRow>, key: string, label: string, amount: number) {
   const row = map.get(key);
   if (row) row.total += amount;
   else map.set(key, { category: label, total: amount });
 }
 
-// Pure: turns the grouped rows into the summary figures.
-export function foldTaxGroups(groups: TaxGroup[], fy: number): Pick<
+// Pure: turns the grouped rows into the summary figures. `categories` are the
+// user's deductible names (already through categoryKey).
+export function foldTaxGroups(groups: TaxGroup[], fy: number, categories: string[] = []): Pick<
   TaxSummary,
   "income" | "expense" | "saved" | "count" | "deductible" | "incomeByCategory" | "expenseByCategory" | "byMonth"
 > {
+  const listed = new Set(categories.map(categoryKey));
   const months = new Map<string, TaxMonth>(fyMonthKeys(fy).map((m) => [m, { month: m, income: 0, expense: 0, deductible: 0 }]));
   const incomeCats = new Map<string, TaxRow>();
   const expenseCats = new Map<string, TaxRow>();
@@ -86,20 +97,19 @@ export function foldTaxGroups(groups: TaxGroup[], fy: number): Pick<
   for (const g of groups) {
     count += g.count;
     const month = months.get(g.month);
-    // Sign: a refund takes spending (and deductible spending) back out.
-    const sign = g.kind === "refund" ? -1 : 1;
-    const amount = g.total * sign;
-    const key = g.category.toLowerCase();
+    const key = categoryKey(g.category);
     if (g.kind === "income") {
       income += g.total;
       if (month) month.income += g.total;
       add(incomeCats, key, g.category, g.total);
       continue;
     }
+    // A refund takes spending (and deductible spending) back out.
+    const amount = g.kind === "refund" ? -g.total : g.total;
     expense += amount;
     if (month) month.expense += amount;
     add(expenseCats, key, g.category, amount);
-    if (g.deductible) {
+    if (g.override ?? listed.has(categoryKey(g.ruleCategory))) {
       dedTotal += amount;
       if (month) month.deductible += amount;
       add(dedCats, key, g.category, amount);
@@ -150,8 +160,7 @@ export async function getTaxSummary(userId: string, fyArg?: number, now: Date = 
   const inRange = { $gte: start, $lt: end };
 
   const aggregated = await Transaction.aggregate<{
-    _id: { kind: Kind; month: string; category: string; deductible: boolean };
-    label: string;
+    _id: { kind: Kind; month: string; category: string; ruleCategory: string; override: boolean | null };
     total: number;
     count: number;
   }>([
@@ -167,32 +176,25 @@ export async function getTaxSummary(userId: string, fyArg?: number, now: Date = 
             "$type",
           ],
         },
-        categoryKey: { $toLower: "$category" },
         month: { $dateToString: { format: "%Y-%m", date: "$activityDate", timezone: timeZone } },
       },
     },
-    {
-      $addFields: {
-        deductibleNow: {
-          $cond: [
-            { $eq: ["$type", "income"] },
-            // A refund is spending coming back, in the category it was carried
-            // over to: deductible when that category is.
-            { $and: [{ $eq: ["$kind", "refund"] }, { $in: ["$categoryKey", { $literal: categories }] }] },
-            {
-              $or: [
-                { $eq: ["$deductible", true] },
-                { $and: [{ $ne: ["$deductible", false] }, { $in: ["$categoryKey", { $literal: categories }] }] },
-              ],
-            },
-          ],
-        },
-      },
-    },
+    // A refund reads the expense it refunds: skipped when that is voided or
+    // deleted, and deductible when it is (its flag, else its category).
+    { $addFields: { refundRef: { $cond: [{ $eq: ["$kind", "refund"] }, "$refundOf", null] } } },
+    // localField form so the _id index is used; a null refundRef finds nothing.
+    { $lookup: { from: Transaction.collection.name, localField: "refundRef", foreignField: "_id", as: "original" } },
+    { $addFields: { original: { $first: "$original" } } },
+    { $match: { "original.isDeleted": { $ne: true }, "original.reviewStatus": { $ne: "voided" } } },
     {
       $group: {
-        _id: { kind: "$kind", month: "$month", category: "$categoryKey", deductible: "$deductibleNow" },
-        label: { $first: "$category" },
+        _id: {
+          kind: "$kind",
+          month: "$month",
+          category: "$category",
+          ruleCategory: { $ifNull: ["$original.category", "$category"] },
+          override: { $cond: [{ $eq: ["$kind", "refund"] }, { $ifNull: ["$original.deductible", null] }, { $ifNull: ["$deductible", null] }] },
+        },
         total: { $sum: "$amount" },
         count: { $sum: 1 },
       },
@@ -202,8 +204,9 @@ export async function getTaxSummary(userId: string, fyArg?: number, now: Date = 
   const groups: TaxGroup[] = aggregated.map((a) => ({
     kind: a._id.kind,
     month: a._id.month,
-    category: a.label,
-    deductible: a._id.deductible,
+    category: a._id.category,
+    ruleCategory: a._id.ruleCategory,
+    override: a._id.override,
     total: a.total,
     count: a.count,
   }));
@@ -214,32 +217,37 @@ export async function getTaxSummary(userId: string, fyArg?: number, now: Date = 
     start: start.toISOString(),
     end: end.toISOString(),
     timeZone,
-    ...foldTaxGroups(groups, fy),
+    ...foldTaxGroups(groups, fy, categories),
     deductibleCategories: categories,
     availableYears: await availableYears(userObjectId, timeZone, fy),
   };
 }
 
-// Financial years the user has income or spending in, newest first. Always
-// includes the year asked for so the picker can show it.
+const MAX_YEARS = 100;
+
+// Financial years from the user's first to last counted row, newest first,
+// always including the year asked for. Four single-row reads on the date
+// indexes (the first and last `date`, and the first and last `paidAt` for paid
+// instalments, whose activity date is paidAt), so cost does not grow with the
+// number of transactions. Years in between with no rows are listed too.
 async function availableYears(userObjectId: Types.ObjectId, timeZone: string, fy: number): Promise<number[]> {
-  const found = await Transaction.aggregate<{ _id: number }>([
-    { $match: countedRows(userObjectId) },
-    { $addFields: activityDateAddFields() },
-    {
-      $addFields: {
-        local: { $dateToParts: { date: "$activityDate", timezone: timeZone } },
-      },
-    },
-    {
-      $group: {
-        _id: { $cond: [{ $gte: ["$local.month", 4] }, "$local.year", { $subtract: ["$local.year", 1] }] },
-      },
-    },
-    { $sort: { _id: -1 } },
-    { $limit: 50 },
+  const base = countedRows(userObjectId);
+  const paid = { ...base, installmentStatus: "paid", paidAt: { $exists: true } };
+  type Dated = { date?: Date; paidAt?: Date } | null;
+  const [firstDate, lastDate, firstPaid, lastPaid] = await Promise.all([
+    Transaction.findOne(base).sort({ date: 1 }).select("date").lean<Dated>(),
+    Transaction.findOne(base).sort({ date: -1 }).select("date").lean<Dated>(),
+    Transaction.findOne(paid).sort({ paidAt: 1 }).select("paidAt").lean<Dated>(),
+    Transaction.findOne(paid).sort({ paidAt: -1 }).select("paidAt").lean<Dated>(),
   ]);
-  return [...new Set([fy, ...found.map((f) => f._id)])].sort((a, b) => b - a);
+  const stamps = [firstDate?.date, lastDate?.date, firstPaid?.paidAt, lastPaid?.paidAt].filter((d): d is Date => !!d);
+  if (stamps.length === 0) return [fy];
+  const years = stamps.map((d) => currentFy(d, timeZone));
+  const low = Math.min(...years);
+  const high = Math.max(...years);
+  const list: number[] = [];
+  for (let y = high; y >= low && list.length < MAX_YEARS; y--) list.push(y);
+  return [...new Set([fy, ...list])].sort((a, b) => b - a);
 }
 
 // "1234.5" style rupee figure for the CSV (a number, so a negative stays numeric).

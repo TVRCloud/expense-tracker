@@ -98,7 +98,7 @@ Authorization: Bearer <YOUR_API_KEY>
 | PATCH | `/api/integrations/subscriptions/[id]` | Confirm, dismiss or restore one (`{status}`, needs `Idempotency-Key`) |
 | GET | `/api/integrations/tax?fy=2025` | Financial-year summary (April to March, user time zone): income, spending, saved, deductible spending by category, per month totals; see [api-contracts.md](api-contracts.md#tax) |
 | GET | `/api/integrations/tax/export?fy=2025` | The same as a CSV file |
-| GET, PUT | `/api/integrations/tax/settings` | The deductible category list; PUT needs `Idempotency-Key` |
+| GET, PUT, PATCH | `/api/integrations/tax/settings` | The deductible category list; PUT replaces it, PATCH takes `{add?, remove?}`; both need `Idempotency-Key` |
 | PATCH | `/api/integrations/tax/transactions/[id]` | `{deductible: true\|false\|null}` on one expense (needs `Idempotency-Key`) |
 | GET | `/api/integrations/net-worth` | What the user owns minus what they owe, the rows behind it, a daily trend and the change (`range`); see below |
 | GET, POST | `/api/integrations/net-worth/assets` | List and add manual assets (property, vehicle, gold, ...); POST needs `Idempotency-Key` |
