@@ -7,6 +7,8 @@ import CreditStatement from "@/models/CreditStatement";
 import type { AuthUser } from "@/lib/auth-guard";
 import { redis } from "@/lib/redis";
 import { checkBudgetAlert } from "@/lib/budget-alert";
+import { detectAnomalies, retireAnomaliesForTransactions } from "@/lib/anomaly-service";
+import { runInBackground } from "@/lib/perf/background";
 import { checkSpendLimitAlert } from "@/lib/spend-limit";
 import { applyRoundUp } from "@/lib/goal-service";
 import { computeInstallmentDates, OPEN_ENDED_WINDOW } from "@/lib/recurrence";
@@ -414,6 +416,8 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
       for (const s of splits) {
         void checkBudgetAlert(userId, s.category, s.amount, startDate);
       }
+      // One line of a split is not a purchase: only the category jump is checked, once per category.
+      for (const line of inserted) runInBackground("anomalies", () => detectAnomalies(userId, line, { splitLine: true }));
       void checkSpendLimitAlert(userId);
       void applyRoundUp(userId, rest.amount, actor).catch((err) =>
         logger.error({ err, userId }, "applyRoundUp failed")
@@ -541,6 +545,8 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     void applyRoundUp(userId, rest.amount, actor).catch((err) =>
       logger.error({ err, userId }, "applyRoundUp failed")
     );
+    // Unusual-spend alerts (src/lib/anomaly-service.ts). A scheduled bill is not a surprise; never throws.
+    if (!rest.isRecurring) runInBackground("anomalies", () => detectAnomalies(userId, transaction));
   }
 
   logger.info({ userId, transactionId: transaction._id.toString() }, "Transaction created");
@@ -702,6 +708,8 @@ export async function deleteTransaction(userId: string, transactionId: string, a
   // A receipt is private and has no meaning without its transaction. Done last: a failure here is
   // logged and swept later (reads already hide receipts of a deleted row), never undoes the delete.
   await deleteReceiptsOfTransaction(userId, transactionId);
+  // An open alert about a removed or voided expense goes quiet (voiding runs through here).
+  await retireAnomaliesForTransactions(userId, [transactionId]);
 
   return deleted;
 }

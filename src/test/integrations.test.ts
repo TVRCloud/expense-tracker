@@ -10366,3 +10366,412 @@ describe("multi-currency", () => {
     });
   });
 });
+
+// ── Anomaly alerts ─────────────────────────────────────────────────────────
+
+describe("anomaly alerts", () => {
+  const KEY = "test-anomaly-api-key";
+  const KEY_OTHER = "test-anomaly-api-key-other";
+  let userId: string;
+  let otherId: string;
+  let accountId: string;
+  let otherAccountId: string;
+  const NOW = new Date("2026-10-15T06:00:00Z"); // 11:30 on 15 October in Asia/Kolkata
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { default: Account } = await import("@/models/Account");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const user = await User.create({ name: "Anom", email: `an${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    const other = await User.create({ name: "Other", email: `ano${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    await ApiKey.create({ user: user._id, label: "phone", keyHash: hashKey(KEY), lastFour: KEY.slice(-4) });
+    await ApiKey.create({ user: other._id, label: "phone", keyHash: hashKey(KEY_OTHER), lastFour: KEY_OTHER.slice(-4) });
+    accountId = (await Account.create({ user: user._id, name: "Bank", type: "bank", balance: 0, currency: "INR" }))._id.toString();
+    otherAccountId = (await Account.create({ user: other._id, name: "Theirs", type: "bank", balance: 0, currency: "INR" }))._id.toString();
+    userId = user._id.toString();
+    otherId = other._id.toString();
+  });
+
+  async function add(amount: number, date: string, extra: Record<string, unknown> = {}, who = userId) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    return Transaction.create({
+      user: who,
+      account: who === userId ? accountId : otherAccountId,
+      type: "expense",
+      amount,
+      currency: "INR",
+      category: "Shopping",
+      date: new Date(date),
+      ...extra,
+    });
+  }
+  async function detect(txn: Awaited<ReturnType<typeof add>>, opts: { splitLine?: boolean; now?: Date } = {}, who = userId) {
+    const { detectAnomalies } = await import("@/lib/anomaly-service");
+    return detectAnomalies(who, txn, { now: NOW, ...opts });
+  }
+  async function alerts(who = userId) {
+    const { default: Anomaly } = await import("@/models/Anomaly");
+    return Anomaly.find({ user: who }).sort({ createdAt: 1 }).lean<Array<Record<string, any>>>(); // eslint-disable-line @typescript-eslint/no-explicit-any
+  }
+  async function history(n: number, amount: number, category = "Shopping") {
+    for (let i = 0; i < n; i++) await add(amount, `2026-09-${String(10 + i).padStart(2, "0")}T06:00:00Z`, { category });
+  }
+  const headers = (key = KEY, extra: Record<string, string> = {}) => ({ authorization: `Bearer ${key}`, "content-type": "application/json", ...extra });
+
+  describe("large spend", () => {
+    it("fires at 3x the category median once there is history, with a notification", async () => {
+      await history(6, 50000); // median 50000: threshold 150000
+      const big = await add(150000, "2026-10-14T06:00:00Z");
+      expect(await detect(big)).toBe(1);
+      const [a] = await alerts();
+      expect(a).toMatchObject({ kind: "large_spend", status: "open", category: "Shopping", amount: 150000, dedupKey: `large:${big._id}` });
+      expect(a.transaction.toString()).toBe(big._id.toString());
+      expect(a.data).toMatchObject({ typical: 50000, threshold: 150000 });
+      const { default: Notification } = await import("@/models/Notification");
+      const n = await Notification.findOne({ user: userId }).lean<Record<string, any>>(); // eslint-disable-line @typescript-eslint/no-explicit-any
+      expect(n).toMatchObject({ type: "system", title: "Large Shopping spend" });
+      expect(n!.meta).toMatchObject({ kind: "anomaly", anomalyKind: "large_spend" });
+      expect(n!.body).toContain("1,500.00");
+    });
+    it("does not fire one unit under the threshold, under the floor, or with thin history", async () => {
+      await history(6, 50000);
+      expect(await detect(await add(149999, "2026-10-14T06:00:00Z"))).toBe(0);
+      expect(await alerts()).toHaveLength(0);
+    });
+    it("does not fire under the floor however far above a tiny usual", async () => {
+      await history(6, 100);
+      expect(await detect(await add(50000, "2026-10-14T06:00:00Z"))).toBe(0);
+    });
+    it("needs at least 5 earlier expenses in that category in the last 90 days", async () => {
+      await history(4, 50000);
+      await add(50000, "2026-04-01T06:00:00Z"); // too old to count
+      await history(6, 50000, "Food"); // another category does not count
+      expect(await detect(await add(900000, "2026-10-14T06:00:00Z"))).toBe(0);
+      await add(50000, "2026-09-25T06:00:00Z");
+      expect(await detect(await add(900001, "2026-10-14T07:00:00Z"))).toBe(1);
+    });
+    it("ignores voided, deleted and other people's rows when working out the usual", async () => {
+      await history(5, 50000);
+      for (let i = 0; i < 5; i++) {
+        await add(1, `2026-09-${20 + i}T06:00:00Z`, { isDeleted: true });
+        await add(1, `2026-09-${20 + i}T07:00:00Z`, { reviewStatus: "voided" });
+        await add(1, `2026-09-${20 + i}T08:00:00Z`, {}, otherId);
+      }
+      const big = await add(150000, "2026-10-14T06:00:00Z");
+      expect(await detect(big)).toBe(1);
+      expect((await alerts())[0]!.data.typical).toBe(50000);
+    });
+  });
+
+  describe("duplicate charge", () => {
+    it("fires for the same amount on the same account within 10 minutes", async () => {
+      await add(49900, "2026-10-14T06:00:00Z", { description: "Cafe" });
+      const second = await add(49900, "2026-10-14T06:09:00Z", { description: "Cafe" });
+      expect(await detect(second)).toBe(1);
+      const [a] = await alerts();
+      const first = await (await import("@/models/Transaction")).default.findOne({ user: userId, amount: 49900, _id: { $ne: second._id } }).lean<{ _id: { toString(): string } }>();
+      expect(a).toMatchObject({ kind: "duplicate_charge", dedupKey: `dup:${[second._id.toString(), first!._id.toString()].sort().join(":")}` });
+      // the earlier row seeing the later one is the same cause: no second alert
+      expect(await detect(await (await import("@/models/Transaction")).default.findById(first!._id).then((x) => x!))).toBe(0);
+      expect(await alerts()).toHaveLength(1);
+      expect(a.data.windowMinutes).toBe(10);
+    });
+    it("does not fire at 11 minutes, for another amount, account, description, or under the floor", async () => {
+      await add(49900, "2026-10-14T06:00:00Z", { description: "Cafe" });
+      expect(await detect(await add(49900, "2026-10-14T06:11:00Z", { description: "Cafe" }))).toBe(0);
+      expect(await detect(await add(49901, "2026-10-14T06:01:00Z", { description: "Cafe" }))).toBe(0);
+      expect(await detect(await add(49900, "2026-10-14T06:02:00Z", { description: "Taxi" }))).toBe(0);
+      const { default: Account } = await import("@/models/Account");
+      const wallet = await Account.create({ user: userId, name: "Wallet", type: "cash", balance: 0, currency: "INR" });
+      expect(await detect(await add(49900, "2026-10-14T06:03:00Z", { description: "Cafe", account: wallet._id }))).toBe(0);
+      await add(9999, "2026-10-14T08:00:00Z");
+      expect(await detect(await add(9999, "2026-10-14T08:01:00Z"))).toBe(0);
+    });
+    it("a voided or deleted twin does not count, a transfer or income twin neither", async () => {
+      await add(49900, "2026-10-14T06:00:00Z", { isDeleted: true });
+      await add(49900, "2026-10-14T06:01:00Z", { reviewStatus: "voided" });
+      await add(49900, "2026-10-14T06:02:00Z", { type: "income" });
+      await add(49900, "2026-10-14T06:03:00Z", { type: "transfer" });
+      expect(await detect(await add(49900, "2026-10-14T06:04:00Z"))).toBe(0);
+    });
+  });
+
+  describe("category jump", () => {
+    async function baseline() {
+      await add(100000, "2026-09-05T06:00:00Z", { category: "Dining" });
+      await add(100000, "2026-08-05T06:00:00Z", { category: "Dining" });
+      await add(100000, "2026-07-05T06:00:00Z", { category: "Dining" });
+      // after the 15th of the earlier month: not part of the like-for-like comparison
+      await add(900000, "2026-09-20T06:00:00Z", { category: "Dining" });
+    }
+    it("fires when the month to date is at least twice the usual and at least 2,000.00 more", async () => {
+      await baseline();
+      await add(150000, "2026-10-03T06:00:00Z", { category: "Dining" });
+      const last = await add(150000, "2026-10-14T06:00:00Z", { category: "Dining" });
+      expect(await detect(last)).toBe(1);
+      const [a] = await alerts();
+      expect(a).toMatchObject({ kind: "category_jump", category: "Dining", amount: 300000, dedupKey: "jump:dining:2026-10" });
+      expect(a.data).toMatchObject({ baseline: 100000, monthToDate: 300000, month: "2026-10", elapsedDays: 15 });
+      expect(a.transaction).toBeUndefined();
+    });
+    it("does not fire one unit under, and alerts once a month per category", async () => {
+      await baseline();
+      await add(149999, "2026-10-03T06:00:00Z", { category: "Dining" });
+      const under = await add(150000, "2026-10-14T06:00:00Z", { category: "Dining" });
+      expect(await detect(under)).toBe(0);
+      const over = await add(1, "2026-10-14T07:00:00Z", { category: "Dining" });
+      expect(await detect(over)).toBe(1);
+      // same month, same category: no second jump alert (a very large single expense may raise its own large-spend alert)
+      await detect(await add(500000, "2026-10-14T08:00:00Z", { category: "Dining" }));
+      expect((await alerts()).filter((a) => a.kind === "category_jump")).toHaveLength(1);
+    });
+    it("waits for 5 days, needs 2 earlier months with spend, and skips a back-dated row in an old month", async () => {
+      await baseline();
+      const big = await add(900000, "2026-10-04T06:00:00Z", { category: "Dining" });
+      expect(await detect(big, { now: new Date("2026-10-04T06:00:00Z") })).toBe(0); // day 4
+      const old = await add(900000, "2026-09-10T06:00:00Z", { category: "Dining" });
+      expect(await detect(old)).toBe(0); // not this month
+      await add(100000, "2026-09-05T06:00:00Z", { category: "Travel" });
+      const t = await add(900000, "2026-10-14T06:00:00Z", { category: "Travel" });
+      expect(await detect(t)).toBe(0); // only one earlier month with Travel spend
+    });
+    it("works in the user's time zone: the first of the month starts at local midnight", async () => {
+      const { default: User } = await import("@/models/User");
+      await User.updateOne({ _id: userId }, { $set: { "preferences.timezone": "Pacific/Auckland" } });
+      // 2026-09-30T20:00Z is 1 October 09:00 in Auckland: this month's spend there, September's in UTC
+      await add(100000, "2026-09-05T06:00:00Z", { category: "Dining" });
+      await add(100000, "2026-08-05T06:00:00Z", { category: "Dining" });
+      await add(100000, "2026-07-05T06:00:00Z", { category: "Dining" });
+      await add(250000, "2026-09-30T20:00:00Z", { category: "Dining" });
+      const t = await add(100000, "2026-10-08T06:00:00Z", { category: "Dining" });
+      expect(await detect(t, { now: new Date("2026-10-10T06:00:00Z") })).toBe(1);
+      expect((await alerts())[0]!.data.monthToDate).toBe(350000);
+    });
+    it("a split line only gets the category jump, and a confirmed refund comes off the month", async () => {
+      await baseline();
+      await add(150000, "2026-10-03T06:00:00Z", { category: "Dining" });
+      const line = await add(150000, "2026-10-14T06:00:00Z", { category: "Dining" });
+      await add(60000, "2026-10-14T09:00:00Z", { category: "Dining", type: "income", refundStatus: "confirmed" });
+      expect(await detect(line, { splitLine: true })).toBe(0); // 240000 net: under 300000
+      const more = await add(60000, "2026-10-14T10:00:00Z", { category: "Dining" });
+      expect(await detect(more, { splitLine: true })).toBe(1);
+      const [a] = await alerts();
+      expect(a.kind).toBe("category_jump");
+    });
+  });
+
+  describe("when alerts are not raised", () => {
+    it("not for a back-filled expense dated more than 3 days before it is entered", async () => {
+      await history(6, 50000);
+      const old = await add(900000, "2026-10-11T05:59:00Z"); // 3 days 1 minute before NOW
+      expect(await detect(old)).toBe(0);
+      const recent = await add(900000, "2026-10-12T06:00:00Z"); // exactly 3 days
+      expect(await detect(recent)).toBe(1);
+    });
+    it("not for muted categories (any case) or when switched off", async () => {
+      const { default: User } = await import("@/models/User");
+      await history(6, 50000);
+      await User.updateOne({ _id: userId }, { $set: { "preferences.anomalies.mutedCategories": ["shopping"] } });
+      expect(await detect(await add(900000, "2026-10-14T06:00:00Z", { category: "Shopping" }))).toBe(0);
+      await User.updateOne({ _id: userId }, { $set: { "preferences.anomalies": { enabled: false, mutedCategories: [] } } });
+      expect(await detect(await add(900000, "2026-10-14T07:00:00Z", { category: "Shopping" }))).toBe(0);
+      await User.updateOne({ _id: userId }, { $set: { "preferences.anomalies": { enabled: true, mutedCategories: [] } } });
+      expect(await detect(await add(900000, "2026-10-14T08:00:00Z", { category: "Shopping" }))).toBe(1);
+    });
+    it("a second evaluation of the same expense does not alert twice", async () => {
+      await history(6, 50000);
+      const big = await add(150000, "2026-10-14T06:00:00Z");
+      expect(await detect(big)).toBe(1);
+      expect(await detect(big)).toBe(0);
+      const { default: Notification } = await import("@/models/Notification");
+      expect(await alerts()).toHaveLength(1);
+      expect(await Notification.countDocuments({ user: userId })).toBe(1);
+    });
+    it("a failing check is logged and dropped, never thrown", async () => {
+      const { default: Anomaly } = await import("@/models/Anomaly");
+      const spy = vi.spyOn(Anomaly, "create").mockRejectedValue(new Error("db down"));
+      await history(6, 50000);
+      const big = await add(150000, "2026-10-14T06:00:00Z");
+      await expect(detect(big)).resolves.toBe(0);
+      spy.mockRestore();
+    });
+    it("createTransaction raises for a big expense, and stays quiet for income, transfers, bills and imports", async () => {
+      const { createTransaction } = await import("@/lib/transaction-service");
+      const { default: Anomaly } = await import("@/models/Anomaly");
+      const actor = { id: userId, name: "Anom", email: "a@x.com", role: "user" };
+      await history(6, 50000);
+      const base = { userId, actor, accountId, currency: "INR", category: "Shopping", tags: [] as string[], isRecurring: false, date: new Date().toISOString() };
+      await createTransaction({ ...base, type: "income", amount: 900000 });
+      await createTransaction({ ...base, type: "expense", amount: 900000, provenance: { source: "import" }, skipBalance: true });
+      await createTransaction({ ...base, type: "expense", amount: 900000, isRecurring: true, recurrenceFrequency: "monthly", recurrenceCount: 2 });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(await Anomaly.countDocuments({ user: userId })).toBe(0);
+      const made = await createTransaction({ ...base, type: "expense", amount: 900000 });
+      expect(made.kind).toBe("single");
+      await vi.waitFor(async () => expect(await Anomaly.countDocuments({ user: userId, kind: "large_spend" })).toBe(1), { timeout: 5000 });
+    });
+    it("a failing check does not fail or change the write", async () => {
+      const { createTransaction } = await import("@/lib/transaction-service");
+      const { default: Anomaly } = await import("@/models/Anomaly");
+      const { default: Account } = await import("@/models/Account");
+      const spy = vi.spyOn(Anomaly, "create").mockRejectedValue(new Error("db down"));
+      await history(6, 50000);
+      const actor = { id: userId, name: "Anom", email: "a@x.com", role: "user" };
+      const res = await createTransaction({ userId, actor, accountId, currency: "INR", category: "Shopping", tags: [], isRecurring: false, date: new Date().toISOString(), type: "expense", amount: 900000 });
+      expect(res.kind).toBe("single");
+      expect((await Account.findById(accountId))!.balance).toBe(-900000);
+      await vi.waitFor(() => expect(spy).toHaveBeenCalled(), { timeout: 5000 });
+      spy.mockRestore();
+    });
+    it("deleting or voiding the expense quietly retires its open alert", async () => {
+      const { deleteTransaction } = await import("@/lib/transaction-service");
+      await history(6, 50000);
+      const big = await add(150000, "2026-10-14T06:00:00Z");
+      await detect(big);
+      await deleteTransaction(userId, big._id.toString(), { id: userId, name: "Anom", email: "a@x.com", role: "user" });
+      const [a] = await alerts();
+      expect(a.status).toBe("dismissed");
+      expect(a.resolvedAt).toBeTruthy();
+    });
+  });
+
+  describe("routes", () => {
+    async function seedOpen() {
+      await history(6, 50000);
+      const big = await add(150000, "2026-10-14T06:00:00Z", { tags: ["trip"] });
+      await detect(big);
+      const [a] = await alerts();
+      return { big, id: a!._id.toString() };
+    }
+    async function list(query = "", key = KEY) {
+      const { GET } = await import("@/app/api/integrations/anomalies/route");
+      return GET(new NextRequest(`http://localhost/api/integrations/anomalies${query}`, { headers: headers(key) }), {});
+    }
+    async function patch(id: string, body: unknown, idem: string | null = "k1", key = KEY) {
+      const { PATCH } = await import("@/app/api/integrations/anomalies/[id]/route");
+      return PATCH(
+        new NextRequest(`http://localhost/api/integrations/anomalies/${id}`, {
+          method: "PATCH",
+          headers: headers(key, idem ? { "idempotency-key": idem } : {}),
+          body: typeof body === "string" ? body : JSON.stringify(body),
+        }),
+        { params: Promise.resolve({ id }) }
+      );
+    }
+
+    it("lists open alerts first, with the base currency, and the count still waiting", async () => {
+      const { id } = await seedOpen();
+      const { data } = await (await list()).json();
+      expect(data).toMatchObject({ total: 1, openCount: 1, skip: 0, limit: 20 });
+      expect(data.data[0]).toMatchObject({ id, kind: "large_spend", status: "open", category: "Shopping", amount: 150000, currency: "INR" });
+      expect(data.data[0].transactionId).toBeTruthy();
+    });
+    it("status filter, paging and bounds", async () => {
+      const { id } = await seedOpen();
+      await patch(id, { status: "dismiss" });
+      expect((await (await list()).json()).data).toMatchObject({ total: 0, openCount: 0 });
+      expect((await (await list("?status=dismissed")).json()).data.total).toBe(1);
+      expect((await (await list("?status=all&limit=1&skip=0")).json()).data.data).toHaveLength(1);
+      expect((await list("?limit=51")).status).toBe(400);
+      expect((await list("?limit=0")).status).toBe(400);
+      expect((await list("?skip=-1")).status).toBe(400);
+      expect((await list("?status=nope")).status).toBe(400);
+    });
+    it("open ones come first when all are listed", async () => {
+      const { id } = await seedOpen();
+      await patch(id, { status: "this_was_me" });
+      const big2 = await add(160000, "2026-10-14T07:00:00Z");
+      await detect(big2);
+      const rows = (await (await list("?status=all")).json()).data.data as Array<{ status: string }>;
+      expect(rows.map((r) => r.status)).toEqual(["open", "confirmed_mine"]);
+    });
+    it("this_was_me and dismiss set the status; report also tags the expense", async () => {
+      const { big, id } = await seedOpen();
+      const { default: Transaction } = await import("@/models/Transaction");
+      const me = await patch(id, { status: "this_was_me" }, "a1");
+      expect((await me.json()).data).toMatchObject({ status: "confirmed_mine" });
+      expect((await Transaction.findById(big._id).lean<{ tags: string[] }>())!.tags).toEqual(["trip"]);
+      const rep = await patch(id, { status: "report" }, "a2");
+      expect((await rep.json()).data.status).toBe("reported");
+      expect((await Transaction.findById(big._id).lean<{ tags: string[] }>())!.tags).toEqual(["trip", "anomaly-reported"]);
+      await patch(id, { status: "report" }, "a3"); // reporting again adds no second tag
+      expect((await Transaction.findById(big._id).lean<{ tags: string[] }>())!.tags).toEqual(["trip", "anomaly-reported"]);
+    });
+    it("report on an expense with no room for a tag still reports", async () => {
+      const { big, id } = await seedOpen();
+      const { default: Transaction } = await import("@/models/Transaction");
+      await Transaction.updateOne({ _id: big._id }, { $set: { tags: Array.from({ length: 10 }, (_v, i) => `t${i}`) } });
+      const rep = await patch(id, { status: "report" });
+      expect((await rep.json()).data.status).toBe("reported");
+      expect((await Transaction.findById(big._id).lean<{ tags: string[] }>())!.tags).toHaveLength(10);
+    });
+    it("another person's alert is a 404, bad input is a 400, a missing key is a 400, a replay answers the same", async () => {
+      const { id } = await seedOpen();
+      expect((await patch(id, { status: "dismiss" }, "k", KEY_OTHER)).status).toBe(404);
+      expect((await (await list("", KEY_OTHER)).json()).data.total).toBe(0);
+      expect((await patch(id, { status: "nope" })).status).toBe(400);
+      expect((await patch(id, { status: "report", extra: 1 })).status).toBe(400);
+      expect((await patch(id, "not json")).status).toBe(400);
+      expect((await patch(id, { status: "dismiss" }, null)).status).toBe(400);
+      expect((await patch("zzz", { status: "dismiss" })).status).toBe(400);
+      const first = await patch(id, { status: "dismiss" }, "same");
+      const again = await patch(id, { status: "dismiss" }, "same");
+      expect(first.status).toBe(200);
+      expect((await again.json()).data.status).toBe("dismissed");
+      expect((await patch(id, { status: "report" }, "same")).status).toBe(409);
+    });
+    it("settings: defaults, PUT replaces what is sent, PATCH changes by what moved", async () => {
+      const { GET, PUT, PATCH } = await import("@/app/api/integrations/anomalies/settings/route");
+      const call = (method: "PUT" | "PATCH", body: unknown, idem: string | null) =>
+        (method === "PUT" ? PUT : PATCH)(
+          new NextRequest("http://localhost/api/integrations/anomalies/settings", { method, headers: headers(KEY, idem ? { "idempotency-key": idem } : {}), body: JSON.stringify(body) }),
+          {}
+        );
+      expect((await (await GET(new NextRequest("http://localhost/x", { headers: headers() }), {})).json()).data).toEqual({ enabled: true, mutedCategories: [] });
+      expect((await (await call("PUT", { mutedCategories: ["Dining", " dining ", "Travel"] }, "p1")).json()).data).toEqual({ enabled: true, mutedCategories: ["dining", "travel"] });
+      expect((await (await call("PUT", { enabled: false }, "p2")).json()).data).toEqual({ enabled: false, mutedCategories: ["dining", "travel"] });
+      expect((await (await call("PATCH", { enabled: true, add: ["Food"], remove: ["travel"] }, "p3")).json()).data).toEqual({ enabled: true, mutedCategories: ["dining", "food"] });
+      // removing wins over adding the same name
+      expect((await (await call("PATCH", { add: ["rent"], remove: ["rent"] }, "p4")).json()).data.mutedCategories).toEqual(["dining", "food"]);
+      expect((await call("PUT", {}, "p5")).status).toBe(400);
+      expect((await call("PUT", { mutedCategories: ["x"], extra: 1 }, "p6")).status).toBe(400);
+      expect((await call("PATCH", {}, "p7")).status).toBe(400);
+      expect((await call("PUT", { enabled: true }, null)).status).toBe(400);
+      expect((await call("PUT", { mutedCategories: Array.from({ length: 51 }, (_v, i) => `c${i}`) }, "p8")).status).toBe(400);
+    });
+    it("settings: the 50 name cap is atomic and a refusal is not replayed for the same key once room is made", async () => {
+      const { PUT, PATCH } = await import("@/app/api/integrations/anomalies/settings/route");
+      const send = (fn: typeof PUT, body: unknown, idem: string) =>
+        fn(new NextRequest("http://localhost/x", { method: "PATCH", headers: headers(KEY, { "idempotency-key": idem }), body: JSON.stringify(body) }), {});
+      await send(PUT, { mutedCategories: Array.from({ length: 50 }, (_v, i) => `c${i}`) }, "full");
+      const refused = await send(PATCH, { add: ["extra"] }, "over");
+      expect(refused.status).toBe(400);
+      await send(PATCH, { remove: ["c0"] }, "room");
+      const retry = await send(PATCH, { add: ["extra"] }, "over");
+      expect(retry.status).toBe(200);
+    });
+    it("web routes mirror the integration routes for the signed-in user", async () => {
+      const { id } = await seedOpen();
+      sessionUser.current = { id: userId, name: "Anom", email: "a@x.com", role: "user" };
+      try {
+        const { GET } = await import("@/app/api/anomalies/route");
+        const { PATCH } = await import("@/app/api/anomalies/[id]/route");
+        const { GET: SGET, PATCH: SPATCH } = await import("@/app/api/anomalies/settings/route");
+        const listed = await (await GET(new NextRequest("http://localhost/api/anomalies?status=open"))).json();
+        expect(listed.data.openCount).toBe(1);
+        expect((await GET(new NextRequest("http://localhost/api/anomalies?limit=99"))).status).toBe(400);
+        const done = await PATCH(new NextRequest(`http://localhost/api/anomalies/${id}`, { method: "PATCH", body: JSON.stringify({ status: "dismiss" }) }), { params: Promise.resolve({ id }) });
+        expect((await done.json()).data.status).toBe("dismissed");
+        const missing = await PATCH(new NextRequest(`http://localhost/api/anomalies/${otherId}`, { method: "PATCH", body: JSON.stringify({ status: "dismiss" }) }), { params: Promise.resolve({ id: otherId }) });
+        expect(missing.status).toBe(404);
+        const set = await SPATCH(new NextRequest("http://localhost/api/anomalies/settings", { method: "PATCH", body: JSON.stringify({ add: ["Dining"] }) }));
+        expect((await set.json()).data.mutedCategories).toEqual(["dining"]);
+        expect((await (await SGET()).json()).data.enabled).toBe(true);
+      } finally {
+        sessionUser.current = null;
+      }
+    });
+  });
+});

@@ -29,6 +29,9 @@ describe("INVALIDATION_MAP", () => {
       expect(INVALIDATION_MAP[r].map((k) => k[0])).toContain("net-worth");
     }
   });
+  it("anomaly alerts refresh the alerts list and the inbox", () => {
+    expect(INVALIDATION_MAP.anomalies).toEqual([["anomalies"], ["notifications"]]);
+  });
   it("spending refreshes the tax summary", () => {
     expect(INVALIDATION_MAP.transactions.map((k) => k[0])).toContain("tax");
   });

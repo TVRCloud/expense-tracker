@@ -43,6 +43,12 @@ const UserSchema = new Schema(
       tax: {
         deductibleCategories: [{ type: String }],
       },
+      // Anomaly alerts (src/lib/anomaly-service.ts): on unless the person turns
+      // them off; lower-case category names they muted.
+      anomalies: {
+        enabled: { type: Boolean, default: true },
+        mutedCategories: [{ type: String }],
+      },
     },
     passwordResetToken: { type: String },
     passwordResetExpires: { type: Date },

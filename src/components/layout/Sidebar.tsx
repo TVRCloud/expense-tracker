@@ -24,6 +24,7 @@ import {
   Repeat,
   Scale,
   Receipt,
+  ShieldAlert,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/_ui/Button";
@@ -44,6 +45,7 @@ const NAV_GROUPS = [
       { href: "/analytics", label: "Analytics", icon: BarChart2 },
       { href: "/accounts", label: "Accounts", icon: Wallet },
       { href: "/notifications", label: "Notifications", icon: Bell },
+      { href: "/alerts", label: "Alerts", icon: ShieldAlert },
     ],
   },
   {

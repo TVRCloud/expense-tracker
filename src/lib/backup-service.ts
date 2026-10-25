@@ -18,6 +18,7 @@ import { deriveSubkey } from "@/lib/crypto";
 import { BaseCurrencyError, getBaseState, hasMoneyData, lockBaseCurrency, setBaseCurrency } from "@/lib/base-currency";
 import { BASE_CURRENCY_ONLY_TWO_DECIMALS, isSupportedAsBase, isSupportedCurrency, MAX_RATE, MAX_MINOR_AMOUNT, MIN_RATE, minorExponent } from "@/lib/currency";
 import { MAX_CATEGORY_LENGTH, MAX_DEDUCTIBLE_CATEGORIES, getTaxSettings, normaliseCategories } from "@/lib/tax-settings";
+import { MAX_MUTED_CATEGORIES, getAnomalySettings } from "@/lib/anomaly-settings";
 import { userTagsOnly } from "@/lib/tags";
 import User from "@/models/User";
 
@@ -319,6 +320,13 @@ const payloadObject = z.object({
       deductibleCategories: nul(z.array(text(MAX_CATEGORY_LENGTH).min(1)).max(MAX_DEDUCTIBLE_CATEGORIES)),
     })
   ),
+  // Unusual-spend alert settings; only written when they are not the defaults.
+  anomalies: nul(
+    z.object({
+      enabled: nul(z.boolean()),
+      mutedCategories: nul(z.array(text(MAX_CATEGORY_LENGTH).min(1)).max(MAX_MUTED_CATEGORIES)),
+    })
+  ),
   data: dataSchema,
 });
 
@@ -496,6 +504,8 @@ export async function buildBackup(userId: string): Promise<BackupBuild> {
     spendLimit: spendLimit ? 1 : 0,
   };
   const tax = await getTaxSettings(userId);
+  const anomalies = await getAnomalySettings(userId);
+  const anomaliesChanged = !anomalies.enabled || anomalies.mutedCategories.length > 0;
   return {
     payload: {
       app: "expense-tracker",
@@ -503,6 +513,7 @@ export async function buildBackup(userId: string): Promise<BackupBuild> {
       createdAt: new Date().toISOString(),
       baseCurrency,
       tax: tax.deductibleCategories.length > 0 ? { deductibleCategories: tax.deductibleCategories } : undefined,
+      anomalies: anomaliesChanged ? { enabled: anomalies.enabled, mutedCategories: anomalies.mutedCategories } : undefined,
       data,
     },
     counts,
@@ -582,6 +593,42 @@ async function restoreTaxCategories(userId: string, fileCategories: string[] | u
     }
   }
   warnings.push(`Your deductible tax categories ${dryRun ? "will be" : "were"} restored from the backup (${wanted.length}).`);
+}
+
+// Merge only: the file's alert settings are used when the person has never changed them
+// (alerts on, nothing muted). Settings already changed here are kept and a warning says so.
+async function restoreAnomalySettings(
+  userId: string,
+  file: { enabled?: boolean | null; mutedCategories?: string[] | null } | null | undefined,
+  dryRun: boolean,
+  warnings: string[]
+) {
+  if (!file) return;
+  const wantedMuted = normaliseCategories(file.mutedCategories ?? []);
+  const wantedEnabled = file.enabled ?? true;
+  if (wantedEnabled && wantedMuted.length === 0) return;
+  const have = await getAnomalySettings(userId);
+  if (have.enabled === wantedEnabled && have.mutedCategories.join("\n") === wantedMuted.join("\n")) return;
+  if (!have.enabled || have.mutedCategories.length > 0) {
+    warnings.push("Your alert settings were not changed, because you already changed them.");
+    return;
+  }
+  if (!dryRun) {
+    // Only when still at the defaults: no stored mute list and alerts not switched off.
+    const res = await User.updateOne(
+      {
+        _id: userId,
+        "preferences.anomalies.enabled": { $ne: false },
+        $or: [{ "preferences.anomalies.mutedCategories": null }, { "preferences.anomalies.mutedCategories": { $size: 0 } }],
+      },
+      { $set: { "preferences.anomalies.enabled": wantedEnabled, "preferences.anomalies.mutedCategories": wantedMuted } }
+    );
+    if (res.matchedCount === 0) {
+      warnings.push("Your alert settings were not changed, because you already changed them.");
+      return;
+    }
+  }
+  warnings.push(`Your alert settings ${dryRun ? "will be" : "were"} restored from the backup.`);
 }
 
 export function parsePayload(raw: unknown): BackupPayload {
@@ -890,6 +937,7 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
   if (opts.dryRun) {
     if (willSet) warnings.push(`Your base currency will be set to ${fileBase} from the backup.`);
     await restoreTaxCategories(userId, payload.tax?.deductibleCategories, true, warnings);
+    await restoreAnomalySettings(userId, payload.anomalies, true, warnings);
     return { dryRun: true, restored: false, ...base };
   }
 
@@ -914,6 +962,7 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
     }
   }
   await restoreTaxCategories(userId, payload.tax?.deductibleCategories, false, warnings);
+  await restoreAnomalySettings(userId, payload.anomalies, false, warnings);
 
   // Parents first so every reference points at a row that exists.
   const owned = { user };
