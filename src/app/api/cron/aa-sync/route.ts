@@ -3,7 +3,7 @@ import { syncAllConsents } from "@/lib/aa-service";
 import { isAuthorizedCron } from "@/lib/cron-auth";
 import logger from "@/lib/logger";
 
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 // GET /api/cron/aa-sync — reads the new transactions of every active bank link not read in the last hour. A no-op
 // while bank linking is off (AA_PROVIDER unset). On the custom server this also runs every 6 hours from server.ts; on

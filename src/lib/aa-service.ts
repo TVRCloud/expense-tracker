@@ -669,8 +669,8 @@ export async function syncNow(userId: string, id: string, now = new Date()): Pro
 // One sweep at a time per process (the timer and cron route can overlap); a run that has gone this long is
 // treated as hung so one stuck call cannot block every later run.
 const RUN_STALE_AFTER_MS = 10 * 60 * 1000;
-/** A sweep stops starting new consents after this long (the cron route's maxDuration is 300 s). The rest wait for the next run. */
-export const SWEEP_LIMITS = { budgetMs: 240_000 };
+/** A sweep stops starting new consents after this long (the cron route's maxDuration is 60 s: a consent already started can take up to its own budget plus one provider call). The rest wait for the next run. */
+export const SWEEP_LIMITS = { budgetMs: 20_000 };
 let runStartedAt: number | null = null;
 
 /** Timer and cron entry: every active consent not read in the last hour, longest unread first. */

@@ -41,7 +41,7 @@ The stored balance of an account is the figure the user maintains, not something
 - A read counts toward the 5 minute cooldown and the hourly interval even when it fails; a read that starts while another is running answers 429.
 - A captured message a crash left in `processing` for 30 minutes (far above the few database calls one entry takes; there is no heartbeat) is finished by the next read of the same entry (one reader wins the claim). A transaction and its balance move are written in one database transaction (a replica set), so a crash leaves both or neither, never a row without its balance move; recovery therefore books the entry afresh when nothing was written. Entries a provider returns for a different linked account than the one asked are skipped.
 - The consent cap is settled after the insert (the oldest live consents keep their place), so requests started at once cannot pass it.
-- The sweep (`/api/cron/aa-sync` and the timer) stops starting consents after 240 seconds (the route's limit is 300) and says `partial: true`; the consents it did read have a fresh `lastSyncAt`, so the next run starts with the rest.
+- The sweep (`/api/cron/aa-sync` and the timer) stops starting consents after 20 seconds (the route's limit is 60, the same as every other route, so the deploy needs no longer function time) and says `partial: true`; the consents it did read have a fresh `lastSyncAt`, so the next run starts with the rest.
 - Revoke and mapping, like start, answer `503 AA_NOT_CONFIGURED` while `AA_PROVIDER` is unset. The cron route stays a `200 {ok:true, checked:0, created:0}` in that case on purpose: a failing cron would only raise alarms for a feature that is switched off.
 
 ## Data stored
