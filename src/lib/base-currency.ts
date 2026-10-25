@@ -99,7 +99,6 @@ export async function hasMoneyData(userId: string): Promise<boolean> {
 }
 
 const REFUSED =
-  "The base currency is fixed once you have transactions, balances, credit limits, budgets, goals, loans, funds, assets, envelope plans or a spend limit, because every stored amount is in it.";
   "The base currency is fixed once you have transactions, balances, credit limits, budgets, goals, loans, funds, assets, holdings, envelope plans or a spend limit, because every stored amount is in it.";
 
 /** Sets the base currency. Refused once any money row exists or the user is locked, unless it is the same code. */
