@@ -46,6 +46,9 @@ const AaConsentSchema = new Schema(
     // A short code for the last failure ("provider_error", "revoked_at_provider"), never a provider message.
     lastError: { type: String },
     revokedAt: { type: Date },
+    // The person deleted their account while this grant could not be withdrawn. Kept (with its encrypted handle) only
+    // so the cron sweep can withdraw it at the provider and then delete it. Never listed, synced or reachable by a user route.
+    ownerDeleted: { type: Boolean },
   },
   { timestamps: true }
 );
@@ -53,5 +56,6 @@ const AaConsentSchema = new Schema(
 AaConsentSchema.index({ user: 1, status: 1, createdAt: -1 });
 AaConsentSchema.index({ status: 1, lastSyncAt: 1 });
 AaConsentSchema.index({ handleHash: 1 });
+AaConsentSchema.index({ ownerDeleted: 1 }, { sparse: true });
 
 export default models.AaConsent || model("AaConsent", AaConsentSchema, "aa_consents");

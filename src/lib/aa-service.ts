@@ -216,7 +216,7 @@ async function releaseClaim(userId: string, accountId: string | Types.ObjectId, 
 async function loadConsent(userId: string, id: string): Promise<ConsentDoc> {
   await connectDB();
   if (!Types.ObjectId.isValid(id)) throw new AaServiceError("NOT_FOUND", "Consent not found");
-  const c = await AaConsent.findOne({ _id: id, user: userId }).lean<ConsentDoc | null>();
+  const c = await AaConsent.findOne({ _id: id, user: userId, ownerDeleted: { $ne: true } }).lean<ConsentDoc | null>();
   if (!c) throw new AaServiceError("NOT_FOUND", "Consent not found");
   return c;
 }
@@ -228,7 +228,7 @@ const providerUserRef = (userId: string) => createHash("sha256").update(`aa-user
 export async function getAaStatus(userId: string): Promise<{ configured: boolean; provider: string | null; consents: AaConsentView[] }> {
   await connectDB();
   const provider = getAaProvider();
-  const consents = await AaConsent.find({ user: userId }).sort({ createdAt: -1 }).limit(20).lean<ConsentDoc[]>();
+  const consents = await AaConsent.find({ user: userId, ownerDeleted: { $ne: true } }).sort({ createdAt: -1 }).limit(20).lean<ConsentDoc[]>();
   return { configured: provider !== null, provider: provider?.name ?? null, consents: consents.map(consentView) };
 }
 
@@ -639,6 +639,8 @@ let runStartedAt: number | null = null;
 
 /** Timer and cron entry: every active consent not read in the last hour, longest unread first. */
 export async function syncAllConsents(now = new Date()): Promise<{ checked: number; created: number; skipped?: true; partial?: true }> {
+  // Withdrawing a deleted account's grants does not depend on linking being switched on.
+  await retryOwnerDeletedConsents().catch((err) => logger.error({ err: codeOf(err) }, "aa: retry of deleted accounts' consents failed"));
   if (!aaConfigured()) return { checked: 0, created: 0 };
   const startedAt = Date.now();
   if (runStartedAt !== null && startedAt - runStartedAt < RUN_STALE_AFTER_MS) {
@@ -651,6 +653,7 @@ export async function syncAllConsents(now = new Date()): Promise<{ checked: numb
     await connectDB();
     const due = await AaConsent.find({
       status: "active",
+      ownerDeleted: { $ne: true },
       $or: [{ lastSyncAt: null }, { lastSyncAt: { $lte: new Date(now.getTime() - SYNC_INTERVAL_MS) } }],
     })
       .sort({ lastSyncAt: 1 })
@@ -724,17 +727,67 @@ export async function deleteAaDataForUser(userId: string): Promise<{ remaining: 
 }
 
 /**
- * After the account is deleted: whatever bank link records could not be withdrawn are removed, so encrypted handles
- * do not sit under a deleted person. Each is logged (consent id, provider, correlation id) so the grant can be
- * found and withdrawn at the provider by hand.
+ * After the account is deleted: what could not be withdrawn is NOT thrown away (that would orphan a live grant at the
+ * provider with no handle to withdraw it). Checked one by one:
+ * - already withdrawn (revoked and confirmed): deleted;
+ * - its provider is not registered here: nothing can withdraw it from this server, so it is deleted and logged (consent
+ *   id, provider, correlation id: the grant may still be live there);
+ * - anything else: flagged `ownerDeleted` and kept with its encrypted handle. The cron sweep retries the withdrawal
+ *   (`retryOwnerDeletedConsents`) and deletes the record only once the provider confirms. Never listed, synced or
+ *   reachable by a user route.
+ * Deletes by the ids it checked. Returns how many were left behind to retry.
  */
 export async function purgeAaRecordsOfDeletedUser(userId: string): Promise<number> {
   await connectDB();
-  const left = await AaConsent.find({ user: userId }).select("_id provider").lean<{ _id: Types.ObjectId; provider: string }[]>();
-  for (const c of left) {
-    logger.error({ consentId: c._id.toString(), provider: c.provider, correlationId: providerUserRef(userId) }, "aa: consent removed with a deleted account without being withdrawn; it may still be live at the provider");
+  const all = await AaConsent.find({ user: userId }).lean<ConsentDoc[]>();
+  const remove: Types.ObjectId[] = [];
+  const keep: Types.ObjectId[] = [];
+  for (const c of all) {
+    if (c.status === "revoked" && c.lastError !== "revoke_not_confirmed") remove.push(c._id);
+    else if (!providerByName(c.provider)) {
+      logger.error({ consentId: c._id.toString(), provider: c.provider, correlationId: providerUserRef(userId) }, "aa: consent deleted with a deleted account without a provider to withdraw it; it may still be live at the provider");
+      remove.push(c._id);
+    } else keep.push(c._id);
   }
-  await AaConsent.deleteMany({ user: userId });
-  await AaAccountClaim.deleteMany({ user: userId });
-  return left.length;
+  if (remove.length) await AaConsent.deleteMany({ user: userId, _id: { $in: remove } });
+  if (keep.length) {
+    await AaConsent.updateMany({ user: userId, _id: { $in: keep } }, { $set: { ownerDeleted: true } });
+    for (const id of keep) {
+      const c = all.find((x) => x._id.equals(id))!;
+      logger.error({ consentId: id.toString(), provider: c.provider, correlationId: providerUserRef(userId) }, "aa: consent of a deleted account kept to be withdrawn at the provider by the sweep");
+    }
+  }
+  await AaAccountClaim.deleteMany({ user: userId, consent: { $in: all.map((c) => c._id) } });
+  return keep.length;
+}
+
+/**
+ * Cron and timer: tries again to withdraw the consents of deleted accounts, and deletes each record only after the
+ * provider confirms (or no longer knows the consent). A failure keeps it for the next run.
+ */
+export async function retryOwnerDeletedConsents(limit = 50): Promise<{ withdrawn: number; kept: number }> {
+  await connectDB();
+  const left = await AaConsent.find({ ownerDeleted: true }).limit(limit).lean<ConsentDoc[]>();
+  let withdrawn = 0;
+  let kept = 0;
+  for (const c of left) {
+    const provider = providerByName(c.provider);
+    if (!provider) {
+      kept += 1; // Not registered right now (maybe only this deploy): keep it for when it is.
+      continue;
+    }
+    try {
+      await withTimeout((signal) => provider.revoke(handleOf(c), { signal }));
+    } catch (err) {
+      if (!(err instanceof AaProviderError && err.code === "CONSENT_NOT_FOUND")) {
+        kept += 1;
+        logger.error({ err: codeOf(err), consentId: c._id.toString() }, "aa: could not withdraw the consent of a deleted account yet");
+        continue;
+      }
+    }
+    await AaConsent.deleteOne({ _id: c._id, ownerDeleted: true });
+    await AaAccountClaim.deleteMany({ consent: c._id });
+    withdrawn += 1;
+  }
+  return { withdrawn, kept };
 }

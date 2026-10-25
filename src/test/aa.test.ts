@@ -1051,17 +1051,71 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
       expect(await Transaction.countDocuments({ user: a, isRecurring: true })).toBe(3);
     });
 
-    it("purging a deleted user's leftover consents removes the records and logs the lookup key only", async () => {
-      await linked();
-      const { purgeAaRecordsOfDeletedUser } = await import("@/lib/aa-service");
-      const { AaConsent } = await models();
-      const errSpy = vi.spyOn((await import("@/lib/logger")).default, "error");
-      expect(await purgeAaRecordsOfDeletedUser(a)).toBe(1);
-      const call = errSpy.mock.calls.find((c) => /deleted account/.test(String(c[1])));
-      errSpy.mockRestore();
-      expect(await AaConsent.countDocuments({ user: a })).toBe(0);
-      expect(call?.[0]).toMatchObject({ provider: "sandbox", correlationId: expect.stringMatching(/^[0-9a-f]{32}$/) });
-      expect(JSON.stringify(call?.[0])).not.toContain(a);
+    describe("consents of a deleted account", () => {
+      it("a leftover consent is kept and flagged, a withdrawn one and one with no provider are deleted, and none is visible", async () => {
+        const live = await linked();
+        const done = await linked();
+        const { AaConsent } = await models();
+        const { purgeAaRecordsOfDeletedUser } = await import("@/lib/aa-service");
+        await revoke(done.consentId);
+        const orphan = (await (await create(KEY_A, { "idempotency-key": "orphan" })).json()).data.consent as Json;
+        await AaConsent.updateOne({ _id: orphan.id }, { $set: { provider: "retired" } });
+        const errSpy = vi.spyOn((await import("@/lib/logger")).default, "error");
+        expect(await purgeAaRecordsOfDeletedUser(a)).toBe(1);
+        const calls = errSpy.mock.calls;
+        errSpy.mockRestore();
+        const rows = await AaConsent.find({ user: a }).lean<Json[]>();
+        expect(rows.map((r) => String(r._id))).toEqual([live.consentId]);
+        expect(rows[0].ownerDeleted).toBe(true);
+        expect(rows[0].consentHandle?.ciphertext).toBeTruthy();
+        for (const c of calls) {
+          expect(JSON.stringify(c[0])).not.toContain(a);
+          expect(c[0]).toMatchObject({ correlationId: expect.stringMatching(/^[0-9a-f]{32}$/) });
+        }
+        // Nothing reaches it from a user route.
+        expect((await (await status()).json()).data.consents).toEqual([]);
+        expect((await refresh(live.consentId)).status).toBe(404);
+        expect((await syncRoute(live.consentId)).status).toBe(404);
+        expect((await revoke(live.consentId)).status).toBe(404);
+      });
+
+      it("the sweep never reads its transactions, retries the withdrawal, keeps it while that fails and deletes it once confirmed", async () => {
+        const { consentId } = await linked();
+        const { AaConsent, Transaction } = await models();
+        const { purgeAaRecordsOfDeletedUser, syncAllConsents } = await import("@/lib/aa-service");
+        const { sandboxControl } = await import("@/lib/aa/sandbox");
+        const provider = (await import("@/lib/aa/providers")).getAaProvider()!;
+        const handle = await handleOf(consentId);
+        await purgeAaRecordsOfDeletedUser(a);
+
+        const fetchSpy = vi.spyOn(provider, "fetchTransactions");
+        const fail = vi.spyOn(provider, "revoke").mockRejectedValueOnce(new Error("down") as never);
+        await syncAllConsents();
+        expect(await AaConsent.countDocuments({ _id: consentId, ownerDeleted: true })).toBe(1);
+        expect(sandboxControl.isRevoked(handle)).toBe(false);
+        fail.mockRestore();
+
+        const out = await syncAllConsents();
+        expect(out).toMatchObject({ checked: 0, created: 0 });
+        expect(await AaConsent.countDocuments({ _id: consentId })).toBe(0);
+        expect(sandboxControl.isRevoked(handle)).toBe(true);
+        expect(fetchSpy).not.toHaveBeenCalled();
+        fetchSpy.mockRestore();
+        expect(await Transaction.countDocuments({ user: a })).toBe(0);
+      });
+
+      it("a provider that no longer knows the consent counts as withdrawn", async () => {
+        const { consentId } = await linked();
+        const { AaConsent } = await models();
+        const { purgeAaRecordsOfDeletedUser, retryOwnerDeletedConsents } = await import("@/lib/aa-service");
+        const { AaProviderError } = await import("@/lib/aa/provider");
+        const provider = (await import("@/lib/aa/providers")).getAaProvider()!;
+        await purgeAaRecordsOfDeletedUser(a);
+        const spy = vi.spyOn(provider, "revoke").mockRejectedValueOnce(new AaProviderError("CONSENT_NOT_FOUND") as never);
+        expect(await retryOwnerDeletedConsents()).toEqual({ withdrawn: 1, kept: 0 });
+        spy.mockRestore();
+        expect(await AaConsent.countDocuments({ _id: consentId })).toBe(0);
+      });
     });
 
     it("a failed split create leaves no rows and no balance move", async () => {
