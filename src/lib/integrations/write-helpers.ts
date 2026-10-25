@@ -19,6 +19,27 @@ export async function readJsonBody(req: NextRequest): Promise<{ ok: true; body: 
   }
 }
 
+/**
+ * A deep, key-sorted JSON string of a body. withIdempotency fingerprints only
+ * the top-level keys of what it is given (nested objects lose their own keys),
+ * so a route whose body has nested objects or arrays of objects passes
+ * `{ request: canonicalJson(body) }` as the fingerprint body instead.
+ */
+export function canonicalJson(value: unknown): string {
+  const sort = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(sort);
+    if (v && typeof v === "object") {
+      return Object.fromEntries(
+        Object.entries(v as Record<string, unknown>)
+          .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))
+          .map(([k, val]) => [k, sort(val)])
+      );
+    }
+    return v;
+  };
+  return JSON.stringify(sort(value));
+}
+
 export function conflictMessage(reason: string) {
   return reason === "fingerprint_mismatch"
     ? "Idempotency-Key was already used with a different request"

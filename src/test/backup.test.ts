@@ -1120,6 +1120,38 @@ describe("encrypted backup and restore", () => {
       expect((await Transaction.findOne({ user: a, category: "Tagged" }).lean())!.tags).toEqual(["dinner"]);
     });
 
+    it("keeps envelope plans: restored with the amounts, no move history, an existing month is left alone, a re-run adds nothing", async () => {
+      await seed(a);
+      const { default: EnvelopePlan } = await import("@/models/EnvelopePlan");
+      await EnvelopePlan.create({
+        user: a, month: "2026-03", income: 100000, envelopes: [{ category: "Food", assigned: 40000 }, { category: "Rent", assigned: 50000 }],
+        moves: [{ from: "Food", to: "Rent", amount: 100, at: new Date() }], createdAt: new Date(), updatedAt: new Date(),
+      });
+      await EnvelopePlan.create({ user: a, month: "2026-04", income: 5, envelopes: [], moves: [] });
+      const { data } = await (await exportBackup()).json();
+      expect(data.counts.envelopePlans).toBe(2);
+
+      // into the same person after a wipe: same ids, amounts kept, move history not kept
+      await EnvelopePlan.deleteMany({ user: a });
+      const restored = await restore({ passphrase: PASS, backup: data.backup });
+      expect((await restored.json()).data.counts.envelopePlans).toEqual({ inBackup: 2, toCreate: 2, existing: 0 });
+      const march = (await EnvelopePlan.findOne({ user: a, month: "2026-03" }).lean<{ income: number; envelopes: { category: string; assigned: number }[]; moves: unknown[] }>())!;
+      expect(march.income).toBe(100000);
+      expect(march.envelopes.map((e) => [e.category, e.assigned])).toEqual([["Food", 40000], ["Rent", 50000]]);
+      expect(march.moves).toEqual([]);
+
+      // into another person: owned by them, ids derived, a month they already planned is kept as it is
+      await EnvelopePlan.create({ user: b, month: "2026-04", income: 7, envelopes: [], moves: [] });
+      const other = await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B });
+      expect((await other.json()).data.counts.envelopePlans).toEqual({ inBackup: 2, toCreate: 1, existing: 1 });
+      const theirs = await EnvelopePlan.find({ user: b }).sort({ month: 1 }).lean<{ month: string; income: number }[]>();
+      expect(theirs.map((p) => [p.month, p.income])).toEqual([["2026-03", 100000], ["2026-04", 7]]);
+      const again = await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B });
+      expect((await again.json()).data.counts.envelopePlans.toCreate).toBe(0);
+      expect(await EnvelopePlan.countDocuments({ user: b })).toBe(2);
+      expect(await EnvelopePlan.countDocuments({ user: a })).toBe(2);
+    });
+
     it("exports the base currency and refuses a file in another currency once money data exists", async () => {
       const usd = await newUser("usd-key-for-backup-test-1", "USD");
       const { default: Account } = await import("@/models/Account");

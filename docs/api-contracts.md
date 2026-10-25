@@ -214,6 +214,20 @@ Money set aside for a cost with a due date, and the share of income saved. Amoun
 
 n8n and the app use `/api/integrations/sinking-funds` (+ `/:id`, `/:id/contribute`) and `/api/integrations/savings-rate` with the integration envelope; writes need `Idempotency-Key`.
 
+## Envelopes
+
+Optional zero-based budgeting on top of budgets (`preferences.envelopes.enabled`, off by default). Each month holds the income the person expects and what they assign to each envelope (an envelope is a category, identified by its exact name like a budget). Amounts are paise of the base currency; only a two-decimal base is allowed (`BASE_CURRENCY_ONLY_TWO_DECIMALS`), every amount is at most 1e13, and the first write locks the base currency. `spent` per envelope comes from the budget numbers (same rules and month boundaries as budgets: split lines count under their own category, deleted rows and unpaid instalments left out, confirmed refunds come off).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/envelopes?month=YYYY-MM` | The plan (default: this month in the user's time zone): `{enabled, month, currency, exponent, income, assigned, unassigned, overAssigned, envelopes: [{category, assigned, spent, left, overspent}], suggested: [{category, limitAmount}], moves: [{from, to, amount, at}], previousMonth, hasPrevious}`. `unassigned = income - assigned` and may be negative (`overAssigned`); `suggested` lists this month's budget categories that are not envelopes yet; `moves` is the latest 20, newest first. With the mode off: `enabled: false` and an empty plan |
+| PUT | `/api/envelopes` | `{month, income?, assign?: [{category, assigned}], remove?: [category]}` (at least one of the three; each category once; at most 60 envelopes per month, else 400 `TOO_MANY`). Sets income and the amount of each listed envelope (new ones are added, existing ones keep their place), drops the removed ones; returns the plan. 409 `ENVELOPES_DISABLED` while the mode is off |
+| POST | `/api/envelopes/move` | `{month, from, to, amount, allowOverdraw?}`: takes `amount` (at least 1) from one envelope and gives it to another in one atomic update; the total never changes. The source may not go below 0, nor below what it has already spent unless `allowOverdraw` is true (400 `INSUFFICIENT`); the receiver stays at most 1e13. 404 `ENVELOPE_NOT_FOUND` when either is not in that month's plan; the last 50 moves are kept |
+| POST | `/api/envelopes/copy` | `{month, from?}`: copy income and envelopes of `from` (default the month before) into `month`, which must have no envelopes (409 `PLAN_NOT_EMPTY`; 404 `NOTHING_TO_COPY` when the source has none). Move history is not copied |
+| GET, PUT | `/api/envelopes/settings` | `{enabled}`: turn envelope mode on or off; plans are kept while it is off |
+
+The integration routes `/api/integrations/envelopes` (+ `/move`, `/copy`, `/settings`) take the same bodies with the integration envelope; writes need `Idempotency-Key` (a retry with the same key and body replays the first answer). Errors carry the code above in `error.details.errorCode` (`ENVELOPES_DISABLED` and `PLAN_NOT_EMPTY` are `CONFLICT`, `ENVELOPE_NOT_FOUND` and `NOTHING_TO_COPY` are `NOT_FOUND`, `INSUFFICIENT` and `TOO_MANY` are `VALIDATION_ERROR`). The browser routes answer `{error, code}` with the same statuses. Realtime resource `envelopes`; plans are part of the encrypted backup.
+
 ## Net worth
 
 What the user owns minus what they owe. Owned: positive account balances, a card with a credit balance, money lent not yet paid back, manual assets. Owed: a card balance below zero, any other account below zero, money borrowed not yet paid back. Archived or deleted accounts, settled or deleted loans and archived manual assets count for nothing. Amounts are cents.

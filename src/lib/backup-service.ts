@@ -4,6 +4,7 @@ import { z } from "zod";
 import connectDB from "@/lib/mongodb";
 import Account from "@/models/Account";
 import Budget from "@/models/Budget";
+import EnvelopePlan from "@/models/EnvelopePlan";
 import Goal from "@/models/Goal";
 import Loan from "@/models/Loan";
 import ManualAsset from "@/models/ManualAsset";
@@ -49,6 +50,7 @@ export const CAPS = {
   sinkingFunds: 1000,
   subscriptionDecisions: 5000,
   manualAssets: 1000,
+  envelopePlans: 600,
 } as const;
 
 const CHUNK = 500;
@@ -291,6 +293,16 @@ const manualAssetSchema = z.object({
   ...stamps,
 });
 
+// One envelope plan per month: the income and what is assigned to each envelope.
+// The move history is not kept. A plan only exists once envelope mode was used.
+const envelopePlanSchema = z.object({
+  id: oid,
+  month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+  income: nul(money),
+  envelopes: z.array(z.object({ category: text(100).min(1), assigned: money })).max(60),
+  ...stamps,
+});
+
 const list = <T extends z.ZodType>(s: T, max: number) => nul(z.array(s).max(max)).transform((v) => v ?? []);
 
 const dataSchema = z.object({
@@ -304,6 +316,7 @@ const dataSchema = z.object({
   sinkingFunds: list(sinkingFundSchema, CAPS.sinkingFunds),
   subscriptionDecisions: list(decisionSchema, CAPS.subscriptionDecisions),
   manualAssets: list(manualAssetSchema, CAPS.manualAssets),
+  envelopePlans: list(envelopePlanSchema, CAPS.envelopePlans),
   spendLimit: nul(spendLimitSchema),
 });
 
@@ -343,6 +356,7 @@ export const COLLECTIONS = [
   "sinkingFunds",
   "manualAssets",
   "subscriptionDecisions",
+  "envelopePlans",
   "transactions",
   "repayments",
 ] as const;
@@ -409,6 +423,7 @@ export async function buildBackup(userId: string): Promise<BackupBuild> {
   const rules = await readAll(m(Rule), { user }, ruleSchema, CAPS.rules, "rules", omitted, budget);
   const sinkingFunds = await readAll(m(SinkingFund), live, sinkingFundSchema, CAPS.sinkingFunds, "sinkingFunds", omitted, budget);
   const manualAssets = await readAll(m(ManualAsset), { user }, manualAssetSchema, CAPS.manualAssets, "manualAssets", omitted, budget);
+  const envelopePlans = await readAll(m(EnvelopePlan), { user }, envelopePlanSchema, CAPS.envelopePlans, "envelopePlans", omitted, budget);
   const subscriptionDecisions = await readAll(
     m(SubscriptionDecision),
     { user },
@@ -477,6 +492,7 @@ export async function buildBackup(userId: string): Promise<BackupBuild> {
     rules,
     sinkingFunds,
     manualAssets,
+    envelopePlans,
     subscriptionDecisions,
     transactions: keptTx,
     repayments: keptRepayments,
@@ -490,6 +506,7 @@ export async function buildBackup(userId: string): Promise<BackupBuild> {
     rules: rules.length,
     sinkingFunds: sinkingFunds.length,
     manualAssets: manualAssets.length,
+    envelopePlans: envelopePlans.length,
     subscriptionDecisions: subscriptionDecisions.length,
     transactions: keptTx.length,
     repayments: keptRepayments.length,
@@ -631,6 +648,7 @@ function checkConsistency(d: BackupData) {
   ids(d.rules, "rule");
   ids(d.sinkingFunds, "sinking fund");
   ids(d.manualAssets, "asset");
+  ids(d.envelopePlans, "envelope plan");
   ids(d.subscriptionDecisions, "subscription choice");
   ids(d.repayments, "repayment");
   const has = (set: Set<string>, id?: string) => !id || set.has(id.toLowerCase());
@@ -815,10 +833,13 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
     });
   // These three go through the same placement as every other kind (owner check, derived
   // ids, trash), and then the person's unique key as well.
+  const plansPlan = await plan(m(EnvelopePlan), "envelopePlan", d.envelopePlans, userId);
+  const haveMonths = new Set((await EnvelopePlan.find({ user }, { month: 1 }).lean<{ month: string }[]>()).map((r) => r.month));
   const budgetsPlan = await plan(m(Budget), "budget", d.budgets, userId);
   const rulesPlan = await plan(m(Rule), "rule", d.rules, userId);
   const decisionsPlan = await plan(m(SubscriptionDecision), "decision", d.subscriptionDecisions, userId);
   const budgets = pick(d.budgets.filter((r) => budgetsPlan.create.has(r.id.toLowerCase())), haveBudgets, budgetKey);
+  const envelopePlans = pick(d.envelopePlans.filter((r) => plansPlan.create.has(r.id.toLowerCase())), haveMonths, (r) => r.month);
   const rules = pick(d.rules.filter((r) => rulesPlan.create.has(r.id.toLowerCase())), haveRules, ruleKey);
   const decisions = pick(
     d.subscriptionDecisions.filter((r) => decisionsPlan.create.has(r.id.toLowerCase())),
@@ -866,6 +887,7 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
     rules: count(d.rules.length, rules.length),
     sinkingFunds: count(d.sinkingFunds.length, newFunds.length),
     manualAssets: count(d.manualAssets.length, newAssets.length),
+    envelopePlans: count(d.envelopePlans.length, envelopePlans.length),
     subscriptionDecisions: count(d.subscriptionDecisions.length, decisions.length),
     transactions: count(d.transactions.length, newTxs.length),
     repayments: count(d.repayments.length, newRepayments.length),
@@ -932,6 +954,10 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
     rules.map((r) => strip({ ...r, ...owned, _id: fin(rulesPlan, r.id), id: undefined, account: fin(accounts, r.account) }))
   );
   await insertChunks(m(SinkingFund), newFunds.map((f) => strip({ ...f, ...owned, _id: fin(sinking, f.id), id: undefined, currency: rowBase })));
+  await insertChunks(
+    m(EnvelopePlan),
+    envelopePlans.map((p) => strip({ ...p, ...owned, _id: fin(plansPlan, p.id), id: undefined, income: p.income ?? 0, moves: [] }))
+  );
   await insertChunks(m(ManualAsset), newAssets.map((a) => strip({ ...a, ...owned, _id: fin(assets, a.id), id: undefined })));
   await insertChunks(
     m(SubscriptionDecision),

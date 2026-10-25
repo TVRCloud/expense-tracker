@@ -43,6 +43,11 @@ const UserSchema = new Schema(
       tax: {
         deductibleCategories: [{ type: String }],
       },
+      // Envelope mode (src/lib/envelope-service.ts): zero-based budgeting on top
+      // of budgets, off until the user turns it on.
+      envelopes: {
+        enabled: { type: Boolean, default: false },
+      },
     },
     passwordResetToken: { type: String },
     passwordResetExpires: { type: Date },
