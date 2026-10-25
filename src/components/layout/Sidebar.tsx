@@ -24,6 +24,7 @@ import {
   Repeat,
   Scale,
   Receipt,
+  Users,
   TrendingUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -57,6 +58,7 @@ const NAV_GROUPS = [
       { href: "/net-worth", label: "Net worth", icon: Scale },
       { href: "/investments", label: "Investments", icon: TrendingUp },
       { href: "/tax", label: "Tax", icon: Receipt },
+      { href: "/household", label: "Household", icon: Users },
     ],
   },
   {

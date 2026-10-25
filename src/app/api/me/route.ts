@@ -8,6 +8,7 @@ import { z } from "zod";
 import { forgetUserSessions } from "@/lib/perf/session-cache";
 import { forgetUserKeys } from "@/lib/integrations/auth";
 import { deleteAllReceiptsOfUser } from "@/lib/receipt-service";
+import { revokeAllSharesOfUser } from "@/lib/share-service";
 
 const updateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
@@ -71,6 +72,8 @@ export async function DELETE() {
     // Private receipt images go for good. First, while the account is still active: if this
     // fails the request fails and nothing is locked, so it can simply be tried again.
     await deleteAllReceiptsOfUser(user.id);
+    // Household sharing: every share they own or belong to ends now (also retryable while active).
+    await revokeAllSharesOfUser(user.id, existing.email);
     // Tombstone the email so the same address can register a fresh account.
     await User.findByIdAndUpdate(user.id, {
       $set: {
@@ -86,7 +89,9 @@ export async function DELETE() {
     await Session.updateMany({ user: user.id, isActive: true }, { $set: { isActive: false } });
     forgetUserSessions(user.id);
     forgetUserKeys(user.id);
-    // Once more, last: catches a receipt added by a request that was already running. The account
+    // Once more, last: catches an invite accepted by a request that was already running.
+    await revokeAllSharesOfUser(user.id, existing.email).catch((err) => logger.error({ err, userId: user.id }, "final share revoke failed"));
+    // And a receipt added by a request that was already running. The account
     // is locked by now, so a failure here is retried once and then only logged.
     try {
       await deleteAllReceiptsOfUser(user.id);

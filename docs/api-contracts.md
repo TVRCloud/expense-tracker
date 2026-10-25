@@ -392,6 +392,31 @@ Integration routes only, with the integration envelope. Design and threat model:
 
 An older server answers 404 for both routes.
 
+## Household sharing
+
+An owner shares chosen accounts (and optionally budgets) with one other person. Design, permission matrix and threat model: [household.md](household.md). Integration routes use the integration envelope; the browser twins under `/api/household/...` answer `{data}` or `{error}` and use the session. Every write needs an `Idempotency-Key` on the integration routes. Existing routes are unchanged.
+
+**Errors.** `404 NOT_FOUND` for everything that is not yours to see (no share, pending, declined, revoked, expired, wrong owner, account not shared, wrong or used code): one body for all of them. `403 FORBIDDEN` only when an active viewer tries to write. `409 CONFLICT` with `error.reason` `ALREADY_SHARED` or `LIMIT_REACHED` (10 live shares per owner, 5 per account). `429 RATE_LIMITED` for ten wrong accept tries in ten minutes. `400 VALIDATION_ERROR` for a bad body (unknown fields in the editor write too).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/integrations/shares` | `{owned, received}`. `owned`: your live shares `{id, status (pending\|active\|expired), role, includeBudgets, accountIds, member {email, name}, inviteExpiresAt, acceptedAt, createdAt}`; `member.name` is `null` until the person accepts (a pending invite never says whether the address is registered). `received`: active shares and pending invites for your account email `{id, status, role, includeBudgets, owner {id, name}, accountCount, accountIds (empty until active), inviteExpiresAt, acceptedAt, createdAt}`. Never a code or hash |
+| POST | `/api/integrations/shares` | Invite. Body `{email, accountIds (1 to 20 of your own, live accounts), role?: "viewer"\|"editor" (default viewer), includeBudgets? (default false)}`. 201 `{share, code}`; `code` is the one-time invite code (7 days), shown only in this first answer (a retry with the same `Idempotency-Key` replays the share without it). 400 for accounts that are not yours or are archived, or your own address; 409 `ALREADY_SHARED`, `LIMIT_REACHED` |
+| POST | `/api/integrations/shares/{id}/code` | Owner, pending invite only: a new code `{share, code}`; the old one stops working |
+| POST | `/api/integrations/shares/{id}/accept` | Body `{code}`. Needs the code and that your account email is the invited address; works once. 200 `{share}` (active). 404 for every miss, 429 after ten misses. A retry with the same `Idempotency-Key` returns the share as it is now, or 404 if it has ended since |
+| POST | `/api/integrations/shares/{id}/decline` | Invitee (email match, no code needed). 200 `{share}` |
+| PATCH | `/api/integrations/shares/{id}` | Owner. Body any of `{accountIds, role, includeBudgets}`. 200 `{share}`; effective on the member's next request |
+| DELETE | `/api/integrations/shares/{id}` | The owner ends the share, or the member leaves it. 200 `{id, status: "revoked"}`; effective at once |
+| GET | `/api/integrations/shared/{ownerId}/accounts` | Member of an active share of that owner. `{owner {id, name}, role, includeBudgets, currency (the owner's base currency), accounts [{id, name, type, balance, color, icon}]}`: the shared accounts that still exist and are not archived |
+| GET | `/api/integrations/shared/{ownerId}/transactions` | Query `skip` (capped at 10000), `limit` (max 50, default 20), `accountId` (must be shared), `type`, `dateFrom`, `dateTo`. `{currency, data, total, skip, limit}`; each row `{id, account, transferTo, type, amount, category, subcategory, description, date, addedBy {id, name}\|null}` (no `note`: the owner's notes can be private). Only rows of shared accounts, plus transfers into them. A transfer side that is not shared is `null`. No tags, attachments, receipts, sources or capture details. Voided, deleted and unpaid recurring rows are left out |
+| GET | `/api/integrations/shared/{ownerId}/budgets` | Query `month`, `year` (default: the owner's current month). Only when the share has `includeBudgets` (else 404). `{currency, month, year, budgets [{id, category, limitAmount, effectiveLimit, spent, rollover, isActive}]}`; `spent` is the owner's spending in that category across all their accounts |
+| GET | `/api/integrations/shared/{ownerId}/summary` | `{owner, currency, accountCount, balance (shared accounts only), month {year, month, income, expense}}` in the owner's time zone, confirmed refunds netted out of spending |
+| POST | `/api/integrations/shared/{ownerId}/transactions` | Editor only (viewer 403). Body, strict: `{accountId (a shared account), type: "income"\|"expense", amount (paise of the owner's base currency), category, description?, note?, date}`. 201 `{transaction: {id, account, type, amount, currency, category, description, note, date, addedBy}}`. Goes through the owner's `createTransaction` (balance, budget and spend limit alerts, ledger with the member as actor, `addedBy` on the row) and notifies the owner. No round-up into the owner's goal. It locks the owner's base currency like any first money row. The share is re-read right before the write, so a revoke or role change takes effect even for a request already in flight. Tags, splits, recurrence, transfers and foreign amounts are 400 |
+
+Browser twins (session auth, no `Idempotency-Key`): `GET` and `POST /api/household/shares`, `PATCH` and `DELETE /api/household/shares/{id}`, `POST .../{id}/accept|decline|code`, and `GET /api/household/shared/{ownerId}/accounts|transactions|summary` (read only; the web page is read only). Browser write bodies are capped at 8 KB (413 `Request body is too large`).
+
+No realtime resource: shared data is never streamed to a member. Invites, accepts, declines, revokes, leaves and editor writes arrive as ordinary notifications (`type: system`, `meta.kind: household_invite|household_accepted|household_declined|household_revoked|household_left|household_write`, `meta.shareId`). Shares are not in a backup, and `DELETE /api/me` ends every share the person owns or belongs to. An older server answers 404 for all of these routes.
+
 ## Admin
 
 | Method | Path | Description |
