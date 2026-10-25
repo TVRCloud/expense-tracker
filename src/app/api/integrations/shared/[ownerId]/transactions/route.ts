@@ -45,12 +45,12 @@ export const GET = withIntegrationRoute("shared", async ({ req, user, requestId 
 // amounts are not accepted (400).
 export const POST = withIntegrationRoute("shared", async ({ req, user, requestId }, ctx: { params: Params }) => {
   const { ownerId } = await ctx.params;
+  // Access is checked before the body is read, so a non-member learns nothing from a body or validation error.
+  const shared = await loadActiveShare(user.id, ownerId);
+  if (!shared) return integrationError("NOT_FOUND", "Not found", requestId);
   const read = await readShareBody(req, requestId);
   if (!read.ok) return read.res;
   const parsed = sharedTransactionSchema.safeParse(read.body);
-  // Access is checked first so a non-member learns nothing from a validation error.
-  const shared = await loadActiveShare(user.id, ownerId);
-  if (!shared) return integrationError("NOT_FOUND", "Not found", requestId);
   if (!parsed.success) {
     return integrationError("VALIDATION_ERROR", "Transaction is invalid", requestId, { details: parsed.error.flatten() });
   }

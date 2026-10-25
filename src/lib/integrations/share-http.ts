@@ -16,12 +16,14 @@ const CODE: Record<ShareServiceError["code"], IntegrationErrorCode> = {
 /** The integration error for a household sharing failure, or null when it is not one. */
 export function shareErrorResponse(err: unknown, requestId: string) {
   if (!(err instanceof ShareServiceError)) return null;
-  return integrationError(
-    CODE[err.code],
-    err.message,
-    requestId,
-    err.retryAfterSeconds ? { retryAfterSeconds: err.retryAfterSeconds, reason: err.code } : { reason: err.code }
-  );
+  // A 404 carries no `reason`: every share 404 has the same shape, so none says why it is one.
+  const extra =
+    err.code === "NOT_FOUND"
+      ? undefined
+      : err.retryAfterSeconds
+        ? { retryAfterSeconds: err.retryAfterSeconds, reason: err.code }
+        : { reason: err.code };
+  return integrationError(CODE[err.code], err.message, requestId, extra);
 }
 
 const MAX_BODY_BYTES = 8 * 1024;

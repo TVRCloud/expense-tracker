@@ -272,11 +272,121 @@ describe("household sharing", () => {
       expect(await Share.countDocuments({ owner: ids.o, status: { $in: ["pending", "active"] } })).toBeLessThanOrEqual(10);
     });
 
+    describe("the limit post-check", () => {
+      // Real first call (the pre-check), then the post-check sees a crowd or fails.
+      async function postCheck(result: "over" | "throws") {
+        const { default: Share } = await import("@/models/Share");
+        const orig = Share.aggregate.bind(Share);
+        let n = 0;
+        return vi.spyOn(Share, "aggregate").mockImplementation(((...args: unknown[]) => {
+          n += 1;
+          if (n === 1) return (orig as (...a: unknown[]) => unknown)(...args);
+          return result === "over" ? Promise.resolve([{ _id: a1, n: 99 }]) : Promise.reject(new Error("db down"));
+        }) as never);
+      }
+
+      it("an invite that turns out over the limit is taken back", async () => {
+        const spy = await postCheck("over");
+        const res = await invite();
+        spy.mockRestore();
+        expect(res.status).toBe(409);
+        expect((await res.json()).error!.reason).toBe("LIMIT_REACHED");
+        const { default: Share } = await import("@/models/Share");
+        expect(await Share.countDocuments({})).toBe(0);
+        expect((await invite()).status).toBe(201); // the slot and the unique address are free again
+      });
+
+      it("an invite whose post-check fails is taken back too", async () => {
+        const spy = await postCheck("throws");
+        const { createInvite, shareInviteSchema } = await import("@/lib/share-service");
+        const input = shareInviteSchema.parse({ email: emails.m, accountIds: [a1] });
+        await expect(createInvite({ id: ids.o, name: "Name-o", email: emails.o }, input)).rejects.toThrow("db down");
+        spy.mockRestore();
+        const { default: Share } = await import("@/models/Share");
+        expect(await Share.countDocuments({})).toBe(0);
+      });
+
+      it("taking back an over-limit invite is retried when the first delete fails", async () => {
+        const spy = await postCheck("over");
+        const { default: Share } = await import("@/models/Share");
+        const realDelete = Share.deleteOne.bind(Share);
+        let calls = 0;
+        const del = vi.spyOn(Share, "deleteOne").mockImplementation(((...args: unknown[]) => {
+          calls += 1;
+          return calls === 1 ? Promise.reject(new Error("blip")) : (realDelete as (...a: unknown[]) => unknown)(...args);
+        }) as never);
+        const res = await invite();
+        del.mockRestore();
+        spy.mockRestore();
+        expect(res.status).toBe(409);
+        expect(calls).toBe(2);
+        expect(await Share.countDocuments({})).toBe(0);
+      });
+
+      it("a refused change puts back the role and budgets as well as the accounts", async () => {
+        const id = await activeShare({ role: "viewer", includeBudgets: false });
+        const { default: Share } = await import("@/models/Share");
+        const { PATCH } = await import("@/app/api/integrations/shares/[id]/route");
+        const spy = await postCheck("over");
+        const res = (await PATCH(req(`shares/${id}`, "o", { method: "PATCH", body: { accountIds: [a2], role: "editor", includeBudgets: true } }), params({ id }))) as Res;
+        spy.mockRestore();
+        expect(res.status).toBe(409);
+        const row = await Share.findById(id).lean<{ role: string; includeBudgets: boolean; accountIds: unknown[] }>();
+        expect(row!.role).toBe("viewer");
+        expect(row!.includeBudgets).toBe(false);
+        expect(row!.accountIds.map(String)).toEqual([a1]);
+      });
+
+      it("a change whose post-check fails is put back and the error surfaces", async () => {
+        const id = await activeShare({ role: "viewer" });
+        const { default: Share } = await import("@/models/Share");
+        const { updateShare } = await import("@/lib/share-service");
+        const spy = await postCheck("throws");
+        await expect(updateShare(ids.o, id, { accountIds: [a2], role: "editor", includeBudgets: true })).rejects.toThrow("db down");
+        spy.mockRestore();
+        const row = await Share.findById(id).lean<{ role: string; includeBudgets: boolean; accountIds: unknown[] }>();
+        expect(row).toMatchObject({ role: "viewer", includeBudgets: false });
+        expect(row!.accountIds.map(String)).toEqual([a1]);
+      });
+    });
+
+    it("every share 404 has the same shape", async () => {
+      const { shareErrorResponse } = await import("@/lib/integrations/share-http");
+      const { ShareServiceError } = await import("@/lib/share-service");
+      const viaService = shareErrorResponse(new ShareServiceError("NOT_FOUND", "Not found"), "rid")!;
+      const viaAccess = (await shared("accounts", "s")).body;
+      expect(viaService.status).toBe(404);
+      const a = await viaService.json();
+      expect(a).toEqual({ success: false, error: { code: "NOT_FOUND", message: "Not found" }, requestId: "rid" });
+      expect(Object.keys(viaAccess.error!)).toEqual(Object.keys(a.error));
+      expect(viaAccess.error).toEqual(a.error);
+    });
+
+    it("a replayed accept is a 404 once the owner's account is gone", async () => {
+      const { data } = await (await invite()).json();
+      expect((await accept(data.share.id, data.code, "m", "own-1")).status).toBe(200);
+      const { default: User } = await import("@/models/User");
+      await User.updateOne({ _id: ids.o }, { $set: { isActive: false } });
+      expect((await accept(data.share.id, data.code, "m", "own-1")).status).toBe(404);
+    });
+
+    it("access is checked before the body: a non-member gets 404 for a bad body, a member 400", async () => {
+      await activeShare({ role: "editor" });
+      expect((await sharedPost("{nope", "s")).status).toBe(404);
+      expect((await sharedPost("{nope", "m")).status).toBe(400);
+      expect((await sharedPost({ accountId: "x" }, "s")).status).toBe(404);
+    });
+
     it("tells a registered invitee in the app, without the code", async () => {
       const res = await invite();
       const { data } = await res.json();
       const { default: Notification } = await import("@/models/Notification");
-      const rows = await Notification.find({ user: ids.m }).lean();
+      // Sent after the answer, so wait for it.
+      let rows = await Notification.find({ user: ids.m }).lean();
+      for (let i = 0; i < 20 && rows.length === 0; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        rows = await Notification.find({ user: ids.m }).lean();
+      }
       expect(rows).toHaveLength(1);
       expect(JSON.stringify(rows)).not.toContain(data.code);
       expect((rows[0].meta as { kind: string }).kind).toBe("household_invite");

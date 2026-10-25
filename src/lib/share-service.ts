@@ -3,6 +3,7 @@ import { Types } from "mongoose";
 import { z } from "zod";
 import connectDB from "@/lib/mongodb";
 import logger from "@/lib/logger";
+import { runInBackground } from "@/lib/perf/background";
 import Share from "@/models/Share";
 import Account from "@/models/Account";
 import Transaction from "@/models/Transaction";
@@ -183,6 +184,18 @@ async function checkAccountLimits(accountIds: string[], exceptShareId?: string) 
   }
 }
 
+/** Runs an undo step, once more if it fails; a second failure is logged loudly and never hides the caller's own error. */
+async function undoWithRetry(what: string, step: () => Promise<unknown>) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await step();
+      return;
+    } catch (err) {
+      if (attempt === 1) logger.error({ err, what }, "household undo failed; a share may exceed its limit until cleaned up");
+    }
+  }
+}
+
 /** True when the live shares of this owner, or of any of these accounts, are over the limits. */
 async function overLimits(ownerId: string, accountIds: string[]) {
   const live = await Share.countDocuments({ owner: ownerId, status: { $in: [...LIVE] } });
@@ -272,21 +285,33 @@ export async function createInvite(owner: { id: string; name: string; email: str
   // The counts above and the insert are separate steps, so two invites sent at the same moment can
   // both pass. Count again now that this one exists; if the limit is passed, take this one back.
   // (If both are over, both go: the owner retries. The limit is never exceeded for good.)
-  if (await overLimits(owner.id, accountIds)) {
-    await Share.deleteOne({ _id: share._id, status: "pending" });
+  // If the check itself fails, the new invite is taken back too: never keep one that was not checked.
+  let over: boolean;
+  try {
+    over = await overLimits(owner.id, accountIds);
+  } catch (err) {
+    await undoWithRetry("take back an unchecked invite", () => Share.deleteOne({ _id: share._id, status: "pending" }));
+    throw err;
+  }
+  if (over) {
+    await undoWithRetry("take back an over-limit invite", () => Share.deleteOne({ _id: share._id, status: "pending" }));
     throw new ShareServiceError("LIMIT_REACHED", "Sharing limit reached. Try again.");
   }
 
-  // A registered invitee is told in the app; the code itself only goes to the owner.
-  const invitee = await User.findOne({ email: input.email, isActive: true }).select("_id").lean<{ _id: Types.ObjectId }>();
-  if (invitee) {
+  // A registered invitee is told in the app; the code itself only goes to the owner. Looked up and
+  // sent after the answer, so a registered and an unregistered address take the same time to answer.
+  const shareId = idStr(share._id);
+  const accountCount = accountIds.length;
+  runInBackground("household.inviteNotice", async () => {
+    const invitee = await User.findOne({ email: input.email, isActive: true }).select("_id").lean<{ _id: Types.ObjectId }>();
+    if (!invitee) return;
     await notify(
       idStr(invitee._id),
       "Household invite",
-      `${owner.name || "Someone"} invited you to share ${accountIds.length === 1 ? "an account" : `${accountIds.length} accounts`}. Ask them for the code to accept.`,
-      { kind: "household_invite", shareId: idStr(share._id) }
+      `${owner.name || "Someone"} invited you to share ${accountCount === 1 ? "an account" : `${accountCount} accounts`}. Ask them for the code to accept.`,
+      { kind: "household_invite", shareId }
     );
-  }
+  });
   logger.info({ ownerId: owner.id, shareId: idStr(share._id), role: input.role }, "household invite created");
   return { share: ownerView(share), token };
 }
@@ -353,24 +378,39 @@ export async function updateShare(ownerId: string, shareId: string, input: Share
   const existing = await Share.findOne({ _id: shareId, owner: ownerId, status: { $in: [...LIVE] } }).lean<ShareDoc>();
   if (!existing) throw new ShareServiceError("NOT_FOUND", "Share not found");
 
-  const set: Record<string, unknown> = {};
-  if (input.role !== undefined) set.role = input.role;
-  if (input.includeBudgets !== undefined) set.includeBudgets = input.includeBudgets;
+  const live = { _id: shareId, owner: ownerId, status: { $in: [...LIVE] } };
+  const plain: Record<string, unknown> = {};
+  if (input.role !== undefined) plain.role = input.role;
+  if (input.includeBudgets !== undefined) plain.includeBudgets = input.includeBudgets;
+
+  let updated: ShareDoc | null = null;
   if (input.accountIds !== undefined) {
     const accountIds = await checkOwnedAccounts(ownerId, input.accountIds);
     await checkAccountLimits(accountIds, shareId);
-    set.accountIds = accountIds;
+    // The accounts go first, alone. Role and budgets are applied only once the limit check passed,
+    // so a refused change never leaves the member with more access than before.
+    updated = await Share.findOneAndUpdate(live, { $set: { accountIds } }, { new: true }).lean<ShareDoc>();
+    if (!updated) throw new ShareServiceError("NOT_FOUND", "Share not found");
+    // Same race as an invite: count again after the change. If it is over, or the check fails, put the
+    // previous accounts back, but only if they are still the ones this request wrote (a concurrent
+    // change by the owner is not undone).
+    const restore = () =>
+      Share.updateOne({ ...live, accountIds }, { $set: { accountIds: existing.accountIds } });
+    let over: boolean;
+    try {
+      over = await overLimits(ownerId, accountIds);
+    } catch (err) {
+      await undoWithRetry("restore share accounts", restore);
+      throw err;
+    }
+    if (over) {
+      await undoWithRetry("restore share accounts", restore);
+      throw new ShareServiceError("LIMIT_REACHED", "Sharing limit reached. Try again.");
+    }
   }
-  const updated = await Share.findOneAndUpdate(
-    { _id: shareId, owner: ownerId, status: { $in: [...LIVE] } },
-    { $set: set },
-    { new: true }
-  ).lean<ShareDoc>();
-  if (!updated) throw new ShareServiceError("NOT_FOUND", "Share not found");
-  // Same race as an invite: count again after the change and put the old accounts back if over.
-  if (input.accountIds !== undefined && (await overLimits(ownerId, set.accountIds as string[]))) {
-    await Share.updateOne({ _id: shareId, status: { $in: [...LIVE] } }, { $set: { accountIds: existing.accountIds } });
-    throw new ShareServiceError("LIMIT_REACHED", "Sharing limit reached. Try again.");
+  if (Object.keys(plain).length > 0 || !updated) {
+    updated = await Share.findOneAndUpdate(live, { $set: plain }, { new: true }).lean<ShareDoc>();
+    if (!updated) throw new ShareServiceError("NOT_FOUND", "Share not found");
   }
   const member =
     updated.status === "active" && updated.member ? await User.findById(updated.member).select("name").lean<UserBrief>() : null;
@@ -446,7 +486,8 @@ export async function currentMemberShare(userId: string, shareId: string) {
   const share = await Share.findOne({ _id: shareId, member: userId, status: "active" }).lean<ShareDoc>();
   if (!share) throw new ShareServiceError("NOT_FOUND", "Invite not found or expired");
   const owner = await User.findOne({ _id: share.owner, isActive: true }).select("name").lean<UserBrief>();
-  return memberView(share, owner ?? undefined);
+  if (!owner) throw new ShareServiceError("NOT_FOUND", "Invite not found or expired");
+  return memberView(share, owner);
 }
 
 export async function declineInvite(user: { id: string; email: string; name: string }, shareId: string) {
