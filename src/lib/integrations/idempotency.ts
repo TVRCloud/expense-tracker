@@ -41,8 +41,12 @@ export async function withIdempotency<T extends Record<string, unknown>>(params:
   // instead of the full TTL, so a retry is not blocked for a day; on success
   // the record gets the full TTL.
   pendingTtlSeconds?: number;
+  // True for an error that may have been thrown AFTER the write was applied (a dropped
+  // acknowledgement, a timeout): the pending record is kept, so a retry under the key
+  // is refused instead of running the write a second time, and the error is rethrown.
+  keepPendingOn?: (error: unknown) => boolean;
 }): Promise<IdempotencyOutcome<T>> {
-  const { userId, endpoint, key, body, execute, pendingTtlSeconds } = params;
+  const { userId, endpoint, key, body, execute, pendingTtlSeconds, keepPendingOn } = params;
   await connectDB();
 
   const requestFingerprint = fingerprint(body);
@@ -86,6 +90,8 @@ export async function withIdempotency<T extends Record<string, unknown>>(params:
   try {
     result = await execute();
   } catch (error) {
+    // The write may have happened: leave the record pending (see keepPendingOn).
+    if (keepPendingOn?.(error)) throw error;
     // Don't let a transient failure permanently block retries under this key
     // before the TTL would otherwise expire it.
     try {

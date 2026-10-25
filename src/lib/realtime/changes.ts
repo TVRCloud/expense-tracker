@@ -20,6 +20,7 @@ export type RealtimeResource =
   | "subscriptions"
   | "sinkingFunds"
   | "netWorth"
+  | "envelopes"
   | "holdings"
   | "anomalies";
 
@@ -41,6 +42,7 @@ export const RESOURCES: Readonly<Record<string, RealtimeResource>> = {
   subscription_decisions: "subscriptions",
   sinking_funds: "sinkingFunds",
   manual_assets: "netWorth",
+  envelope_plans: "envelopes",
   anomalies: "anomalies",
   holdings: "holdings",
 };

@@ -9,6 +9,7 @@ import SinkingFund from "@/models/SinkingFund";
 import ManualAsset from "@/models/ManualAsset";
 import Holding from "@/models/Holding";
 import SpendLimit from "@/models/SpendLimit";
+import EnvelopePlan from "@/models/EnvelopePlan";
 import { BASE_CURRENCY_ONLY_TWO_DECIMALS, isSupportedAsBase, isSupportedCurrency, type CurrencyCode } from "@/lib/currency";
 
 // The base currency is `preferences.currency` (what the web app already uses
@@ -92,12 +93,13 @@ export async function hasMoneyData(userId: string): Promise<boolean> {
     ManualAsset.exists(mine),
     Holding.exists(mine),
     SpendLimit.exists({ ...mine, $or: [{ dailyAmount: { $gt: 0 } }, { weeklyAmount: { $gt: 0 } }] }),
+    EnvelopePlan.exists({ ...mine, $or: [{ income: { $gt: 0 } }, { "envelopes.assigned": { $gt: 0 } }] }),
   ]);
   return found.some(Boolean);
 }
 
 const REFUSED =
-  "The base currency is fixed once you have transactions, balances, credit limits, budgets, goals, loans, funds, assets, holdings or a spend limit, because every stored amount is in it.";
+  "The base currency is fixed once you have transactions, balances, credit limits, budgets, goals, loans, funds, assets, holdings, envelope plans or a spend limit, because every stored amount is in it.";
 
 /** Sets the base currency. Refused once any money row exists or the user is locked, unless it is the same code. */
 export async function setBaseCurrency(userId: string, code: string): Promise<string> {

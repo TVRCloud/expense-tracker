@@ -23,6 +23,7 @@ All monetary fields are stored as **integers (cents)** — divide by 100 for dis
 | `preferences.currency` | String | ISO 4217, the base currency every `amount` is in; supported codes only, cannot change once the user has transactions |
 | `preferences.billReminders.enabled` | Boolean | default false; turns on bill due reminders |
 | `preferences.billReminders.leadDays` | Number | 1 to 14, default 3; how many days ahead to remind |
+| `preferences.envelopes.enabled` | Boolean | default false; turns on envelope mode |
 | `preferences.tax.deductibleCategories` | [String] | lower-case category names that count as deductible in the tax summary, up to 50 |
 | `preferences.anomalies.enabled` | Boolean | default true; unusual-spend alerts |
 | `preferences.anomalies.mutedCategories` | [String] | lower-case category names that raise no alerts, up to 50 |
@@ -286,6 +287,21 @@ Money set aside for a cost on a due date. Progress (`remaining`, `percent`, `mon
 | `isDeleted` / `deletedAt` / `deletedBy` | | soft delete |
 
 Index `{user, isDeleted, dueDate}`.
+
+## envelope_plans
+
+Envelope mode (zero-based budgeting): one document per user and month. Totals, `spent` and `left` are computed on read, never stored. Written only by single-document atomic updates (pipeline updates with the cap in the filter), so a move cannot take more than the source has assigned (or below what it had spent at the moment of the move, unless overspending is allowed), and two requests at once cannot spend the same money.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | |
+| `month` | String | `YYYY-MM` |
+| `income` | Number | expected income, minor units of the base currency |
+| `envelopes[]` | `{category, assigned}` | category is the exact budget category name, `assigned` minor units, at most 60 |
+| `moves[]` | `{from, to, amount, at}` | the last 50 moves between envelopes |
+| `createdAt` / `updatedAt` | Date | set by the updates themselves (no `timestamps` option) |
+
+Unique index `{user, month}`. Counted as money data by `hasMoneyData` (a plan with income or an assigned amount locks the base currency).
 
 ## holdings
 
