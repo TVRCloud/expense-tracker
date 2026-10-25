@@ -1328,6 +1328,20 @@ describe("encrypted backup and restore", () => {
         expect(after.map(pick)).toEqual(before.map(pick));
       });
 
+      it("a holding the person removed (archived) is skipped, not brought back, and the report says so", async () => {
+        await seed(a);
+        const { default: Holding } = await import("@/models/Holding");
+        const { data } = await (await exportBackup()).json();
+        await Holding.updateOne({ user: a, name: "Bank FD" }, { $set: { isArchived: true } });
+        const res = await restore({ passphrase: PASS, backup: data.backup });
+        expect(res.status).toBe(200);
+        const report = (await res.json()).data;
+        expect(report.counts.holdings).toEqual({ inBackup: 2, toCreate: 0, existing: 2 });
+        // the other one is the seed's deleted account
+        expect(report.warnings.join(" ")).toContain("2 rows in the backup already exist in your trash");
+        expect(await Holding.countDocuments({ user: a, isArchived: { $ne: true } })).toBe(1);
+      });
+
       it("restore into another person: fresh ids, theirs alone, and a re-run adds nothing", async () => {
         await seed(a);
         const { default: Holding } = await import("@/models/Holding");
@@ -1376,6 +1390,11 @@ describe("encrypted backup and restore", () => {
         expect(await status(hold({ kind: "fixed_deposit", fd, sip: { amount: 5, dayOfMonth: 5, startDay: "2026-01-05" } }))).toBe(400);
         expect(await status(hold({ kind: "fixed_deposit", fd: { ...fd, maturityDay: "2026-01-01" } }))).toBe(400);
         expect(await status(hold({ kind: "fixed_deposit", fd: { ...fd, maturityDay: "2026-02-30" } }))).toBe(400);
+        expect(await status(hold({ kind: "fixed_deposit", fd: { ...fd, maturityDay: "2075-12-20" } }))).toBe(200); // exactly 50 * 365 days
+        expect(await status(hold({ kind: "fixed_deposit", fd: { ...fd, maturityDay: "2075-12-21" } }))).toBe(400); // a day past
+        expect(await status(hold({ kind: "fixed_deposit", fd: { ...fd, principal: 1e12, rateBps: 10_000, maturityDay: "2075-12-20" } }))).toBe(400); // worth more than an amount at maturity
+        expect(await status(hold({ isArchived: true }))).toBe(400);
+        expect(await status(hold({ isArchived: false }))).toBe(200);
         expect(await status(hold({ kind: "fixed_deposit", fd: { ...fd, startDay: "tomorrow" } }))).toBe(400);
         expect(await status(hold({ kind: "fixed_deposit", fd: { ...fd, rateBps: 10_001 } }))).toBe(400);
         expect(await status(hold({ investedAmount: 1e13 + 1 }))).toBe(400);

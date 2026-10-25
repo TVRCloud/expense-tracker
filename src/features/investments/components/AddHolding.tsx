@@ -6,12 +6,11 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { toBps, toMinor } from "../amount-input";
+import { localToday, toBps, toMinor } from "../amount-input";
 import { HOLDING_KIND_LABELS, useAddHolding, type HoldingKind, type NewHolding } from "../hooks/useHoldings";
 
 const KINDS = Object.keys(HOLDING_KIND_LABELS) as HoldingKind[];
 
-const today = () => new Date().toISOString().slice(0, 10);
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -31,10 +30,10 @@ export function AddHolding({ onDone }: { onDone: () => void }) {
   const [units, setUnits] = useState("");
   const [sipAmount, setSipAmount] = useState("");
   const [sipDay, setSipDay] = useState("5");
-  const [sipStart, setSipStart] = useState(today());
+  const [sipStart, setSipStart] = useState(localToday());
   const [principal, setPrincipal] = useState("");
   const [rate, setRate] = useState("");
-  const [fdStart, setFdStart] = useState(today());
+  const [fdStart, setFdStart] = useState(localToday());
   const [maturity, setMaturity] = useState("");
   const isFd = kind === "fixed_deposit";
 

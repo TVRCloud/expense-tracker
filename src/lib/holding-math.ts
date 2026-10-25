@@ -6,6 +6,8 @@ export const UNIT_DECIMALS = 6;
 export const PRICE_DECIMALS = 4;
 export const MAX_UNITS_MICRO = 1_000_000_000_000_000; // 1e9 units
 const DAY_MS = 86_400_000;
+// The most a stored amount can be (src/lib/currency.ts MAX_MINOR_AMOUNT), repeated here so this file stays pure.
+const MAX_AMOUNT = 1e13;
 const B0 = BigInt(0);
 const B2 = BigInt(2);
 
@@ -139,6 +141,12 @@ export function simpleInterest(principal: number, rateBps: number, days: number)
   return Number(divRoundHalfUp(BigInt(principal) * BigInt(rateBps) * BigInt(days), BigInt(10_000) * BigInt(365)));
 }
 
+/** True when the deposit's value at maturity fits in an amount, so fdValue never has to cut it short. */
+export function fdFitsAmount(fd: FixedDeposit): boolean {
+  const term = Math.max(0, dayNumber(fd.maturityDay) - dayNumber(fd.startDay));
+  return fd.principal + simpleInterest(fd.principal, fd.rateBps, term) <= MAX_AMOUNT;
+}
+
 /** What a fixed deposit is worth on `todayKey`: nothing accrues before the start day or after maturity. */
 export function fdValue(fd: FixedDeposit, todayKey: string): FdValue {
   const start = dayNumber(fd.startDay);
@@ -146,11 +154,14 @@ export function fdValue(fd: FixedDeposit, todayKey: string): FdValue {
   const today = dayNumber(todayKey);
   const termDays = Math.max(0, maturity - start);
   const elapsed = Math.min(Math.max(0, today - start), termDays);
-  const accrued = simpleInterest(fd.principal, fd.rateBps, elapsed);
+  // New deposits are refused when they would pass MAX_AMOUNT at maturity (fdFitsAmount); the cap only guards rows
+  // from before that rule, so every total of 500 holdings stays a safe integer.
+  const value = Math.min(MAX_AMOUNT, fd.principal + simpleInterest(fd.principal, fd.rateBps, elapsed));
+  const maturityValue = Math.min(MAX_AMOUNT, fd.principal + simpleInterest(fd.principal, fd.rateBps, termDays));
   return {
-    accrued,
-    value: fd.principal + accrued,
-    maturityValue: fd.principal + simpleInterest(fd.principal, fd.rateBps, termDays),
+    accrued: Math.max(0, value - fd.principal),
+    value,
+    maturityValue,
     termDays,
     daysToMaturity: Math.max(0, maturity - today),
     matured: today >= maturity,

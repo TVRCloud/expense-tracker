@@ -20,8 +20,8 @@ import { BaseCurrencyError, getBaseState, hasMoneyData, lockBaseCurrency, setBas
 import { BASE_CURRENCY_ONLY_TWO_DECIMALS, isSupportedAsBase, isSupportedCurrency, MAX_RATE, MAX_MINOR_AMOUNT, MIN_RATE, minorExponent } from "@/lib/currency";
 import { MAX_CATEGORY_LENGTH, MAX_DEDUCTIBLE_CATEGORIES, getTaxSettings, normaliseCategories } from "@/lib/tax-settings";
 import { userTagsOnly } from "@/lib/tags";
-import { dayNumber, isDayKey, MAX_UNITS_MICRO } from "@/lib/holding-math";
-import { MAX_HOLDINGS } from "@/lib/holding-service";
+import { dayNumber, fdFitsAmount, isDayKey, MAX_UNITS_MICRO } from "@/lib/holding-math";
+import { MAX_FD_TERM_DAYS, MAX_HOLDINGS } from "@/lib/holding-service";
 import User from "@/models/User";
 
 // What goes into a backup, how it is checked on the way back in, and the
@@ -334,9 +334,16 @@ const holdingSchema = z
   })
   .superRefine((h, ctx) => {
     const issue = (path: string, message: string) => ctx.addIssue({ code: "custom", path: [path], message });
+    // The export leaves archived holdings out, so a file that has one was not made by this server.
+    if (h.isArchived === true) issue("isArchived", "An archived holding is not part of a backup");
     if (h.kind === "fixed_deposit") {
       if (!h.fd) issue("fd", "A fixed deposit needs its terms");
-      else if (isDayKey(h.fd.startDay) && isDayKey(h.fd.maturityDay) && dayNumber(h.fd.maturityDay) <= dayNumber(h.fd.startDay)) issue("fd", "Maturity must be after the start");
+      else if (isDayKey(h.fd.startDay) && isDayKey(h.fd.maturityDay)) {
+        const term = dayNumber(h.fd.maturityDay) - dayNumber(h.fd.startDay);
+        if (term <= 0) issue("fd", "Maturity must be after the start");
+        else if (term > MAX_FD_TERM_DAYS) issue("fd", "A deposit can run for at most 50 years");
+        else if (!fdFitsAmount(h.fd)) issue("fd", "The deposit would be worth more than can be kept at maturity");
+      }
       if (h.sip) issue("sip", "A fixed deposit has no SIP");
     } else if (h.fd) {
       issue("fd", "Only a fixed deposit has deposit terms");
@@ -706,14 +713,15 @@ function checkConsistency(d: BackupData) {
 
 type Held = { owner: string; trashed: boolean };
 
-async function ownersOf(model: AnyModel, ids: string[]): Promise<Map<string, Held>> {
+// `archivedIsTrash`: an archived holding was removed by the person (like a soft delete); an archived account is still live and restorable, so it is not trash.
+async function ownersOf(model: AnyModel, ids: string[], archivedIsTrash = false): Promise<Map<string, Held>> {
   const out = new Map<string, Held>();
   for (let i = 0; i < ids.length; i += CHUNK) {
     const slice = ids.slice(i, i + CHUNK).map((id) => new Types.ObjectId(id));
     const rows = await model
-      .find({ _id: { $in: slice } }, { user: 1, isDeleted: 1, deletedAt: 1 })
-      .lean<{ _id: Types.ObjectId; user?: Types.ObjectId; isDeleted?: boolean; deletedAt?: Date | null }[]>();
-    for (const r of rows) out.set(String(r._id), { owner: r.user ? String(r.user) : "", trashed: r.isDeleted === true || Boolean(r.deletedAt) });
+      .find({ _id: { $in: slice } }, { user: 1, isDeleted: 1, deletedAt: 1, isArchived: 1 })
+      .lean<{ _id: Types.ObjectId; user?: Types.ObjectId; isDeleted?: boolean; deletedAt?: Date | null; isArchived?: boolean }[]>();
+    for (const r of rows) out.set(String(r._id), { owner: r.user ? String(r.user) : "", trashed: r.isDeleted === true || (archivedIsTrash && r.isArchived === true) || Boolean(r.deletedAt) });
   }
   return out;
 }
@@ -736,9 +744,9 @@ type Planned = { final: Map<string, string>; create: Set<string>; existing: Set<
 // For each row: mine already -> keep, skip; free -> keep id, create; held by
 // someone else -> a derived id (mine already -> skip, else create). Nothing is
 // ever overwritten.
-async function plan(model: AnyModel, kind: string, rows: { id: string }[], userId: string): Promise<Planned> {
+async function plan(model: AnyModel, kind: string, rows: { id: string }[], userId: string, archivedIsTrash = false): Promise<Planned> {
   const ids = rows.map((r) => r.id.toLowerCase());
-  const owners = await ownersOf(model, ids);
+  const owners = await ownersOf(model, ids, archivedIsTrash);
   const final = new Map<string, string>();
   const create = new Set<string>();
   const existing = new Set<string>();
@@ -761,7 +769,7 @@ async function plan(model: AnyModel, kind: string, rows: { id: string }[], userI
   for (let attempt = 0; pending.length > 0; attempt += 1) {
     if (attempt >= MAX_ATTEMPTS) throw new BackupError("invalid", "Could not place a row from the backup");
     const candidates = new Map(pending.map((id) => [id, derivedId(userId, kind, id, attempt)]));
-    const heldBy = await ownersOf(model, [...candidates.values()]);
+    const heldBy = await ownersOf(model, [...candidates.values()], archivedIsTrash);
     const next: string[] = [];
     for (const [id, d] of candidates) {
       const held = heldBy.get(d);
@@ -847,7 +855,7 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
   const goals = await plan(m(Goal), "goal", d.goals, userId);
   const sinking = await plan(m(SinkingFund), "fund", d.sinkingFunds, userId);
   const assets = await plan(m(ManualAsset), "asset", d.manualAssets, userId);
-  const holdingsPlan = await plan(m(Holding), "holding", d.holdings, userId);
+  const holdingsPlan = await plan(m(Holding), "holding", d.holdings, userId, true);
   const txs = await plan(m(Transaction), "transaction", d.transactions, userId);
   const repayments = await plan(m(Repayment), "repayment", d.repayments, userId);
 

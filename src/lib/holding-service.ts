@@ -7,6 +7,7 @@ import { userTimeZone } from "@/lib/net-worth";
 import { DEFAULT_TIME_ZONE, localDateKey } from "@/lib/spend-limit-time";
 import {
   dayNumber,
+  fdFitsAmount,
   fdValue,
   formatMicro,
   gainPercent,
@@ -24,12 +25,15 @@ import {
 // feed net worth (src/lib/net-worth.ts). Amounts are integer minor units of the
 // base currency.
 
-/** Most holdings one person can keep: keeps every total far inside what a double holds exactly. */
+/**
+ * Most holdings one person can keep. Every value is at most MAX_MINOR_AMOUNT (a fixed deposit's value is capped
+ * there, see holding-math fdValue), so 500 of them add up to 5e15, inside the 9e15 a double holds exactly.
+ */
 export const MAX_HOLDINGS = 500;
 const MAX_HISTORY = 100;
 const SIP_LOOKAHEAD_DAYS = 60;
 const MAX_SIPS_LISTED = 50;
-const MAX_FD_TERM_DAYS = 365 * 50;
+export const MAX_FD_TERM_DAYS = 365 * 50;
 
 export type HoldingErrorCode =
   | "HOLDING_NOT_FOUND"
@@ -100,6 +104,11 @@ const fdSchema = z
   .refine((v) => !isDayKey(v.startDay) || !isDayKey(v.maturityDay) || dayNumber(v.maturityDay) - dayNumber(v.startDay) <= MAX_FD_TERM_DAYS, {
     message: "A deposit can run for at most 50 years",
     path: ["maturityDay"],
+  })
+  // The value at maturity must fit in an amount, so a deposit's value is never cut short (see fdValue).
+  .refine((v) => !isDayKey(v.startDay) || !isDayKey(v.maturityDay) || fdFitsAmount(v), {
+    message: "The deposit would be worth more than can be kept at maturity",
+    path: ["principal"],
   });
 
 export const holdingCreateSchema = z
@@ -314,6 +323,8 @@ export async function createHolding(userId: string, input: HoldingCreateInput, n
   const isFd = input.kind === "fixed_deposit" && input.fd;
   const invested = isFd ? input.fd!.principal : (input.investedAmount ?? 0);
   const current = isFd ? fdValue(input.fd!, todayKey).value : (input.currentValue ?? invested);
+  // The base is locked before the insert (every writer of a base-unit amount must), so a create that then loses the
+  // race for the last place below has locked the base without leaving a row: the same as a write rejected after the lock.
   await lockBaseCurrency(userId, state);
   const doc = await Holding.create({
     user: userId,

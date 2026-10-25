@@ -146,6 +146,7 @@ describe("holdings", () => {
         deposit({ sip: { amount: 5000, dayOfMonth: 5, startDay: "2026-01-05" } }),
         deposit({ fd: { principal: 10_000_000, rateBps: 725, startDay: "2026-01-01", maturityDay: "2026-01-01" } }),
         deposit({ fd: { principal: 10_000_000, rateBps: 725, startDay: "2026-01-01", maturityDay: "2026-01-05x" } }),
+        deposit({ fd: { principal: 1e12, rateBps: 10_000, startDay: "2026-01-01", maturityDay: "2076-01-01" } }),
         deposit({ fd: { principal: 10_000_000, rateBps: 10_001, startDay: "2026-01-01", maturityDay: "2027-01-01" } }),
         deposit({ fd: { principal: 10_000_000, rateBps: 725, startDay: "2026-01-01", maturityDay: "2100-01-01" } }),
       ];

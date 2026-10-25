@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   dayNumber,
+  fdFitsAmount,
   fdValue,
   formatMicro,
   gainPercent,
@@ -152,6 +153,21 @@ describe("fixed deposit", () => {
   });
   it("a zero rate earns nothing", () => {
     expect(fdValue({ ...fd, rateBps: 0 }, "2027-01-01")).toMatchObject({ accrued: 0, value: 10_000_000, maturityValue: 10_000_000 });
+  });
+  it("caps a value at the most an amount can be, so totals of many holdings stay exact", () => {
+    const huge = { principal: 1e13, rateBps: 10_000, startDay: "2026-01-01", maturityDay: "2076-01-01" };
+    const v = fdValue(huge, "2076-01-01");
+    expect(v.value).toBe(1e13);
+    expect(v.maturityValue).toBe(1e13);
+    expect(v.accrued).toBe(0);
+    expect(500 * v.value).toBeLessThan(Number.MAX_SAFE_INTEGER);
+  });
+  it("fdFitsAmount refuses a deposit worth more than an amount can be at maturity", () => {
+    const base = { rateBps: 10_000, startDay: "2026-01-01", maturityDay: "2076-01-01" };
+    expect(fdFitsAmount({ ...base, principal: 1e12 })).toBe(false); // 1e12 + about 50e12
+    expect(fdFitsAmount({ ...base, principal: 1.9e11 })).toBe(true);
+    expect(fdFitsAmount({ ...base, principal: 1e13, rateBps: 0 })).toBe(true);
+    expect(fdFitsAmount({ ...base, principal: 1e13 })).toBe(false);
   });
   it("counts a leap year as 366 actual days over 365", () => {
     const leap = { principal: 36_500, rateBps: 1000, startDay: "2024-01-01", maturityDay: "2025-01-01" };
