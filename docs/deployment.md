@@ -12,7 +12,7 @@
 Copy `.env.example` to `.env.local` and fill in all values. See the file for descriptions.
 
 Critical variables:
-- `MONGODB_URI` — MongoDB connection string. Must be a replica set or Atlas: realtime uses change streams and editing a split purchase uses a transaction (a standalone server answers "This server needs a MongoDB replica set")
+- `MONGODB_URI` — MongoDB connection string. Must be a replica set or Atlas: realtime uses change streams and editing a split purchase and every transaction create (manual, captured, imported) use a database transaction, so a standalone server fails them (split edits answer "This server needs a MongoDB replica set")
 - `CAPTURE_ENCRYPTION_KEY` — 32+ characters; encrypts captured messages and receipt photos. Changing it makes both unreadable
 - `NEXTAUTH_SECRET` — must be 32+ random characters
 - `NEXTAUTH_URL` — public URL of your deployment

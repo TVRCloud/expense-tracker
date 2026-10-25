@@ -238,7 +238,9 @@ export async function startConsent(userId: string): Promise<{ consent: AaConsent
     const userRef = createHash("sha256").update(`aa-user:${userId}`).digest("hex").slice(0, 32);
     created = checked(createdConsentSchema, await withTimeout((signal) => provider.createConsent({ userRef, durationDays: CONSENT_DAYS, signal })));
   } catch (err) {
-    logger.error({ err: codeOf(err), provider: provider.name }, "aa: could not start a consent");
+    // A timeout aborts our side only: the provider may still have created the consent. The correlation id is the
+    // person's opaque id (a hash, never the email), so a support lookup at the provider can find a stray consent.
+    logger.error({ err: codeOf(err), provider: provider.name, correlationId: createHash("sha256").update(`aa-user:${userId}`).digest("hex").slice(0, 32) }, "aa: could not start a consent");
     throw new AaServiceError("PROVIDER_ERROR", "The bank linking provider could not be reached. Try again later.");
   }
   const doc = await AaConsent.create({
@@ -690,7 +692,7 @@ export async function deleteAaDataForUser(userId: string): Promise<{ remaining: 
     }
     const provider = providerByName(c.provider);
     if (!provider) {
-      logger.warn({ userId, consentId: c._id.toString(), provider: c.provider, handleHash: c.handleHash }, "aa: consent deleted without a provider to withdraw it; withdraw it by hand");
+      logger.warn({ consentId: c._id.toString(), provider: c.provider }, "aa: consent deleted without a provider to withdraw it; the grant may still be live at the provider");
       done.push(c._id);
       continue;
     }
@@ -708,6 +710,6 @@ export async function deleteAaDataForUser(userId: string): Promise<{ remaining: 
   }
   await AaConsent.deleteMany({ user: userId, _id: { $in: done } });
   await AaAccountClaim.deleteMany({ user: userId, consent: { $in: done } });
-  if (remaining) logger.warn({ userId, remaining }, "aa: consents kept because they could not be withdrawn");
+  if (remaining) logger.warn({ remaining }, "aa: consents kept because they could not be withdrawn");
   return { remaining };
 }

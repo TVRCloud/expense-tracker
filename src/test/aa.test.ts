@@ -941,6 +941,48 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
       expect(await Transaction.countDocuments({ user: a })).toBe(1);
     });
 
+    it("a ledger failure after the commit is logged, not an error, so a retry cannot book the payment twice", async () => {
+      const { bank } = await linked();
+      const { Account, Transaction } = await models();
+      const { createTransaction } = await import("@/lib/transaction-service");
+      const LedgerBlock = (await import("@/models/LedgerBlock")).default as mongoose.Model<Json>;
+      const input = { userId: a, actor: actor(), accountId: String(bank._id), type: "expense" as const, amount: 5000, category: "food", date: new Date().toISOString(), tags: [], isRecurring: false };
+      const spy = vi.spyOn(LedgerBlock, "create").mockRejectedValue(new Error("ledger down") as never);
+      try {
+        const out = await createTransaction(input as never);
+        expect(out.kind).toBe("single");
+      } finally {
+        spy.mockRestore();
+      }
+      expect((await Account.findById(bank._id).lean<Json>())?.balance).toBe(95000);
+      expect(await Transaction.countDocuments({ user: a })).toBe(1);
+    });
+
+    it("creates at the same moment on one account all apply (write conflicts are retried)", async () => {
+      const { bank } = await linked();
+      const { Account, Transaction } = await models();
+      const { createTransaction } = await import("@/lib/transaction-service");
+      const make = (i: number) =>
+        createTransaction({ userId: a, actor: actor(), accountId: String(bank._id), type: "expense", amount: 100 + i, category: "food", date: new Date().toISOString(), tags: [], isRecurring: false } as never);
+      await Promise.all(Array.from({ length: 8 }, (_, i) => make(i)));
+      const total = Array.from({ length: 8 }, (_, i) => 100 + i).reduce((x, y) => x + y, 0);
+      expect(await Transaction.countDocuments({ user: a })).toBe(8);
+      expect((await Account.findById(bank._id).lean<Json>())?.balance).toBe(100000 - total);
+    });
+
+    it("a transfer into an archived destination is refused and books nothing", async () => {
+      const { bank } = await linked();
+      const { Account, Transaction } = await models();
+      const cash = await Account.create({ user: a, name: "Cash", type: "cash", balance: 2000 });
+      const { createTransaction } = await import("@/lib/transaction-service");
+      await Account.updateOne({ _id: cash._id }, { $set: { isArchived: true } });
+      await expect(
+        createTransaction({ userId: a, actor: actor(), accountId: String(bank._id), transferToId: String(cash._id), type: "transfer", amount: 900, category: "Transfer", date: new Date().toISOString(), tags: [], isRecurring: false } as never)
+      ).rejects.toThrow();
+      expect((await Account.findById(bank._id).lean<Json>())?.balance).toBe(100000);
+      expect(await Transaction.countDocuments({ user: a })).toBe(0);
+    });
+
     it("a failed split create leaves no rows and no balance move", async () => {
       const { bank } = await linked();
       const { Account, Transaction } = await models();

@@ -7,6 +7,8 @@ import CreditStatement from "@/models/CreditStatement";
 import type { AuthUser } from "@/lib/auth-guard";
 import { redis } from "@/lib/redis";
 import { checkBudgetAlert } from "@/lib/budget-alert";
+import { detectAnomalies, retireAnomaliesForTransactions, type CheckedTransaction } from "@/lib/anomaly-service";
+import { runInBackground } from "@/lib/perf/background";
 import { checkSpendLimitAlert } from "@/lib/spend-limit";
 import { applyRoundUp } from "@/lib/goal-service";
 import { computeInstallmentDates, OPEN_ENDED_WINDOW } from "@/lib/recurrence";
@@ -311,6 +313,23 @@ async function resolveAmount(
 }
 
 /**
+ * Ledger blocks for a create are written after its database transaction commits (the ledger is a per-person hash
+ * chain whose appends retry on a sequence clash, which cannot be done inside a database transaction). By then the
+ * row and the balance are committed, so a ledger failure must not turn the create into an error: the caller would
+ * retry and book the payment twice. It is logged instead, and the chain can be repaired by the ledger backfill.
+ */
+async function appendLedgerAfterCommit(input: Parameters<typeof appendLedgerBlock>[0]) {
+  try {
+    await appendLedgerBlock(input);
+  } catch (err) {
+    logger.error(
+      { err: err instanceof Error ? err.name : "unknown", userId: input.userId, scope: input.scope, entityId: input.entityId, action: input.action },
+      "ledger block not written after a committed create"
+    );
+  }
+}
+
+/**
  * Runs `work` in one database transaction (production Mongo is a replica set, see docs/realtime.md): everything it
  * writes commits together or not at all, and a write conflict runs it again on the new state, so it must start from
  * nothing each time.
@@ -405,7 +424,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     // An import of history (skipBalance) leaves the balance alone, as for a single row.
     const accountBefore = account.toObject();
     let accountAfter: unknown = null;
-    let inserted: Awaited<ReturnType<typeof Transaction.insertMany>> = [];
+    let inserted: CheckedTransaction[] = [];
     await inOneTransaction(async (session) => {
       accountAfter = null;
       if (!skipBalance) {
@@ -419,10 +438,10 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
         // Archived since it was read: roll everything back rather than move a balance nobody can see.
         if (!accountAfter) throw new TransactionServiceError("ACCOUNT_NOT_FOUND", "Account not found");
       }
-      inserted = await Transaction.insertMany(docs, { session });
+      inserted = (await Transaction.insertMany(docs, { session })) as unknown as CheckedTransaction[];
     });
     if (!skipBalance) {
-      await appendLedgerBlock({
+      await appendLedgerAfterCommit({
         userId,
         scope: "account",
         entityId: account._id.toString(),
@@ -433,7 +452,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
       });
     }
     for (const transaction of inserted) {
-      await appendLedgerBlock({
+      await appendLedgerAfterCommit({
         userId,
         scope: "transaction",
         entityId: transaction._id.toString(),
@@ -447,6 +466,13 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     if (!quiet) {
       for (const s of splits) {
         void checkBudgetAlert(userId, s.category, s.amount, startDate);
+      }
+      // One line of a split is not a purchase: only the category jump is checked, once per distinct category.
+      const seenCategories = new Set<string>();
+      for (const line of inserted) {
+        if (seenCategories.has(line.category)) continue;
+        seenCategories.add(line.category);
+        runInBackground("anomalies", () => detectAnomalies(userId, line, { splitLine: true }));
       }
       void checkSpendLimitAlert(userId);
       if (!provenance?.addedBy) {
@@ -546,11 +572,12 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     }
     // A transfer written as history leaves both sides alone, as the source side does.
     if (rest.type === "transfer" && transferToId && !skipBalance) {
-      transferAfter = await Account.findOneAndUpdate({ _id: transferToId, user: userId }, { $inc: { balance: rest.amount } }, { new: true, session });
+      transferAfter = await Account.findOneAndUpdate({ _id: transferToId, user: userId, isArchived: { $ne: true } }, { $inc: { balance: rest.amount } }, { new: true, session });
+      if (!transferAfter) throw new TransactionServiceError("TRANSFER_ACCOUNT_NOT_FOUND", "Transfer account not found");
     }
   });
   if (!skipBalance) {
-    await appendLedgerBlock({
+    await appendLedgerAfterCommit({
       userId,
       scope: "account",
       entityId: account._id.toString(),
@@ -561,7 +588,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     });
   }
   if (transferBefore && transferAfter) {
-    await appendLedgerBlock({
+    await appendLedgerAfterCommit({
       userId,
       scope: "account",
       entityId: transferToId!,
@@ -571,7 +598,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
       actor,
     });
   }
-  await appendLedgerBlock({
+  await appendLedgerAfterCommit({
     userId,
     scope: "transaction",
     entityId: transaction._id.toString(),
@@ -591,6 +618,8 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
         logger.error({ err, userId }, "applyRoundUp failed")
       );
     }
+    // Unusual-spend alerts (src/lib/anomaly-service.ts). A scheduled bill is not a surprise; never throws.
+    if (!rest.isRecurring) runInBackground("anomalies", () => detectAnomalies(userId, transaction));
   }
 
   logger.info({ userId, transactionId: transaction._id.toString() }, "Transaction created");
@@ -647,6 +676,45 @@ export async function updateTransaction(input: UpdateTransactionInput) {
   if (rest.date) await invalidateStatsCacheSingle(userId, new Date(rest.date));
 
   return transaction;
+}
+
+export type UserTagOutcome = "changed" | "unchanged" | "blocked" | "full" | "not_found" | "conflict";
+
+/**
+ * Adds ONE user tag to a live row, the way an edit would: refused for a row linked to a credit statement
+ * payment or a loan repayment ("blocked"), kept within the tag cap ("full"), and written to the ledger.
+ * Atomic ($addToSet with the cap in the filter), so it cannot undo a concurrent edit of the other tags.
+ * "changed" means this call wrote the tag; "unchanged" means the row already had it (two calls at once
+ * both end well: the second sees "unchanged"). When the row changes between the read and the write the
+ * whole check is redone (3 tries), then "conflict". Used by anomaly alerts to tag a reported expense.
+ */
+export async function addUserTag(
+  userId: string,
+  transactionId: string,
+  tag: string,
+  actor: AuthUser
+): Promise<UserTagOutcome> {
+  await connectDB();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const before = await Transaction.findOne({ _id: transactionId, user: userId, isDeleted: { $ne: true } }).lean<{
+      date: Date;
+      tags?: unknown[];
+    }>();
+    if (!before) return "not_found";
+    if (await getLinkedTransactionBlocker(userId, transactionId, before.tags)) return "blocked";
+    if ((before.tags ?? []).includes(tag)) return "unchanged";
+    if ((before.tags ?? []).length >= MAX_TAGS) return "full";
+
+    const after = await Transaction.findOneAndUpdate(
+      { _id: transactionId, user: userId, isDeleted: { $ne: true }, tags: { $ne: tag }, [`tags.${MAX_TAGS - 1}`]: { $exists: false } },
+      { $addToSet: { tags: tag } },
+      { new: true }
+    ).lean();
+    if (!after) continue; // the row changed under us: read it again and decide again
+    await appendLedgerBlock({ userId, scope: "transaction", entityId: transactionId, action: "update", before, after, actor });
+    return "changed";
+  }
+  return "conflict";
 }
 
 // Shared with DELETE /api/transactions/[id] (browser) and the integration
@@ -754,6 +822,8 @@ export async function deleteTransaction(userId: string, transactionId: string, a
   // A receipt is private and has no meaning without its transaction. Done last: a failure here is
   // logged and swept later (reads already hide receipts of a deleted row), never undoes the delete.
   await deleteReceiptsOfTransaction(userId, transactionId);
+  // An open alert about a removed or voided expense goes quiet (voiding runs through here).
+  await retireAnomaliesForTransactions(userId, [transactionId]);
 
   return deleted;
 }

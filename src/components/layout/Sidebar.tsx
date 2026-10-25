@@ -24,6 +24,7 @@ import {
   Repeat,
   Scale,
   Receipt,
+  ShieldAlert,
   Users,
   TrendingUp,
 } from "lucide-react";
@@ -46,6 +47,7 @@ const NAV_GROUPS = [
       { href: "/analytics", label: "Analytics", icon: BarChart2 },
       { href: "/accounts", label: "Accounts", icon: Wallet },
       { href: "/notifications", label: "Notifications", icon: Bell },
+      { href: "/alerts", label: "Alerts", icon: ShieldAlert },
     ],
   },
   {
