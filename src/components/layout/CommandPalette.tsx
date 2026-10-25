@@ -19,6 +19,8 @@ import {
   Scale,
   Receipt,
   Mails,
+  Users,
+  TrendingUp,
 } from "lucide-react";
 import {
   CommandDialog,
@@ -43,7 +45,9 @@ const NAV_COMMANDS = [
   { href: "/subscriptions", label: "Subscriptions", icon: Repeat },
   { href: "/net-worth", label: "Net worth", icon: Scale },
   { href: "/envelopes", label: "Envelopes", icon: Mails },
+  { href: "/investments", label: "Investments", icon: TrendingUp },
   { href: "/tax", label: "Tax", icon: Receipt },
+  { href: "/household", label: "Household", icon: Users },
   { href: "/notifications", label: "Notifications", icon: Bell },
   { href: "/logs", label: "Logs", icon: KeyRound },
   { href: "/settings", label: "Settings", icon: Settings },

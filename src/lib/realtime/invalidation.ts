@@ -36,6 +36,7 @@ export const INVALIDATION_MAP: Readonly<Record<RealtimeResource, readonly (reado
   sinkingFunds: [["sinking-funds"], ["notifications"]],
   netWorth: [["net-worth"]],
   envelopes: [["envelopes"]],
+  holdings: [["holdings"], ["net-worth"]],
 };
 
 export function isRealtimeResource(value: unknown): value is RealtimeResource {

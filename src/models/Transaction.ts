@@ -77,6 +77,8 @@ const TransactionSchema = new Schema(
     // Tax helper override (src/lib/tax-service.ts). Unset follows the user's
     // deductible categories; true or false wins over them for this row.
     deductible: { type: Boolean },
+    // Household sharing (src/lib/share-service.ts): the editor who added this row to a shared account.
+    addedBy: { type: Schema.Types.ObjectId, ref: "User" },
     isDeleted: { type: Boolean, default: false },
     deletedAt: { type: Date },
     deletedBy: { type: Schema.Types.ObjectId, ref: "User" },

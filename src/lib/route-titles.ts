@@ -18,6 +18,8 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/subscriptions": "Subscriptions",
   "/net-worth": "Net worth",
   "/envelopes": "Envelopes",
+  "/investments": "Investments",
   "/tax": "Tax",
+  "/household": "Household",
   "/admin/users": "User Management",
 };
