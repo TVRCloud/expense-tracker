@@ -24,6 +24,8 @@ All monetary fields are stored as **integers (cents)** — divide by 100 for dis
 | `preferences.billReminders.enabled` | Boolean | default false; turns on bill due reminders |
 | `preferences.billReminders.leadDays` | Number | 1 to 14, default 3; how many days ahead to remind |
 | `preferences.tax.deductibleCategories` | [String] | lower-case category names that count as deductible in the tax summary, up to 50 |
+| `preferences.anomalies.enabled` | Boolean | default true; unusual-spend alerts |
+| `preferences.anomalies.mutedCategories` | [String] | lower-case category names that raise no alerts, up to 50 |
 | `preferences.weeklyReview.enabled` | Boolean | default false; turns on the weekly review notification |
 | `preferences.weeklyReview.day` | Number | 0 (Sunday) to 6, default 1 (Monday); the weekday it arrives, from 09:00 on the user's clock |
 | `passwordResetToken` | String | hashed, single-use |
@@ -155,6 +157,24 @@ One row per user per local day: what net worth was the last time it was worked o
 | `assets` | Number | cents |
 | `liabilities` | Number | cents, positive |
 | `netWorth` | Number | cents, assets minus liabilities |
+
+## anomalies
+
+Unusual-spend alerts ([src/lib/anomaly-service.ts](../src/lib/anomaly-service.ts)). Realtime resource `anomalies`. Kept 365 days.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | |
+| `kind` | String | `large_spend`, `duplicate_charge`, `category_jump` |
+| `transaction` | ObjectId | the expense (not set for a category jump) |
+| `category` | String | |
+| `amount` | Number | minor units of the base currency: the expense, or the month to date for a jump |
+| `data` | Mixed | what the rule compared (typical amount, other transaction, baseline, month to date, month) |
+| `status` | String | `open` (default), `dismissed`, `confirmed_mine`, `reported` |
+| `dedupKey` | String | `large:<txn>`, `dup:<txnA>:<txnB>` (the two ids, sorted), `jump:<category>:<yyyy-mm>` |
+| `resolvedAt` | Date | when it was answered or retired |
+
+Indexes: unique `{user, dedupKey}` (one alert per cause, so a retry never alerts twice), `{user, status, createdAt}`, sparse `{user, transaction}`, TTL on `createdAt` (365 days).
 
 ## subscription_decisions
 
