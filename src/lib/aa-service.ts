@@ -266,7 +266,7 @@ export async function startConsent(userId: string): Promise<{ consent: AaConsent
   const liveIds = await AaConsent.find({ user: userId, status: { $in: LIVE }, withdrawPending: { $ne: true } }).sort({ _id: 1 }).select("_id").lean<{ _id: Types.ObjectId }[]>();
   if (liveIds.length > MAX_LIVE_CONSENTS) {
     const keep = liveIds.slice(0, MAX_LIVE_CONSENTS).map((l) => l._id);
-    const excess = await AaConsent.find({ user: userId, status: "pending", _id: { $nin: keep } }).lean<ConsentDoc[]>();
+    const excess = await AaConsent.find({ user: userId, status: "pending", withdrawPending: { $ne: true }, _id: { $nin: keep } }).lean<ConsentDoc[]>();
     const confirmed: Types.ObjectId[] = [];
     for (const x of excess) {
       // Withdraw at the provider first: a handle we stop tracking must not stay a live grant there. One that could
@@ -277,7 +277,7 @@ export async function startConsent(userId: string): Promise<{ consent: AaConsent
     }
     await AaConsent.deleteMany({ user: userId, status: "pending", _id: { $in: confirmed } });
   }
-  if (!(await AaConsent.exists({ _id: doc._id, user: userId }))) {
+  if (!(await AaConsent.exists({ _id: doc._id, user: userId, withdrawPending: { $ne: true } }))) {
     const ok = await withTimeout((signal) => provider.revoke(created.handle, { signal })).then(() => true, () => false);
     if (!ok) {
       // Could not be withdrawn: keep the record (hidden) for the sweep rather than lose the handle.
@@ -850,5 +850,9 @@ export async function retryPendingWithdrawals(limit = 50, startedAt = Date.now()
  */
 export async function markAllConsentsWithdrawPending(userId: string): Promise<void> {
   await connectDB();
-  await AaConsent.updateMany({ user: userId }, { $set: { withdrawPending: true } });
+  // Not the ones already withdrawn and confirmed: nothing is left to withdraw there.
+  await AaConsent.updateMany(
+    { user: userId, $or: [{ status: { $ne: "revoked" } }, { lastError: "revoke_not_confirmed" }] },
+    { $set: { withdrawPending: true } }
+  );
 }

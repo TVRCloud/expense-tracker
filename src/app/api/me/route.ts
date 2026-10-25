@@ -116,7 +116,7 @@ export async function DELETE() {
       .catch(async (err) => {
         logger.error({ err: err instanceof Error ? err.name : "unknown", userId: user.id }, "final bank link purge failed");
         // Hand whatever is left to the sweep (hidden, retried) rather than leave it active with no one reading it.
-        await markAllConsentsWithdrawPending(user.id).catch(() => undefined);
+        await markAllConsentsWithdrawPending(user.id).catch((e) => logger.error({ err: e instanceof Error ? e.name : "unknown", userId: user.id }, "could not hand bank links to the withdrawal sweep"));
       });
 
     return NextResponse.json({ data: { message: "Account deleted" } });

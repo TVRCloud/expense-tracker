@@ -1238,8 +1238,12 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
         await linked();
         const { AaConsent } = await models();
         const { markAllConsentsWithdrawPending } = await import("@/lib/aa-service");
+        const done = await linked(a);
+        await revoke(done.consentId);
         await markAllConsentsWithdrawPending(a);
+        // The live one is handed over; the one already withdrawn and confirmed is not.
         expect(await AaConsent.countDocuments({ user: a, withdrawPending: true })).toBe(1);
+        expect(await AaConsent.countDocuments({ user: a, withdrawPending: { $ne: true } })).toBe(1);
       });
 
       it("overlapping sweeps revoke a waiting consent only once", async () => {
