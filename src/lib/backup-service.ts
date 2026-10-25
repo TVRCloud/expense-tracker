@@ -5,6 +5,7 @@ import connectDB from "@/lib/mongodb";
 import Account from "@/models/Account";
 import Budget from "@/models/Budget";
 import Goal from "@/models/Goal";
+import Holding, { HOLDING_KINDS } from "@/models/Holding";
 import Loan from "@/models/Loan";
 import ManualAsset from "@/models/ManualAsset";
 import Repayment from "@/models/Repayment";
@@ -19,6 +20,8 @@ import { BaseCurrencyError, getBaseState, hasMoneyData, lockBaseCurrency, setBas
 import { BASE_CURRENCY_ONLY_TWO_DECIMALS, isSupportedAsBase, isSupportedCurrency, MAX_RATE, MAX_MINOR_AMOUNT, MIN_RATE, minorExponent } from "@/lib/currency";
 import { MAX_CATEGORY_LENGTH, MAX_DEDUCTIBLE_CATEGORIES, getTaxSettings, normaliseCategories } from "@/lib/tax-settings";
 import { userTagsOnly } from "@/lib/tags";
+import { dayNumber, fdFitsAmount, isDayKey, MAX_UNITS_MICRO } from "@/lib/holding-math";
+import { MAX_FD_TERM_DAYS, MAX_HOLDINGS } from "@/lib/holding-service";
 import User from "@/models/User";
 
 // What goes into a backup, how it is checked on the way back in, and the
@@ -32,9 +35,10 @@ import User from "@/models/User";
 // the account they belong to.
 
 // Payload version 2 adds the base currency, foreign-currency originals, the
-// per-row tax flag and the deductible categories. Version 1 files still read:
-// every new field is optional, and a file with no `baseCurrency` is INR.
-export const BACKUP_PAYLOAD_VERSION = 2;
+// per-row tax flag and the deductible categories. Version 3 adds holdings
+// (investments). Version 1 and 2 files still read: every new field is optional
+// (holdings default to none), and a version 1 file has no `baseCurrency`.
+export const BACKUP_PAYLOAD_VERSION = 3;
 
 type AnyModel = Model<Record<string, unknown>>;
 
@@ -49,6 +53,7 @@ export const CAPS = {
   sinkingFunds: 1000,
   subscriptionDecisions: 5000,
   manualAssets: 1000,
+  holdings: MAX_HOLDINGS,
 } as const;
 
 const CHUNK = 500;
@@ -291,6 +296,60 @@ const manualAssetSchema = z.object({
   ...stamps,
 });
 
+const holdingMoney = z.number().int().min(0).max(MAX_MINOR_AMOUNT);
+const dayKey = z.string().refine(isDayKey, "Not a valid day");
+
+// A holding's own rules again, because the file is untrusted: a fixed deposit has its
+// terms and nothing else, every other kind has no terms, and the amounts stay inside
+// what the server itself accepts.
+const holdingSchema = z
+  .object({
+    id: oid,
+    name: text(60).min(1),
+    kind: z.enum(HOLDING_KINDS),
+    note: nul(text(200)),
+    unitsMicro: nul(z.number().int().min(0).max(MAX_UNITS_MICRO)),
+    investedAmount: holdingMoney,
+    currentValue: holdingMoney,
+    valueUpdatedAt: nul(when),
+    history: nul(z.array(z.object({ value: holdingMoney, at: when })).max(100)),
+    sip: nul(
+      z.object({
+        amount: z.number().int().min(1).max(MAX_MINOR_AMOUNT),
+        dayOfMonth: z.number().int().min(1).max(31),
+        startDay: dayKey,
+        active: nul(z.boolean()),
+      })
+    ),
+    fd: nul(
+      z.object({
+        principal: z.number().int().min(1).max(MAX_MINOR_AMOUNT),
+        rateBps: z.number().int().min(0).max(10_000),
+        startDay: dayKey,
+        maturityDay: dayKey,
+      })
+    ),
+    isArchived: nul(z.boolean()),
+    ...stamps,
+  })
+  .superRefine((h, ctx) => {
+    const issue = (path: string, message: string) => ctx.addIssue({ code: "custom", path: [path], message });
+    // The export leaves archived holdings out, so a file that has one was not made by this server.
+    if (h.isArchived === true) issue("isArchived", "An archived holding is not part of a backup");
+    if (h.kind === "fixed_deposit") {
+      if (!h.fd) issue("fd", "A fixed deposit needs its terms");
+      else if (isDayKey(h.fd.startDay) && isDayKey(h.fd.maturityDay)) {
+        const term = dayNumber(h.fd.maturityDay) - dayNumber(h.fd.startDay);
+        if (term <= 0) issue("fd", "Maturity must be after the start");
+        else if (term > MAX_FD_TERM_DAYS) issue("fd", "A deposit can run for at most 50 years");
+        else if (!fdFitsAmount(h.fd)) issue("fd", "The deposit would be worth more than can be kept at maturity");
+      }
+      if (h.sip) issue("sip", "A fixed deposit has no SIP");
+    } else if (h.fd) {
+      issue("fd", "Only a fixed deposit has deposit terms");
+    }
+  });
+
 const list = <T extends z.ZodType>(s: T, max: number) => nul(z.array(s).max(max)).transform((v) => v ?? []);
 
 const dataSchema = z.object({
@@ -304,12 +363,13 @@ const dataSchema = z.object({
   sinkingFunds: list(sinkingFundSchema, CAPS.sinkingFunds),
   subscriptionDecisions: list(decisionSchema, CAPS.subscriptionDecisions),
   manualAssets: list(manualAssetSchema, CAPS.manualAssets),
+  holdings: list(holdingSchema, CAPS.holdings),
   spendLimit: nul(spendLimitSchema),
 });
 
 const payloadObject = z.object({
   app: z.literal("expense-tracker"),
-  version: z.union([z.literal(1), z.literal(2)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   createdAt: z.string().max(40),
   // The currency every amount in the file is in. Absent only in version 1 files, which never recorded it.
   baseCurrency: nul(z.string().refine(isSupportedCurrency)),
@@ -342,6 +402,7 @@ export const COLLECTIONS = [
   "rules",
   "sinkingFunds",
   "manualAssets",
+  "holdings",
   "subscriptionDecisions",
   "transactions",
   "repayments",
@@ -409,6 +470,7 @@ export async function buildBackup(userId: string): Promise<BackupBuild> {
   const rules = await readAll(m(Rule), { user }, ruleSchema, CAPS.rules, "rules", omitted, budget);
   const sinkingFunds = await readAll(m(SinkingFund), live, sinkingFundSchema, CAPS.sinkingFunds, "sinkingFunds", omitted, budget);
   const manualAssets = await readAll(m(ManualAsset), { user }, manualAssetSchema, CAPS.manualAssets, "manualAssets", omitted, budget);
+  const holdings = await readAll(m(Holding), { user, isArchived: { $ne: true } }, holdingSchema, CAPS.holdings, "holdings", omitted, budget);
   const subscriptionDecisions = await readAll(
     m(SubscriptionDecision),
     { user },
@@ -477,6 +539,7 @@ export async function buildBackup(userId: string): Promise<BackupBuild> {
     rules,
     sinkingFunds,
     manualAssets,
+    holdings,
     subscriptionDecisions,
     transactions: keptTx,
     repayments: keptRepayments,
@@ -490,6 +553,7 @@ export async function buildBackup(userId: string): Promise<BackupBuild> {
     rules: rules.length,
     sinkingFunds: sinkingFunds.length,
     manualAssets: manualAssets.length,
+    holdings: holdings.length,
     subscriptionDecisions: subscriptionDecisions.length,
     transactions: keptTx.length,
     repayments: keptRepayments.length,
@@ -631,6 +695,7 @@ function checkConsistency(d: BackupData) {
   ids(d.rules, "rule");
   ids(d.sinkingFunds, "sinking fund");
   ids(d.manualAssets, "asset");
+  ids(d.holdings, "holding");
   ids(d.subscriptionDecisions, "subscription choice");
   ids(d.repayments, "repayment");
   const has = (set: Set<string>, id?: string) => !id || set.has(id.toLowerCase());
@@ -648,14 +713,15 @@ function checkConsistency(d: BackupData) {
 
 type Held = { owner: string; trashed: boolean };
 
-async function ownersOf(model: AnyModel, ids: string[]): Promise<Map<string, Held>> {
+// `archivedIsTrash`: an archived holding was removed by the person (like a soft delete); an archived account is still live and restorable, so it is not trash.
+async function ownersOf(model: AnyModel, ids: string[], archivedIsTrash = false): Promise<Map<string, Held>> {
   const out = new Map<string, Held>();
   for (let i = 0; i < ids.length; i += CHUNK) {
     const slice = ids.slice(i, i + CHUNK).map((id) => new Types.ObjectId(id));
     const rows = await model
-      .find({ _id: { $in: slice } }, { user: 1, isDeleted: 1, deletedAt: 1 })
-      .lean<{ _id: Types.ObjectId; user?: Types.ObjectId; isDeleted?: boolean; deletedAt?: Date | null }[]>();
-    for (const r of rows) out.set(String(r._id), { owner: r.user ? String(r.user) : "", trashed: r.isDeleted === true || Boolean(r.deletedAt) });
+      .find({ _id: { $in: slice } }, { user: 1, isDeleted: 1, deletedAt: 1, isArchived: 1 })
+      .lean<{ _id: Types.ObjectId; user?: Types.ObjectId; isDeleted?: boolean; deletedAt?: Date | null; isArchived?: boolean }[]>();
+    for (const r of rows) out.set(String(r._id), { owner: r.user ? String(r.user) : "", trashed: r.isDeleted === true || (archivedIsTrash && r.isArchived === true) || Boolean(r.deletedAt) });
   }
   return out;
 }
@@ -678,9 +744,9 @@ type Planned = { final: Map<string, string>; create: Set<string>; existing: Set<
 // For each row: mine already -> keep, skip; free -> keep id, create; held by
 // someone else -> a derived id (mine already -> skip, else create). Nothing is
 // ever overwritten.
-async function plan(model: AnyModel, kind: string, rows: { id: string }[], userId: string): Promise<Planned> {
+async function plan(model: AnyModel, kind: string, rows: { id: string }[], userId: string, archivedIsTrash = false): Promise<Planned> {
   const ids = rows.map((r) => r.id.toLowerCase());
-  const owners = await ownersOf(model, ids);
+  const owners = await ownersOf(model, ids, archivedIsTrash);
   const final = new Map<string, string>();
   const create = new Set<string>();
   const existing = new Set<string>();
@@ -703,7 +769,7 @@ async function plan(model: AnyModel, kind: string, rows: { id: string }[], userI
   for (let attempt = 0; pending.length > 0; attempt += 1) {
     if (attempt >= MAX_ATTEMPTS) throw new BackupError("invalid", "Could not place a row from the backup");
     const candidates = new Map(pending.map((id) => [id, derivedId(userId, kind, id, attempt)]));
-    const heldBy = await ownersOf(model, [...candidates.values()]);
+    const heldBy = await ownersOf(model, [...candidates.values()], archivedIsTrash);
     const next: string[] = [];
     for (const [id, d] of candidates) {
       const held = heldBy.get(d);
@@ -789,6 +855,7 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
   const goals = await plan(m(Goal), "goal", d.goals, userId);
   const sinking = await plan(m(SinkingFund), "fund", d.sinkingFunds, userId);
   const assets = await plan(m(ManualAsset), "asset", d.manualAssets, userId);
+  const holdingsPlan = await plan(m(Holding), "holding", d.holdings, userId, true);
   const txs = await plan(m(Transaction), "transaction", d.transactions, userId);
   const repayments = await plan(m(Repayment), "repayment", d.repayments, userId);
 
@@ -834,6 +901,12 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
   const newGoals = d.goals.filter(mine(goals));
   const newFunds = d.sinkingFunds.filter(mine(sinking));
   const newAssets = d.manualAssets.filter(mine(assets));
+  const newHoldings = d.holdings.filter(mine(holdingsPlan));
+  // The most holdings one person can keep: a restore adds to what is there, so the sum is checked here (dry run too).
+  if (newHoldings.length > 0) {
+    const have = await Holding.countDocuments({ user, isArchived: { $ne: true } });
+    if (have + newHoldings.length > MAX_HOLDINGS) invalid(`This restore would take you past ${MAX_HOLDINGS} holdings (you have ${have}, the backup adds ${newHoldings.length})`);
+  }
   const newTxs = d.transactions.filter(mine(txs));
   const newRepayments = d.repayments.filter(mine(repayments));
 
@@ -851,7 +924,7 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
     );
   }
 
-  const trashed = [accounts, loans, goals, sinking, assets, txs, repayments, budgetsPlan, rulesPlan, decisionsPlan].reduce((n, p) => n + p.trashed, 0);
+  const trashed = [accounts, loans, goals, sinking, assets, holdingsPlan, txs, repayments, budgetsPlan, rulesPlan, decisionsPlan].reduce((n, p) => n + p.trashed, 0);
   if (trashed > 0) {
     warnings.push(`${trashed} row${trashed === 1 ? "" : "s"} in the backup already exist in your trash and ${trashed === 1 ? "was" : "were"} not restored.`);
   }
@@ -866,6 +939,7 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
     rules: count(d.rules.length, rules.length),
     sinkingFunds: count(d.sinkingFunds.length, newFunds.length),
     manualAssets: count(d.manualAssets.length, newAssets.length),
+    holdings: count(d.holdings.length, newHoldings.length),
     subscriptionDecisions: count(d.subscriptionDecisions.length, decisions.length),
     transactions: count(d.transactions.length, newTxs.length),
     repayments: count(d.repayments.length, newRepayments.length),
@@ -933,6 +1007,7 @@ export async function restoreBackup(userId: string, payload: BackupPayload, opts
   );
   await insertChunks(m(SinkingFund), newFunds.map((f) => strip({ ...f, ...owned, _id: fin(sinking, f.id), id: undefined, currency: rowBase })));
   await insertChunks(m(ManualAsset), newAssets.map((a) => strip({ ...a, ...owned, _id: fin(assets, a.id), id: undefined })));
+  await insertChunks(m(Holding), newHoldings.map((h) => strip({ ...h, ...owned, _id: fin(holdingsPlan, h.id), id: undefined })));
   await insertChunks(
     m(SubscriptionDecision),
     decisions.map((s) => strip({ ...s, ...owned, _id: fin(decisionsPlan, s.id), id: undefined }))

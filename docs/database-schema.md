@@ -267,6 +267,27 @@ Money set aside for a cost on a due date. Progress (`remaining`, `percent`, `mon
 
 Index `{user, isDeleted, dueDate}`.
 
+## holdings
+
+An investment the person holds (stock, mutual fund, gold, fixed deposit, PPF, other). Kept apart from the ledger: no transaction is posted for it. It only feeds net worth. A fixed deposit's value is worked out on read from its terms (`src/lib/holding-math.ts`), never stored.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | |
+| `name` | String | 1 to 60 |
+| `kind` | String | `stock`, `mutual_fund`, `gold`, `fixed_deposit`, `ppf`, `other` |
+| `note` | String | up to 200 |
+| `unitsMicro` | Number | units in millionths (an integer), at most 1e15 |
+| `investedAmount` | Number | minor units of the base currency; a fixed deposit's principal |
+| `currentValue` | Number | the latest manual value (minor units); for a fixed deposit only the value at creation |
+| `valueUpdatedAt` | Date | |
+| `history` | `[{value, at}]` | the last 100 manual values, oldest first |
+| `sip` | `{amount, dayOfMonth, startDay, active}` | `startDay` is a `YYYY-MM-DD` day, not an instant |
+| `fd` | `{principal, rateBps, startDay, maturityDay}` | simple interest on actual days over 365 |
+| `isArchived` / `archivedAt` | Boolean / Date | soft delete |
+
+Index `{user, isArchived, createdAt}`. At most 500 live holdings per user. A holding counts as money data, so the first one locks the base currency.
+
 ## notifications
 
 | Field | Type | Notes |
@@ -452,4 +473,4 @@ One cached rate table per base currency (open.er-api.com), refreshed after 24 ho
 
 ## Backup files
 
-No collection. A backup is built from the user's rows (accounts, transactions, budgets, goals, loans, repayments, rules, sinking funds, manual assets, subscription decisions, spend limit) and returned to the caller as an encrypted file; a restore inserts rows with the caller as `user`. Format and rules: [backup.md](backup.md).
+No collection. A backup is built from the user's rows (accounts, transactions, budgets, goals, loans, repayments, rules, sinking funds, manual assets, holdings, subscription decisions, spend limit) and returned to the caller as an encrypted file; a restore inserts rows with the caller as `user`. Format and rules: [backup.md](backup.md).

@@ -15,6 +15,7 @@ Purpose: API-key surface for n8n and the Android companion app. Contracts: [docs
 - subscriptions (GET detected repeating charges, `[id]` PATCH confirm or dismiss) over subscription-service.
 - net-worth (GET report with trend, `assets` GET POST, `assets/[id]` PATCH DELETE): net worth and manual assets over net-worth.ts.
 - refunds (GET suggestions, `[id]/confirm` and `[id]/reject` POST): refund and reversal matching over refund-service.
+- holdings (GET, POST, `[id]` GET PATCH DELETE, `[id]/value` POST, `sips` GET): investments over holding-service; writes go through `src/lib/integrations/holding-http.ts` (idempotent, errors in `error.details.errorCode`).
 - sinking-funds (GET, POST, `[id]` GET PATCH DELETE, `[id]/contribute` POST) and savings-rate (GET): money set aside for a cost on a due date, and the share of income saved, over sinking-fund-service and savings-rate.
 - transactions/tags (GET), transactions/[id]/splits (GET, PUT), transactions/[id]/receipts (GET list, POST raw image), receipts/[id] (GET image, DELETE): tags, split edits and receipt photos over tags.ts, split-service and receipt-service. Receipt image bytes use plain headers, not the JSON envelope. A receipt upload calls `preflightReceipt` (quota, cap, ownership) before it reads the body, then `readReceiptBody` (byte cap, deadline, minimum speed, one read per person); a key already in `IdempotencyRecord` skips the preflight so a retry still replays.
 - tax (GET financial-year summary, `export` GET csv, `settings` GET PUT, `transactions/[id]` PATCH deductible flag) over tax-service.
