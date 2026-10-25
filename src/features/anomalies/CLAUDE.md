@@ -2,7 +2,7 @@
 Purpose: unusual-spend alerts on the web: the list with a way to answer each one (this was me, report, dismiss), a mute for the category, and the switch for the whole feature.
 
 ## Files
-- components/AnomaliesClient.tsx: `/alerts` page: the settings card (switch, muted category chips, a field to mute another), a Waiting / All tab, and one row per alert with a plain sentence built from the numbers the rule kept (`describe`), and the answer buttons. Report only shows for alerts about an expense; it tags the expense `anomaly-reported` and any later answer removes the tag (the answer's `tagged` says whether it is on, and a loan or card payment row refuses it).
+- components/AnomaliesClient.tsx: `/alerts` page: the settings card (switch, muted category chips, a field to mute another), a Waiting / All tab, and one row per alert with a plain sentence built from the numbers the rule kept (`describe`), and the answer buttons. Report only shows for alerts about an expense; it tags the expense `anomaly-reported` and no answer ever removes the tag, the person does (the answer's `tagged` says whether the tag is on; a loan or card payment row, or ten tags already, refuses it and the toast says "Reported, not tagged").
 - hooks/useAnomalies.ts: `useAnomalies(status)` (key `["anomalies", status]`), `useAnomalySettings()` (`["anomalies", "settings"]`), `useAnswerAnomaly()`, `useChangeAnomalySettings()` (sends `{enabled}`, `{add}` or `{remove}`, refetches on settle).
 
 ## Talks to

@@ -10,8 +10,9 @@ type Params = Promise<{ id: string }>;
 
 // PATCH /api/integrations/anomalies/:id — { status: "this_was_me" | "report" | "dismiss" }.
 // "report" also tags the expense `anomaly-reported` (not on a row linked to a loan repayment
-// or card payment, nor when it has no room for a tag; `tagged` says which), and a later answer
-// takes the tag off again. Nothing else happens automatically. 404 for another user's alert.
+// or card payment, nor when it has no room for a tag; `tagged` is true only when this report left the tag on the expense).
+// No answer ever removes the tag: the person removes it by hand. Nothing else happens
+// automatically. 404 for another user's alert.
 export const PATCH = withIntegrationRoute("anomalies", async ({ req, user, requestId }, ctx: { params: Params }) => {
   const { id } = await ctx.params;
   if (!Types.ObjectId.isValid(id)) return integrationError("VALIDATION_ERROR", "Invalid alert id", requestId);
