@@ -86,7 +86,7 @@ export const sandboxProvider: AaProvider = {
       revoked: false,
     });
     void userRef;
-    return { handle, redirectUrl: `sandbox://consent/${seed}`, expiresAt: new Date(created + Math.max(1, durationDays) * DAY) };
+    return { handle, redirectUrl: `https://aa-sandbox.example/consent/${seed}`, expiresAt: new Date(created + Math.max(1, durationDays) * DAY) };
   },
 
   async consentStatus(handle): Promise<AaConsentState> {

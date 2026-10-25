@@ -17,11 +17,26 @@ A live AA integration needs things that do not exist yet (see "Going live"). Wha
 4. **Into the ledger.** Each provider transaction becomes a `captured_messages` row with channel `aa` and goes through the same path as an SMS (`docs/reconcile.md`): the `contentHash` is a hash of `aa:provider:transactionId`, so the same transaction can never be stored twice (a re-sync is idempotent by the existing unique index); the rest is matched against other captures and against rows entered by hand, then turned into a transaction through `createTransaction` (base currency lock, categorise rules, realtime and the ledger chain all apply as for any write).
 5. **End.** `POST /aa/consents/:id/revoke` tells the provider, marks the consent `revoked`, stops syncing and keeps every transaction already added. `providerRevoked: false` means the provider did not confirm, and the person may need to withdraw it at their bank too. Expiry and a withdrawal at the provider are noticed during sync or refresh: the status changes once and one notification is written. Deleting the account withdraws every consent (best effort) and removes the records.
 
+## Balances
+
+The stored balance of an account is the figure the user maintains, not something recomputed from the ledger. So a bank entry **older than the link** (made before the consent was created) is written as history: it appears in lists and statistics, but changes no balance and fires no budget, spend limit or round-up alert, whether it is created automatically or confirmed later from the review inbox (the capture keeps a `historical` flag for that). Entries from the link date on move the balance like any capture. In the link flow, ask the user to **set the account balance to match the bank at the moment they link it**; the feed never corrects it.
+
 ## Dedupe
 
 - **Against SMS, n8n and notification captures:** the existing cross-channel rules apply. The AA feed has priority 2 (SMS 3, n8n 2, notification 1). An SMS outranks it: if the SMS arrived first, the bank entry is recorded as a supporting message and changes nothing; if the bank entry came first, a later SMS replaces its values as a normal `sms_override`. A notification-sourced row is corrected by the bank entry. A payment that may be the same one but cannot be proven (account unknown on one side, no common bank reference) is queued for review as `possible_duplicate`, never guessed.
 - **Against rows entered by hand and imported rows:** a bank entry claims one existing row with the same account, type, amount and day on the user's clock that is not yet tied to any captured message (the closest in time). The row's own values are left as they are and the bank entry is recorded as its supporting message. One bank entry claims one row, so two equal manual rows are kept for two bank entries. Where a different real payment has the same account, amount and day as a manual row, it will be treated as that row: an accepted trade-off against double entry.
 - **History** (older than the link was made) is written with no balance change and no budget, spend limit or round-up alerts, like a CSV import; new activity moves balances like any capture. AA-created rows are not put in the review inbox (`reviewStatus` null). Categorise rules apply. A feed in a currency other than INR is skipped and counted (`skippedCurrency`); with another base currency the rupee amount is converted as for SMS.
+
+## Rules the sync keeps
+
+- One of your accounts is fed by one live bank link only: mapping (by hand or automatically) is refused when another pending, active or paused consent of yours already feeds it, across consents as well as within one. Archiving an account clears every mapping that points at it, and a sync skips a mapping whose account was archived another way.
+- Everything a provider returns is validated at the boundary (`src/lib/aa/provider.ts`, zod): the consent screen address must be https, the status one of the six, and each transaction needs an id of at most 200 characters, a valid date, an integer amount of at least 1 and within the app's maximum, and a type. A bad answer is a provider error; a bad transaction is skipped and counted in `skippedInvalid`.
+- Skipped entries (another currency, invalid) still move the resume point, so a long run of them cannot stall a link.
+- A read counts toward the 5 minute cooldown and the hourly interval even when it fails; a read that starts while another is running answers 429.
+- A captured message a crash left in `processing` for 5 minutes is finished by the next read of the same entry (one reader wins the claim).
+- The consent cap is settled after the insert (the oldest live consents keep their place), so requests started at once cannot pass it.
+- The sweep (`/api/cron/aa-sync` and the timer) stops starting consents after 240 seconds (the route's limit is 300) and says `partial: true`; the consents it did read have a fresh `lastSyncAt`, so the next run starts with the rest.
+- Revoke and mapping, like start, answer `503 AA_NOT_CONFIGURED` while `AA_PROVIDER` is unset. The cron route stays a `200 {ok:true, checked:0, created:0}` in that case on purpose: a failing cron would only raise alarms for a feature that is switched off.
 
 ## Data stored
 

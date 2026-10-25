@@ -91,6 +91,8 @@ type CaptureDoc = {
   sender?: string;
   receivedAt: Date;
   sourcePriority: number;
+  // A bank-link entry older than the link (see ingestAaTransaction).
+  historical?: boolean;
   outcome: string;
   role: string;
   status: string;
@@ -117,6 +119,7 @@ const QUEUE_COPY: Record<string, string> = {
   unparsed: "Got a bank message that couldn't be read automatically.",
   low_confidence: "Got a bank message but wasn't sure about the details.",
   no_matching_account: "A bank message didn't match any of your accounts. Add the card or account digits to match it next time.",
+  aa_no_matching_account: "A payment from your bank link couldn't be placed because the account it feeds is gone. Choose an account for it, and link the bank account to one of yours again.",
   no_matching_loan: "An EMI payment message didn't match any of your loans.",
   possible_duplicate: "A payment looks like one you already have. Check whether it's the same one.",
   source_conflict: "An SMS disagrees with a transaction you already confirmed.",
@@ -129,7 +132,8 @@ async function queue(capture: CaptureDoc, reason: string, extra: Record<string, 
     { $set: { outcome: "queued", status: "pending", reason, ...extra } }
   );
   const title = reason === "source_conflict" ? "SMS doesn't match your transaction" : "Payment needs review";
-  const body = QUEUE_COPY[reason] ?? "A captured message needs review.";
+  const copyKey = capture.channel === "aa" && reason === "no_matching_account" ? "aa_no_matching_account" : reason;
+  const body = QUEUE_COPY[copyKey] ?? "A captured message needs review.";
   await Notification.create({
     user: capture.user,
     type: "system",
@@ -214,10 +218,6 @@ async function findCrossChannelMatch(capture: CaptureDoc): Promise<Match | null>
 // they were.
 const textOfParse = new WeakMap<MoneyParse, string>();
 
-// Bank-link rows older than the link are history the balance already shows:
-// created with no balance change and no alerts (see ingestAaTransaction).
-const historicalParse = new WeakSet<MoneyParse>();
-
 function channelLabel(channel: CaptureChannel) {
   return channel === "notification" ? "an app notification" : channel === "n8n" ? "n8n" : channel === "aa" ? "your bank link" : "SMS";
 }
@@ -268,13 +268,13 @@ async function createFromCapture(
       isRecurring: false,
       ruleText: textOfParse.get(parse),
       // The bank's own record is not put in the review inbox; a possible duplicate still queues.
-      ...(capture.channel === "aa" && historicalParse.has(parse) ? { skipBalance: true } : {}),
+      ...(capture.channel === "aa" && capture.historical ? { skipBalance: true } : {}),
       provenance: {
         source: capture.channel,
         sourceCapture: captureId,
         captures: [captureId, ...supporting],
         reviewStatus: capture.channel === "aa" ? null : "unreviewed",
-        ...(capture.channel === "aa" && historicalParse.has(parse) ? { historical: true } : {}),
+        ...(capture.channel === "aa" && capture.historical ? { historical: true } : {}),
       },
     });
     const txnId = (transaction as { _id: Types.ObjectId })._id.toString();
@@ -748,15 +748,11 @@ async function claimManualTransaction(capture: CaptureDoc, input: AaIngestInput)
   return null;
 }
 
-/**
- * One transaction from a bank link, through the same path as an SMS: stored as a
- * captured message (so a repeat is the same message and changes nothing), matched
- * against SMS and notification captures and against rows entered by hand, and only
- * then turned into a transaction. The feed's own id makes a re-sync idempotent.
- */
-export async function ingestAaTransaction(input: AaIngestInput): Promise<IngestResult> {
-  await connectDB();
-  const merchant = input.narration.replace(/\s+/g, " ").trim().slice(0, 120) || undefined;
+function aaHash(provider: string, providerTxnId: string) {
+  return createHash("sha256").update(`aa:${provider}:${providerTxnId}`).digest("hex");
+}
+
+function aaParseOf(input: AaIngestInput): MoneyParse {
   const parse: MoneyParse = {
     kind: "money",
     parserId: "aa",
@@ -766,45 +762,20 @@ export async function ingestAaTransaction(input: AaIngestInput): Promise<IngestR
     currency: "INR",
     last4: input.last4,
     instrument: "account",
-    merchant,
+    merchant: input.narration.replace(/\s+/g, " ").trim().slice(0, 120) || undefined,
     ref: input.reference,
     bankName: input.bankName,
     date: input.at,
     hasTime: true,
   };
   textOfParse.set(parse, input.narration);
-  if (input.historical) historicalParse.add(parse);
+  return parse;
+}
 
-  let capture: CaptureDoc;
-  try {
-    const doc = await CapturedMessage.create({
-      user: input.user.id,
-      channel: "aa",
-      sender: input.bankName,
-      rawText: encryptField(
-        `${input.bankName} ${input.last4} ${input.type} ${(input.amountMinor / 100).toFixed(2)} ${input.narration}`,
-        CAPTURE_KEY_ENV
-      ),
-      receivedAt: input.at,
-      contentHash: createHash("sha256").update(`aa:${input.provider}:${input.providerTxnId}`).digest("hex"),
-      alsoSeenIn: [],
-      parse: { kind: "money", parserId: "aa", version: PARSER_VERSION, confidence: 1, fields: parse },
-      eventKey: { account: input.accountId, type: input.type, amount: input.amountMinor, ref: input.reference, at: input.at, hasTime: true },
-      sourcePriority: SOURCE_PRIORITY.aa,
-      accountMatch: "digits",
-      outcome: "processing",
-    });
-    capture = doc.toObject() as CaptureDoc;
-  } catch (err) {
-    if (!isDuplicateKey(err)) throw err;
-    // Seen before (a re-sync, or an overlapping fetch): never a second entry.
-    const existing = await CapturedMessage.findOne({
-      user: input.user.id,
-      contentHash: createHash("sha256").update(`aa:${input.provider}:${input.providerTxnId}`).digest("hex"),
-    }).lean<CaptureDoc>();
-    return { httpStatus: 200, body: { status: "duplicate", captureId: id(existing?._id) ?? "", transactionId: id(existing?.transaction) } };
-  }
+// A capture left in "processing" this long was cut off by a crash: the next read of the same bank entry finishes it.
+export const AA_PROCESSING_STALE_MS = 5 * 60 * 1000;
 
+async function decideAa(input: AaIngestInput, capture: CaptureDoc, parse: MoneyParse): Promise<IngestResult> {
   try {
     const match = await findCrossChannelMatch(capture);
     if (!match) {
@@ -826,4 +797,61 @@ export async function ingestAaTransaction(input: AaIngestInput): Promise<IngestR
     ).catch(() => undefined);
     throw err;
   }
+}
+
+/**
+ * One transaction from a bank link, through the same path as an SMS: stored as a
+ * captured message (so a repeat is the same message and changes nothing), matched
+ * against SMS and notification captures and against rows entered by hand, and only
+ * then turned into a transaction. The feed's own id makes a re-sync idempotent. A
+ * capture a crash left in "processing" is picked up again (one reader wins the claim).
+ */
+export async function ingestAaTransaction(input: AaIngestInput): Promise<IngestResult> {
+  await connectDB();
+  const parse = aaParseOf(input);
+  const contentHash = aaHash(input.provider, input.providerTxnId);
+
+  let capture: CaptureDoc;
+  try {
+    const doc = await CapturedMessage.create({
+      user: input.user.id,
+      channel: "aa",
+      sender: input.bankName,
+      rawText: encryptField(
+        `${input.bankName} ${input.last4} ${input.type} ${(input.amountMinor / 100).toFixed(2)} ${input.narration}`,
+        CAPTURE_KEY_ENV
+      ),
+      receivedAt: input.at,
+      contentHash,
+      alsoSeenIn: [],
+      parse: { kind: "money", parserId: "aa", version: PARSER_VERSION, confidence: 1, fields: parse },
+      eventKey: { account: input.accountId, type: input.type, amount: input.amountMinor, ref: input.reference, at: input.at, hasTime: true },
+      sourcePriority: SOURCE_PRIORITY.aa,
+      accountMatch: "digits",
+      ...(input.historical ? { historical: true } : {}),
+      outcome: "processing",
+    });
+    capture = doc.toObject() as CaptureDoc;
+  } catch (err) {
+    if (!isDuplicateKey(err)) throw err;
+    // Seen before (a re-sync, or an overlapping fetch): never a second entry.
+    const existing = await CapturedMessage.findOne({ user: input.user.id, contentHash }).lean<CaptureDoc & { updatedAt?: Date }>();
+    const stuck =
+      existing?.outcome === "processing" &&
+      !existing.transaction &&
+      existing.updatedAt &&
+      Date.now() - new Date(existing.updatedAt).getTime() >= AA_PROCESSING_STALE_MS;
+    if (!existing || !stuck) {
+      return { httpStatus: 200, body: { status: "duplicate", captureId: id(existing?._id) ?? "", transactionId: id(existing?.transaction) } };
+    }
+    // Claim it: the update moves updatedAt, so a second reader's claim finds nothing.
+    const claimed = await CapturedMessage.findOneAndUpdate(
+      { _id: existing._id, outcome: "processing", updatedAt: existing.updatedAt },
+      { $set: { updatedAt: new Date() } },
+      { new: true }
+    ).lean<CaptureDoc>();
+    if (!claimed) return { httpStatus: 200, body: { status: "duplicate", captureId: existing._id.toString() } };
+    capture = claimed;
+  }
+  return decideAa(input, capture, parse);
 }

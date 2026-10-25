@@ -1,3 +1,6 @@
+import { z } from "zod";
+import { MAX_MINOR_AMOUNT } from "@/lib/currency";
+
 // The seam between our code and an Account Aggregator (AA) provider. Nothing
 // outside src/lib/aa/ knows how a provider talks; a real one is a file that
 // implements AaProvider plus one line in providers.ts. Today the only
@@ -69,9 +72,61 @@ export interface AaProvider {
 /** A provider failure the caller may show as a short code. Never carries a provider message or token. */
 export class AaProviderError extends Error {
   code: "PROVIDER_ERROR" | "CONSENT_NOT_FOUND";
-  constructor(code: AaProviderError["code"], message = code) {
+  constructor(code: AaProviderError["code"], message: string = code) {
     super(message);
     this.code = code;
     this.name = "AaProviderError";
   }
 }
+
+// What a provider hands back is checked here, at the boundary, before any of our code trusts it. A real provider
+// is a network peer: its answers are untrusted input.
+const statusSchema = z.enum(["pending", "active", "paused", "revoked", "expired", "failed"]);
+
+export const createdConsentSchema = z.object({
+  handle: z.string().min(1).max(500),
+  // The consent screen must be reached over https.
+  redirectUrl: z
+    .string()
+    .max(2000)
+    .refine((u) => {
+      try {
+        return new URL(u).protocol === "https:";
+      } catch {
+        return false;
+      }
+    }, "redirectUrl must be an https URL"),
+  expiresAt: z.date(),
+});
+
+export const consentStateSchema = z.object({
+  status: statusSchema,
+  accounts: z
+    .array(
+      z.object({
+        ref: z.string().min(1).max(200),
+        bankName: z.string().trim().min(1).max(60),
+        last4: z.string().regex(/^[0-9A-Za-z]{4}$/),
+        instrument: z.enum(["account", "card"]),
+      })
+    )
+    .max(50),
+  expiresAt: z.date().optional(),
+});
+
+/** One transaction. Parsed one by one, so a bad entry is skipped and counted rather than failing the page. */
+export const transactionSchema = z.object({
+  id: z.string().min(1).max(200),
+  accountRef: z.string().max(200),
+  type: z.enum(["income", "expense"]),
+  amountMinor: z.number().int().min(1).max(MAX_MINOR_AMOUNT),
+  currency: z.string().min(1).max(8),
+  at: z.date(),
+  narration: z.string().max(2000).default(""),
+  reference: z.string().max(60).optional(),
+});
+
+export const fetchPageSchema = z.object({
+  transactions: z.array(z.unknown()).max(1000),
+  nextCursor: z.string().min(1).max(200).optional(),
+});

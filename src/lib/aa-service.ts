@@ -9,9 +9,19 @@ import User from "@/models/User";
 import { decryptField, encryptField } from "@/lib/crypto";
 import { CAPTURE_KEY_ENV, ingestAaTransaction } from "@/lib/capture/ingest";
 import { matchAccountForMessage } from "@/lib/capture/account-match";
-import { MAX_MINOR_AMOUNT } from "@/lib/currency";
 import { aaConfigured, getAaProvider, providerByName } from "@/lib/aa/providers";
-import { AaProviderError, type AaConsentStatus, type AaFinancialAccount, type AaProvider } from "@/lib/aa/provider";
+import {
+  AaProviderError,
+  consentStateSchema,
+  createdConsentSchema,
+  fetchPageSchema,
+  transactionSchema,
+  type AaConsentState,
+  type AaConsentStatus,
+  type AaCreatedConsent,
+  type AaFinancialAccount,
+  type AaProvider,
+} from "@/lib/aa/provider";
 
 // Account Aggregator (AA) sync: bank transactions pulled through a user's
 // consent, as a second source next to SMS. The provider seam is src/lib/aa/;
@@ -121,6 +131,26 @@ function providerOf(c: ConsentDoc): AaProvider {
 
 const handleOf = (c: ConsentDoc) => decryptField(c.consentHandle, CAPTURE_KEY_ENV);
 
+// What a provider returns is untrusted: each answer is checked here before the rest of the code uses it. An answer
+// that fails the check is a provider error (a short code in the log, never the content).
+function checked<T>(schema: { safeParse: (v: unknown) => { success: true; data: T } | { success: false } }, value: unknown): T {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) throw new AaProviderError("PROVIDER_ERROR", "invalid_provider_answer");
+  return parsed.data;
+}
+
+/** True when a live consent (any of the user's, other than `exceptId`) already feeds this account. */
+async function accountFedElsewhere(userId: string, accountId: string, exceptId: Types.ObjectId): Promise<boolean> {
+  return Boolean(
+    await AaConsent.exists({
+      user: userId,
+      _id: { $ne: exceptId },
+      status: { $in: LIVE },
+      "linkedAccounts.mappedAccount": new Types.ObjectId(accountId),
+    })
+  );
+}
+
 async function loadConsent(userId: string, id: string): Promise<ConsentDoc> {
   await connectDB();
   if (!Types.ObjectId.isValid(id)) throw new AaServiceError("NOT_FOUND", "Consent not found");
@@ -145,11 +175,11 @@ export async function startConsent(userId: string): Promise<{ consent: AaConsent
   if (live >= MAX_LIVE_CONSENTS) {
     throw new AaServiceError("LIMIT", `You can have at most ${MAX_LIVE_CONSENTS} bank links at once. Remove one first.`);
   }
-  let created;
+  let created: AaCreatedConsent;
   try {
     // An opaque, stable id for the person: never the email or name.
     const userRef = createHash("sha256").update(`aa-user:${userId}`).digest("hex").slice(0, 32);
-    created = await provider.createConsent({ userRef, durationDays: CONSENT_DAYS });
+    created = checked(createdConsentSchema, await provider.createConsent({ userRef, durationDays: CONSENT_DAYS }));
   } catch (err) {
     logger.error({ err: err instanceof AaProviderError ? err.code : "unknown", provider: provider.name }, "aa: could not start a consent");
     throw new AaServiceError("PROVIDER_ERROR", "The bank linking provider could not be reached. Try again later.");
@@ -162,6 +192,19 @@ export async function startConsent(userId: string): Promise<{ consent: AaConsent
     status: "pending",
     expiresAt: created.expiresAt,
   });
+  // The count above and the insert are not atomic: requests at once can all pass it. Settle it after the insert:
+  // the oldest live consents (by id) keep their place and the newer pending ones beyond the cap are removed, by
+  // whichever request sees them first. A request whose consent was removed gives up. The cap holds in the end;
+  // a consent can in rare races be removed after its request answered (its next call is a 404).
+  const liveIds = await AaConsent.find({ user: userId, status: { $in: LIVE } }).sort({ _id: 1 }).select("_id").lean<{ _id: Types.ObjectId }[]>();
+  if (liveIds.length > MAX_LIVE_CONSENTS) {
+    const keep = liveIds.slice(0, MAX_LIVE_CONSENTS).map((l) => l._id);
+    await AaConsent.deleteMany({ user: userId, status: "pending", _id: { $nin: keep } });
+  }
+  if (!(await AaConsent.exists({ _id: doc._id, user: userId }))) {
+    await provider.revoke(created.handle).catch(() => undefined);
+    throw new AaServiceError("LIMIT", `You can have at most ${MAX_LIVE_CONSENTS} bank links at once. Remove one first.`);
+  }
   return { consent: consentView(doc.toObject() as ConsentDoc), redirectUrl: created.redirectUrl };
 }
 
@@ -188,19 +231,18 @@ async function applyStatus(c: ConsentDoc, status: AaConsentStatus, extra: Record
   if (res.modifiedCount && (status === "expired" || status === "revoked" || status === "failed")) await notifyEnded(c, status);
 }
 
-async function mergeLinked(c: ConsentDoc, accounts: AaFinancialAccount[]): Promise<LinkedDoc[]> {
-  const known = new Map((c.linkedAccounts ?? []).map((l) => [l.providerRef, l]));
-  const out: LinkedDoc[] = [];
+/** The linked accounts the provider reports that this consent does not hold yet, auto-mapped where the match is clear. */
+async function newLinkedAccounts(c: ConsentDoc, accounts: AaFinancialAccount[]): Promise<LinkedDoc[]> {
+  const known = new Set((c.linkedAccounts ?? []).map((l) => l.providerRef));
   const taken = new Set((c.linkedAccounts ?? []).filter((l) => l.mappedAccount).map((l) => l.mappedAccount!.toString()));
+  const out: LinkedDoc[] = [];
   for (const a of accounts.slice(0, 20)) {
-    const old = known.get(a.ref);
-    if (old) {
-      out.push(old);
-      continue;
-    }
-    // A new account: map it to one of the user's own when the digits and bank point at exactly one.
+    if (known.has(a.ref) || out.some((o) => o.providerRef === a.ref)) continue;
+    // A new account: map it to one of the user's own when the digits and bank point at exactly one, and no
+    // other bank link already feeds it (two feeds into one account would book each payment twice).
     const m = await matchAccountForMessage(c.user.toString(), { last4: a.last4, bankName: a.bankName, instrument: a.instrument }).catch(() => null);
-    const pick = m?.accountId && !taken.has(m.accountId) ? m.accountId : null;
+    const candidate = m?.accountId && !taken.has(m.accountId) ? m.accountId : null;
+    const pick = candidate && !(await accountFedElsewhere(c.user.toString(), candidate, c._id)) ? candidate : null;
     if (pick) taken.add(pick);
     out.push({
       _id: new Types.ObjectId(),
@@ -220,9 +262,9 @@ export async function refreshConsent(userId: string, id: string): Promise<AaCons
   const c = await loadConsent(userId, id);
   if (c.status === "revoked" || c.status === "failed") return consentView(c);
   const provider = providerOf(c);
-  let state;
+  let state: AaConsentState;
   try {
-    state = await provider.consentStatus(handleOf(c));
+    state = checked(consentStateSchema, await provider.consentStatus(handleOf(c)));
   } catch (err) {
     if (err instanceof AaProviderError && err.code === "CONSENT_NOT_FOUND") {
       await applyStatus(c, "failed", { lastError: "not_found_at_provider" });
@@ -231,18 +273,20 @@ export async function refreshConsent(userId: string, id: string): Promise<AaCons
     logger.error({ err: err instanceof AaProviderError ? err.code : "unknown", consentId: id }, "aa: status check failed");
     throw new AaServiceError("PROVIDER_ERROR", "The bank linking provider could not be reached. Try again later.");
   }
-  const linked = state.status === "active" || state.status === "paused" ? await mergeLinked(c, state.accounts) : c.linkedAccounts;
-  await AaConsent.updateOne(
-    { _id: c._id },
-    { $set: { linkedAccounts: linked, ...(state.expiresAt ? { expiresAt: state.expiresAt } : {}), lastError: null } }
-  );
-  const fresh = { ...c, linkedAccounts: linked } as ConsentDoc;
-  await applyStatus(fresh, state.status, state.status === "revoked" ? { lastError: "revoked_at_provider" } : {});
+  // Only accounts new to the consent are added, one element at a time: a mapping the person changed since this
+  // read, or another refresh adding the same account, is never overwritten.
+  const added = state.status === "active" || state.status === "paused" ? await newLinkedAccounts(c, state.accounts) : [];
+  for (const l of added) {
+    await AaConsent.updateOne({ _id: c._id, user: userId, "linkedAccounts.providerRef": { $ne: l.providerRef } }, { $push: { linkedAccounts: l } });
+  }
+  await AaConsent.updateOne({ _id: c._id }, { $set: { ...(state.expiresAt ? { expiresAt: state.expiresAt } : {}), lastError: null } });
+  await applyStatus(c, state.status, state.status === "revoked" ? { lastError: "revoked_at_provider" } : {});
   return consentView(await loadConsent(userId, id));
 }
 
 /** Sets or clears which of the user's own accounts a linked bank account feeds. */
 export async function mapLinkedAccount(userId: string, id: string, linkedId: string, accountId: string | null): Promise<AaConsentView> {
+  requireProvider();
   const c = await loadConsent(userId, id);
   const linked = c.linkedAccounts.find((l) => l._id.toString() === linkedId);
   if (!linked) throw new AaServiceError("NOT_FOUND", "Linked account not found");
@@ -252,7 +296,9 @@ export async function mapLinkedAccount(userId: string, id: string, linkedId: str
     if (!mine) throw new AaServiceError("NOT_FOUND", "Account not found");
     // One of your accounts is fed by one linked account: two feeds into one would book the same payment twice.
     const clash = c.linkedAccounts.some((l) => l._id.toString() !== linkedId && l.mappedAccount?.toString() === accountId);
-    if (clash) throw new AaServiceError("INVALID_STATE", "That account is already fed by another linked account");
+    if (clash || (await accountFedElsewhere(userId, accountId, c._id))) {
+      throw new AaServiceError("INVALID_STATE", "That account is already fed by another linked account");
+    }
   }
   await AaConsent.updateOne(
     { _id: c._id, user: userId, "linkedAccounts._id": linked._id },
@@ -263,6 +309,7 @@ export async function mapLinkedAccount(userId: string, id: string, linkedId: str
 
 /** Withdraws the consent now. Transactions already added stay. */
 export async function revokeConsent(userId: string, id: string): Promise<{ consent: AaConsentView; providerRevoked: boolean }> {
+  requireProvider();
   const c = await loadConsent(userId, id);
   if (c.status === "revoked") return { consent: consentView(c), providerRevoked: true };
   let providerRevoked = true;
@@ -326,6 +373,9 @@ export async function syncConsent(c: ConsentDoc, now = new Date()): Promise<AaSy
   syncing.add(key);
   try {
     if (c.status !== "active") return { ...result, skipped: "not_active" };
+    // Every attempt counts for the cooldown and the hourly interval, a failed one too: a provider that is down is
+    // asked again later, not on every call.
+    await AaConsent.updateOne({ _id: c._id }, { $set: { lastSyncAt: now } });
     const provider = providerByName(c.provider);
     if (!provider) {
       await AaConsent.updateOne({ _id: c._id }, { $set: { lastError: "provider_unavailable" } });
@@ -339,7 +389,7 @@ export async function syncConsent(c: ConsentDoc, now = new Date()): Promise<AaSy
       return { ...result, status: "expired" };
     }
     try {
-      const state = await provider.consentStatus(handle);
+      const state = checked(consentStateSchema, await provider.consentStatus(handle));
       if (state.status !== "active") {
         await applyStatus(c, state.status, state.status === "revoked" ? { lastError: "revoked_at_provider" } : {});
         return { ...result, status: state.status, skipped: "not_active" };
@@ -357,12 +407,18 @@ export async function syncConsent(c: ConsentDoc, now = new Date()): Promise<AaSy
     if (!owner) return { ...result, error: "user_unavailable" };
     const actor = { id: owner._id.toString(), name: owner.name, email: owner.email, role: owner.role };
 
+    // A mapped account that has been archived since is not fed: its payments would have nowhere to go.
+    const mappedIds = c.linkedAccounts.filter((l) => l.mappedAccount).map((l) => l.mappedAccount!);
+    const liveAccounts = new Set(
+      (await Account.find({ _id: { $in: mappedIds }, user: c.user, isArchived: { $ne: true } }).select("_id").lean<{ _id: Types.ObjectId }[]>()).map((a) => a._id.toString())
+    );
+
     const started = Date.now();
     let processed = 0;
     const linkedUpdates: { id: Types.ObjectId; syncedUntil: Date; partial: boolean }[] = [];
     try {
       for (const l of c.linkedAccounts) {
-        if (!l.mappedAccount) {
+        if (!l.mappedAccount || !liveAccounts.has(l.mappedAccount.toString())) {
           result.unmappedAccounts += 1;
           continue;
         }
@@ -375,29 +431,24 @@ export async function syncConsent(c: ConsentDoc, now = new Date()): Promise<AaSy
         let newest = l.syncedUntil ? new Date(l.syncedUntil) : null;
         let finished = false;
         for (let page = 0; page < SYNC_LIMITS.pages; page += 1) {
-          const got = await provider.fetchTransactions(handle, { accountRef: l.providerRef, from, cursor, limit: PAGE_SIZE });
-          for (const t of got.transactions) {
+          const got = checked(fetchPageSchema, await provider.fetchTransactions(handle, { accountRef: l.providerRef, from, cursor, limit: PAGE_SIZE }));
+          for (const raw of got.transactions) {
             if (processed >= SYNC_LIMITS.transactions || Date.now() - started > SYNC_LIMITS.budgetMs) {
               result.partial = true;
               break;
             }
             processed += 1;
             result.fetched += 1;
-            if (t.currency !== "INR") {
-              result.skippedCurrency += 1;
+            const parsed = transactionSchema.safeParse(raw);
+            if (!parsed.success) {
+              result.skippedInvalid += 1;
               continue;
             }
-            const at = new Date(t.at);
-            if (
-              !t.id ||
-              t.id.length > 200 ||
-              !Number.isSafeInteger(t.amountMinor) ||
-              t.amountMinor < 1 ||
-              t.amountMinor > MAX_MINOR_AMOUNT ||
-              Number.isNaN(at.getTime()) ||
-              (t.type !== "income" && t.type !== "expense")
-            ) {
-              result.skippedInvalid += 1;
+            const t = parsed.data;
+            // Skipped entries move the resume point too: a long run of them must not stall the link.
+            if (!newest || t.at.getTime() > newest.getTime()) newest = t.at;
+            if (t.currency !== "INR") {
+              result.skippedCurrency += 1;
               continue;
             }
             const out = await ingestAaTransaction({
@@ -409,16 +460,15 @@ export async function syncConsent(c: ConsentDoc, now = new Date()): Promise<AaSy
               last4: l.maskedNumber,
               type: t.type,
               amountMinor: t.amountMinor,
-              at,
-              narration: String(t.narration ?? "").slice(0, 300),
-              reference: t.reference ? String(t.reference).slice(0, 60) : undefined,
-              historical: at.getTime() < new Date(c.createdAt).getTime(),
+              at: t.at,
+              narration: t.narration.slice(0, 300),
+              reference: t.reference,
+              historical: t.at.getTime() < new Date(c.createdAt).getTime(),
             });
             if (out.body.status === "created") result.created += 1;
             else if (out.body.status === "updated") result.updated += 1;
             else if (out.body.status === "queued") result.queued += 1;
             else result.duplicates += 1;
-            if (!newest || at.getTime() > newest.getTime()) newest = at;
           }
           if (result.partial) break;
           if (!got.nextCursor) {
@@ -449,25 +499,33 @@ export async function syncConsent(c: ConsentDoc, now = new Date()): Promise<AaSy
   }
 }
 
-/** On-demand sync for one consent. Refused when one just ran. */
+/** On-demand sync for one consent. Refused when one just ran or is running. */
 export async function syncNow(userId: string, id: string, now = new Date()): Promise<AaSyncResult> {
   requireProvider();
   const c = await loadConsent(userId, id);
   if (c.status !== "active") throw new AaServiceError("INVALID_STATE", "This bank link is not active. Refresh its status first.");
+  if (syncing.has(c._id.toString())) {
+    throw new AaServiceError("TOO_SOON", "This bank link is being read right now. Try again in a minute.", { retryAfterSeconds: 60 });
+  }
   if (c.lastSyncAt && now.getTime() - new Date(c.lastSyncAt).getTime() < SYNC_COOLDOWN_MS) {
     const wait = Math.ceil((SYNC_COOLDOWN_MS - (now.getTime() - new Date(c.lastSyncAt).getTime())) / 1000);
     throw new AaServiceError("TOO_SOON", "This bank link was just read. Try again in a few minutes.", { retryAfterSeconds: wait });
   }
-  return syncConsent(c, now);
+  const res = await syncConsent(c, now);
+  // Lost a race for the claim between the check above and here.
+  if (res.skipped === "busy") throw new AaServiceError("TOO_SOON", "This bank link is being read right now. Try again in a minute.", { retryAfterSeconds: 60 });
+  return res;
 }
 
-// One sweep at a time per process (the timer and the cron route can overlap); a run that has gone this long is
+// One sweep at a time per process (the timer and cron route can overlap); a run that has gone this long is
 // treated as hung so one stuck call cannot block every later run.
 const RUN_STALE_AFTER_MS = 10 * 60 * 1000;
+/** A sweep stops starting new consents after this long (the cron route's maxDuration is 300 s). The rest wait for the next run. */
+export const SWEEP_LIMITS = { budgetMs: 240_000 };
 let runStartedAt: number | null = null;
 
-/** Timer and cron entry: every active consent not read in the last hour. */
-export async function syncAllConsents(now = new Date()): Promise<{ checked: number; created: number; skipped?: true }> {
+/** Timer and cron entry: every active consent not read in the last hour, longest unread first. */
+export async function syncAllConsents(now = new Date()): Promise<{ checked: number; created: number; skipped?: true; partial?: true }> {
   if (!aaConfigured()) return { checked: 0, created: 0 };
   const startedAt = Date.now();
   if (runStartedAt !== null && startedAt - runStartedAt < RUN_STALE_AFTER_MS) {
@@ -486,14 +544,22 @@ export async function syncAllConsents(now = new Date()): Promise<{ checked: numb
       .limit(200)
       .lean<ConsentDoc[]>();
     let created = 0;
+    let checkedCount = 0;
+    let partial = false;
     for (const c of due) {
+      // Out of time: stop here. Every consent read so far has a fresh lastSyncAt, so the next run starts with the rest.
+      if (Date.now() - startedAt > SWEEP_LIMITS.budgetMs) {
+        partial = true;
+        break;
+      }
+      checkedCount += 1;
       try {
         created += (await syncConsent(c, now)).created;
       } catch (err) {
         logger.error({ err, consentId: c._id.toString() }, "aa sync failed for a consent");
       }
     }
-    return { checked: due.length, created };
+    return { checked: checkedCount, created, ...(partial ? { partial: true as const } : {}) };
   } finally {
     if (runStartedAt === startedAt) runStartedAt = null;
   }

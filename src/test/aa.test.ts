@@ -149,7 +149,7 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
       expect(res.status).toBe(201);
       const text = JSON.stringify(await res.clone().json());
       const body = (await res.json()).data as Json;
-      expect(body.redirectUrl).toMatch(/^sandbox:\/\/consent\//);
+      expect(body.redirectUrl).toMatch(/^https:\/\/aa-sandbox\.example\/consent\//);
       expect(body.consent).toMatchObject({ provider: "sandbox", status: "pending", linkedAccounts: [] });
       expect(text).not.toMatch(/sbx_/);
       expect(text).not.toMatch(/consentHandle|handleHash/);
@@ -596,6 +596,208 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
     it("an invalid id is a 404, not an error", async () => {
       process.env.AA_PROVIDER = "sandbox";
       expect((await refresh("not-an-id")).status).toBe(404);
+    });
+  });
+
+  describe("review fixes", () => {
+    const actor = () => ({ id: a, name: "A", email: "a@x.com", role: "user" });
+    const feed = (ref: string, list: Array<Partial<Json> & { id: string }>) =>
+      list.map((t) => ({ accountRef: ref, type: "expense", amountMinor: 500, currency: "INR", at: new Date(), narration: "X", ...t }));
+
+    it("revoke and mapping answer AA_NOT_CONFIGURED once the provider is unset", async () => {
+      const { consentId, consent } = await linked();
+      delete process.env.AA_PROVIDER;
+      const r = await revoke(consentId);
+      expect(r.status).toBe(503);
+      expect((await r.json()).error.code).toBe("AA_NOT_CONFIGURED");
+      const m = await mapRoute(consentId, consent.linkedAccounts[0].id, null);
+      expect(m.status).toBe(503);
+      const { AaConsent } = await models();
+      expect((await AaConsent.findOne({ user: a }).lean<Json>())?.status).toBe("active");
+    });
+
+    it("two consents cannot both feed one account: auto-map and manual map are both refused", async () => {
+      const { bank, consent } = await linked();
+      expect(consent.linkedAccounts.find((l: Json) => l.bankName === "HDFC Bank").mappedAccountId).toBe(String(bank._id));
+      const second = (await (await create()).json()).data.consent as Json;
+      const refreshed = (await (await refresh(second.id)).json()).data.consent as Json;
+      const hdfc = refreshed.linkedAccounts.find((l: Json) => l.bankName === "HDFC Bank");
+      expect(hdfc.mappedAccountId).toBeNull();
+      const clash = await mapRoute(second.id, hdfc.id, String(bank._id));
+      expect(clash.status).toBe(409);
+      // A revoked consent no longer holds the account.
+      const { AaConsent } = await models();
+      await AaConsent.updateMany({ _id: { $ne: second.id }, user: a }, { $set: { status: "revoked" } });
+      expect((await mapRoute(second.id, hdfc.id, String(bank._id))).status).toBe(200);
+    });
+
+    it("refresh adds new linked accounts one at a time and keeps a mapping the person cleared", async () => {
+      const { consentId, consent } = await linked();
+      const hdfc = consent.linkedAccounts.find((l: Json) => l.bankName === "HDFC Bank");
+      await mapRoute(consentId, hdfc.id, null);
+      const again = (await (await refresh(consentId)).json()).data.consent as Json;
+      expect(again.linkedAccounts).toHaveLength(2);
+      expect(again.linkedAccounts.find((l: Json) => l.id === hdfc.id).mappedAccountId).toBeNull();
+    });
+
+    it("a historical bank entry confirmed from the review inbox leaves the balance alone, a new one moves it", async () => {
+      const { consentId, bank } = await linked();
+      const { Account, Transaction, CapturedMessage, Notification } = await models();
+      const { ingestAaTransaction } = await import("@/lib/capture/ingest");
+      const { resolveCapture } = await import("@/lib/reconcile/inbox");
+      // The mapped account is archived behind the link's back: the entry cannot be placed and is queued.
+      await Account.updateOne({ _id: bank._id }, { $set: { isArchived: true } });
+      const old = await ingestAaTransaction({
+        user: actor(), provider: "sandbox", providerTxnId: "h-1", accountId: String(bank._id), bankName: "HDFC Bank", last4: "1234",
+        type: "expense", amountMinor: 70000, at: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000), narration: "OLD", historical: true,
+      });
+      const fresh = await ingestAaTransaction({
+        user: actor(), provider: "sandbox", providerTxnId: "h-2", accountId: String(bank._id), bankName: "HDFC Bank", last4: "1234",
+        type: "expense", amountMinor: 30000, at: new Date(), narration: "NEW", historical: false,
+      });
+      expect(old.body.status).toBe("queued");
+      expect(fresh.body.status).toBe("queued");
+      expect((await CapturedMessage.findById(old.body.captureId).lean<Json>())?.historical).toBe(true);
+      const note = await Notification.findOne({ user: a }).lean<Json>();
+      expect(note?.body).toMatch(/bank link/);
+      expect(note?.body).not.toMatch(/digits/);
+
+      const other = await Account.create({ user: a, name: "Other", type: "bank", balance: 50000 });
+      const input = (amount: number) => ({ action: "create" as const, accountId: String(other._id), type: "expense" as const, amount, category: "other", rememberDigits: false });
+      await resolveCapture({ userId: a, captureId: old.body.captureId, input: input(70000), actor: actor(), via: "mobile" });
+      expect((await Account.findById(other._id).lean<Json>())?.balance).toBe(50000);
+      await resolveCapture({ userId: a, captureId: fresh.body.captureId, input: input(30000), actor: actor(), via: "mobile" });
+      expect((await Account.findById(other._id).lean<Json>())?.balance).toBe(20000);
+      const row = await Transaction.findOne({ user: a, amount: 70000 }).lean<Json>();
+      expect(row).toMatchObject({ source: "aa", reviewStatus: "confirmed" });
+    });
+
+    it("archiving a mapped account clears its mapping and the sync skips it", async () => {
+      const { consentId, bank } = await linked();
+      const { archiveAccount } = await import("@/lib/account-service");
+      await archiveAccount(a, String(bank._id), actor());
+      const view = ((await (await status()).json()).data.consents[0] as Json).linkedAccounts;
+      expect(view.every((l: Json) => l.mappedAccountId === null)).toBe(true);
+      const sync = (await (await syncRoute(consentId)).json()).data.sync as Json;
+      expect(sync).toMatchObject({ fetched: 0, created: 0, unmappedAccounts: 2 });
+    });
+
+    it("a mapping to an account archived behind the link's back is skipped by the sync", async () => {
+      const { consentId, bank } = await linked();
+      const { Account } = await models();
+      await Account.updateOne({ _id: bank._id }, { $set: { isArchived: true } });
+      const sync = (await (await syncRoute(consentId)).json()).data.sync as Json;
+      expect(sync).toMatchObject({ created: 0, unmappedAccounts: 2 });
+    });
+
+    it("finishes a capture a crash left in processing, once, and leaves a fresh one alone", async () => {
+      const { bank } = await linked();
+      const { Transaction, CapturedMessage } = await models();
+      const { ingestAaTransaction } = await import("@/lib/capture/ingest");
+      const input = {
+        user: actor(), provider: "sandbox", providerTxnId: "crash-1", accountId: String(bank._id), bankName: "HDFC Bank", last4: "1234",
+        type: "expense" as const, amountMinor: 8800, at: new Date(), narration: "CRASH", historical: false,
+      };
+      expect((await ingestAaTransaction(input)).body.status).toBe("created");
+      // Simulate the crash: the row exists as "processing" with no transaction.
+      await Transaction.deleteMany({ user: a });
+      await CapturedMessage.collection.updateOne({ user: new mongoose.Types.ObjectId(a), channel: "aa" }, { $set: { outcome: "processing", status: "pending" }, $unset: { transaction: "" } });
+      // Fresh: another reader may still be on it.
+      expect((await ingestAaTransaction(input)).body.status).toBe("duplicate");
+      expect(await Transaction.countDocuments({ user: a })).toBe(0);
+      // Stale: picked up.
+      await CapturedMessage.collection.updateOne({ user: new mongoose.Types.ObjectId(a), channel: "aa" }, { $set: { updatedAt: new Date(Date.now() - 10 * 60 * 1000) } });
+      const [one, two] = await Promise.all([ingestAaTransaction(input), ingestAaTransaction(input)]);
+      expect([one.body.status, two.body.status].sort()).toEqual(["created", "duplicate"]);
+      expect(await Transaction.countDocuments({ user: a })).toBe(1);
+      expect((await CapturedMessage.findOne({ user: a, channel: "aa" }).lean<Json>())?.outcome).toBe("created");
+    });
+
+    it("a long run of skipped entries does not stall the link", async () => {
+      const { consentId, consent } = await linked();
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      const { SYNC_LIMITS, syncNow } = await import("@/lib/aa-service");
+      const ref = await providerRef(consentId, consent.linkedAccounts.find((l: Json) => l.bankName === "HDFC Bank").id);
+      const t0 = Date.now() - 5 * 24 * 60 * 60 * 1000;
+      const list = [
+        ...[0, 1, 2, 3, 4].map((i) => ({ id: `usd-${i}`, currency: "USD", at: new Date(t0 + i * 60_000) })),
+        { id: "inr-1", at: new Date(t0 + 10 * 60_000), narration: "REAL" },
+      ];
+      sandboxControl.setTransactions(await handleOf(consentId), ref, feed(ref, list) as never);
+      const saved = { ...SYNC_LIMITS };
+      SYNC_LIMITS.transactions = 3;
+      try {
+        let created = 0;
+        let t = Date.now();
+        for (let i = 0; i < 5 && created === 0; i += 1) {
+          t += 10 * 60 * 1000;
+          created += (await syncNow(a, consentId, new Date(t))).created;
+        }
+        expect(created).toBe(1);
+      } finally {
+        Object.assign(SYNC_LIMITS, saved);
+      }
+    });
+
+    it("a second read at the same moment answers 429, and a failed read counts for the cooldown", async () => {
+      const { consentId } = await linked();
+      const { syncNow } = await import("@/lib/aa-service");
+      const results = await Promise.allSettled([syncNow(a, consentId, new Date()), syncNow(a, consentId, new Date())]);
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+      expect(rejected.reason).toMatchObject({ code: "TOO_SOON" });
+    });
+
+    it("a provider failure sets lastSyncAt, so the next call is within the cooldown", async () => {
+      const { consentId } = await linked();
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      sandboxControl.failNext(1, "consentStatus");
+      const first = await syncRoute(consentId);
+      expect((await first.json()).data.sync.error).toBe("provider_error");
+      expect((await syncRoute(consentId)).status).toBe(429);
+    });
+
+    it("the cap holds when many consents start at once", async () => {
+      process.env.AA_PROVIDER = "sandbox";
+      const out = await Promise.all(Array.from({ length: 9 }, (_, i) => create(KEY_A, { "idempotency-key": `race-${i}` })));
+      const { AaConsent } = await models();
+      expect(await AaConsent.countDocuments({ user: a })).toBeLessThanOrEqual(5);
+      for (const r of out.filter((x) => x.status !== 201)) expect(r.status).toBe(409);
+      expect(out.some((r) => r.status === 201)).toBe(true);
+    });
+
+    it("rejects what a provider returns when it is not valid: http consent screen, unknown status, bad page", async () => {
+      process.env.AA_PROVIDER = "sandbox";
+      const providers = await import("@/lib/aa/providers");
+      const provider = providers.getAaProvider()!;
+      const spy = vi.spyOn(provider, "createConsent").mockResolvedValueOnce({ handle: "h", redirectUrl: "http://evil.example/x", expiresAt: new Date(Date.now() + 1e9) });
+      const bad = await create();
+      expect(bad.status).toBe(502);
+      const { AaConsent } = await models();
+      expect(await AaConsent.countDocuments({})).toBe(0);
+      spy.mockRestore();
+
+      const { consentId } = await linked();
+      const st = vi.spyOn(provider, "consentStatus").mockResolvedValueOnce({ status: "weird", accounts: [] } as never);
+      expect((await refresh(consentId)).status).toBe(502);
+      st.mockRestore();
+      const ft = vi.spyOn(provider, "fetchTransactions").mockResolvedValueOnce({ transactions: "nope" } as never);
+      const sync = (await (await syncRoute(consentId)).json()).data.sync as Json;
+      expect(sync.error).toBe("provider_error");
+      ft.mockRestore();
+    });
+
+    it("the sweep stops starting consents past its time budget and leaves the rest for the next run", async () => {
+      await linked();
+      const { syncAllConsents, SWEEP_LIMITS } = await import("@/lib/aa-service");
+      const saved = SWEEP_LIMITS.budgetMs;
+      SWEEP_LIMITS.budgetMs = -1;
+      try {
+        expect(await syncAllConsents()).toMatchObject({ checked: 0, partial: true });
+      } finally {
+        SWEEP_LIMITS.budgetMs = saved;
+      }
+      expect(await syncAllConsents()).toMatchObject({ checked: 1 });
     });
   });
 
