@@ -1181,13 +1181,27 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
         expect(sandboxControl.isRevoked(handle)).toBe(true);
       });
 
+      it("a deleted account that was switched back on is still not read, and its consent is flagged even if the provider already ended it", async () => {
+        const { consentId } = await linked();
+        const { AaConsent } = await models();
+        const User = (await import("@/models/User")).default as mongoose.Model<Json>;
+        const { syncAllConsents } = await import("@/lib/aa-service");
+        const { sandboxControl } = await import("@/lib/aa/sandbox");
+        sandboxControl.setStatus(await handleOf(consentId), "revoked");
+        await User.updateOne({ _id: a }, { $set: { isActive: true, deletedAt: new Date() } });
+        await syncAllConsents();
+        const c = await AaConsent.findById(consentId).lean<Json>();
+        expect(c?.ownerDeleted).toBe(true);
+        expect(c?.status).toBe("active");
+      });
+
       it("an admin-deactivated person's links are only paused, not handed to the sweep", async () => {
         const { consentId } = await linked();
         const { AaConsent } = await models();
         const User = (await import("@/models/User")).default as mongoose.Model<Json>;
         const { syncAllConsents } = await import("@/lib/aa-service");
         await User.updateOne({ _id: a }, { $set: { isActive: false } });
-        await syncAllConsents();
+        expect(await syncAllConsents()).toMatchObject({ checked: 1 });
         const c = await AaConsent.findById(consentId).lean<Json>();
         expect(c?.ownerDeleted).toBeUndefined();
         expect(c?.status).toBe("active");

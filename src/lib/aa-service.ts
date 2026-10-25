@@ -267,15 +267,28 @@ export async function startConsent(userId: string): Promise<{ consent: AaConsent
   if (liveIds.length > MAX_LIVE_CONSENTS) {
     const keep = liveIds.slice(0, MAX_LIVE_CONSENTS).map((l) => l._id);
     const excess = await AaConsent.find({ user: userId, status: "pending", _id: { $nin: keep } }).lean<ConsentDoc[]>();
+    const confirmed: Types.ObjectId[] = [];
     for (const x of excess) {
-      // Withdraw at the provider first: a handle we stop tracking must not stay a live grant there.
-      await withTimeout((signal) => providerByName(x.provider)!.revoke(handleOf(x), { signal })).catch(() => undefined);
+      // Withdraw at the provider first: a handle we stop tracking must not stay a live grant there. One that could
+      // not be withdrawn is handed to the sweep (hidden, retried) instead of being dropped.
+      const ok = await withTimeout((signal) => providerByName(x.provider)!.revoke(handleOf(x), { signal })).then(() => true, () => false);
+      if (ok) confirmed.push(x._id);
+      else await AaConsent.updateOne({ _id: x._id, user: userId }, { $set: { ownerDeleted: true } });
     }
-    await AaConsent.deleteMany({ user: userId, status: "pending", _id: { $in: excess.map((x) => x._id) } });
+    await AaConsent.deleteMany({ user: userId, status: "pending", _id: { $in: confirmed } });
   }
   if (!(await AaConsent.exists({ _id: doc._id, user: userId }))) {
-    await withTimeout((signal) => provider.revoke(created.handle, { signal })).catch(() => undefined);
+    const ok = await withTimeout((signal) => provider.revoke(created.handle, { signal })).then(() => true, () => false);
+    if (!ok) {
+      // Could not be withdrawn: keep the record (hidden) for the sweep rather than lose the handle.
+      await AaConsent.updateOne({ _id: doc._id }, { $set: { ownerDeleted: true } });
+    }
     throw new AaServiceError("LIMIT", `You can have at most ${MAX_LIVE_CONSENTS} bank links at once. Remove one first.`);
+  }
+  // The account may have been deleted while the provider call ran: hand the new grant to the sweep, not the void.
+  if (await User.exists({ _id: userId, deletedAt: { $ne: null } })) {
+    await AaConsent.updateOne({ _id: doc._id }, { $set: { ownerDeleted: true } });
+    throw new AaServiceError("NOT_FOUND", "Account not found");
   }
   return { consent: consentView(doc.toObject() as ConsentDoc), redirectUrl: created.redirectUrl };
 }
@@ -464,6 +477,15 @@ export async function syncConsent(c: ConsentDoc, now = new Date()): Promise<AaSy
     // Every attempt counts for the cooldown and the hourly interval, a failed one too: a provider that is down is
     // asked again later, not on every call.
     await AaConsent.updateOne({ _id: c._id }, { $set: { lastSyncAt: now } });
+    const owner = await User.findOne({ _id: c.user, isActive: { $ne: false }, deletedAt: null }).select("name email role").lean<{ _id: Types.ObjectId; name: string; email: string; role: string }>();
+    if (!owner) {
+      // Checked before the provider is asked anything. Nothing is read for a person who is gone or deactivated. If they DELETED the account, the grant is handed to
+      // the sweep that withdraws it, so a consent created just as the account was deleted is not left live (an admin
+      // deactivation only pauses reading: they may come back).
+      const gone = await User.findOne({ _id: c.user, deletedAt: { $ne: null } }).select("_id").lean();
+      if (gone) await AaConsent.updateOne({ _id: c._id }, { $set: { ownerDeleted: true } });
+      return { ...result, error: "user_unavailable" };
+    }
     const provider = providerByName(c.provider);
     if (!provider) {
       await AaConsent.updateOne({ _id: c._id }, { $set: { lastError: "provider_unavailable" } });
@@ -491,15 +513,6 @@ export async function syncConsent(c: ConsentDoc, now = new Date()): Promise<AaSy
       return { ...result, error: "provider_error" };
     }
 
-    const owner = await User.findOne({ _id: c.user, isActive: { $ne: false } }).select("name email role").lean<{ _id: Types.ObjectId; name: string; email: string; role: string }>();
-    if (!owner) {
-      // Nothing is read for a person who is gone or deactivated. If they DELETED the account, the grant is handed to
-      // the sweep that withdraws it, so a consent created just as the account was deleted is not left live (an admin
-      // deactivation only pauses reading: they may come back).
-      const gone = await User.findOne({ _id: c.user, deletedAt: { $ne: null } }).select("_id").lean();
-      if (gone) await AaConsent.updateOne({ _id: c._id }, { $set: { ownerDeleted: true } });
-      return { ...result, error: "user_unavailable" };
-    }
     const actor = { id: owner._id.toString(), name: owner.name, email: owner.email, role: owner.role };
 
     // A mapped account that has been archived since is not fed: its payments would have nowhere to go.
@@ -646,8 +659,10 @@ let runStartedAt: number | null = null;
 
 /** Timer and cron entry: every active consent not read in the last hour, longest unread first. */
 export async function syncAllConsents(now = new Date()): Promise<{ checked: number; created: number; skipped?: true; partial?: true }> {
-  // Withdrawing a deleted account's grants does not depend on linking being switched on.
-  await retryOwnerDeletedConsents().catch((err) => logger.error({ err: codeOf(err) }, "aa: retry of deleted accounts' consents failed"));
+  // Withdrawing a deleted account's grants does not depend on linking being switched on. One deadline covers it and
+  // the sweep below.
+  const sweepStartedAt = Date.now();
+  await retryOwnerDeletedConsents(50, sweepStartedAt).catch((err) => logger.error({ err: codeOf(err) }, "aa: retry of deleted accounts' consents failed"));
   if (!aaConfigured()) return { checked: 0, created: 0 };
   const startedAt = Date.now();
   if (runStartedAt !== null && startedAt - runStartedAt < RUN_STALE_AFTER_MS) {
@@ -671,7 +686,7 @@ export async function syncAllConsents(now = new Date()): Promise<{ checked: numb
     let partial = false;
     for (const c of due) {
       // Out of time: stop here. Every consent read so far has a fresh lastSyncAt, so the next run starts with the rest.
-      if (Date.now() - startedAt > SWEEP_LIMITS.budgetMs) {
+      if (Date.now() - sweepStartedAt > SWEEP_LIMITS.budgetMs) {
         partial = true;
         break;
       }
@@ -776,9 +791,11 @@ export async function purgeAaRecordsOfDeletedUser(userId: string): Promise<numbe
  *   failing move to the back instead of starving the rest.
  * - It stops when the sweep's time budget is used up (`partial: true`); the rest wait for the next run.
  */
-export async function retryOwnerDeletedConsents(limit = 50): Promise<{ withdrawn: number; kept: number; partial?: true }> {
+export async function retryOwnerDeletedConsents(limit = 50, startedAt = Date.now()): Promise<{ withdrawn: number; kept: number; partial?: true }> {
   await connectDB();
-  const startedAt = Date.now();
+  // Rows of a provider this server no longer has stay (it may come back) but are not forgotten: counted in the log.
+  const stranded = await AaConsent.countDocuments({ ownerDeleted: true, provider: { $nin: registeredProviderNames() } });
+  if (stranded) logger.warn({ stranded }, "aa: consents of deleted accounts wait for a provider that is not registered here");
   const left = await AaConsent.find({ ownerDeleted: true, provider: { $in: registeredProviderNames() } })
     .sort({ lastRetryAt: 1, _id: 1 })
     .limit(limit)
