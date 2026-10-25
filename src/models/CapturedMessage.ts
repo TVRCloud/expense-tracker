@@ -17,7 +17,7 @@ const EncryptedFieldSchema = new Schema(
 const CapturedMessageSchema = new Schema(
   {
     user: { type: Schema.Types.ObjectId, ref: "User", required: true },
-    channel: { type: String, enum: ["sms", "notification", "n8n"], required: true },
+    channel: { type: String, enum: ["sms", "notification", "n8n", "aa"], required: true },
     apiKey: { type: Schema.Types.ObjectId, ref: "ApiKey" },
     // DLT sender id for SMS (e.g. "VM-HDFCBK"), or the app name for a notification.
     sender: { type: String },
@@ -50,6 +50,9 @@ const CapturedMessageSchema = new Schema(
       hasTime: { type: Boolean },
     },
     sourcePriority: { type: Number, required: true },
+    // Bank-link (aa) captures older than the link: history the balance already shows. Kept on the row so a
+    // confirm from the review inbox writes it the same quiet way as the automatic path.
+    historical: { type: Boolean },
     // How the account was picked (src/lib/capture/account-match.ts):
     // saved digits, or bank name + instrument (confirming teaches digits).
     accountMatch: { type: String, enum: ["digits", "bank"] },

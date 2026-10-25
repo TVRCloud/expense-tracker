@@ -8,6 +8,7 @@ Purpose: Mongoose schemas, one file per collection. Field tables: [docs/database
 - CapturedMessage, IdempotencyRecord: bank message inbox; integration idempotency.
 - Anomaly (an unusual-spend alert with its answer; unique {user, dedupKey} so one cause alerts once; realtime resource `anomalies`; TTL 365 days).
 - Receipt (a receipt photo on a transaction, encrypted, hard-deleted with it), ExchangeRate (one cached rate table per base currency, kept for outages), ImportLock (one live CSV import per user and account): Phase 6 data.
+- AaAccountClaim (one row per account a live bank link feeds, unique on user and account: the atomic one-feed-per-account guard), AaConsent (a bank link through an Account Aggregator: the provider handle encrypted, linked accounts with last four digits and a mapping, status; not in backups; realtime resource `aa`): Phase 7.
 - Share (household sharing: owner, member, shared account ids, role, status, hashed invite code; ended shares removed by TTL 90 days after they end): Phase 7.
 - LedgerBlock, LedgerBackfill, LogSecurity, LogUnlockSession, SecurityRateLimit: ledger chain, logs unlock, rate limits.
 - Shared TypeScript shapes live in src/types/models.ts.

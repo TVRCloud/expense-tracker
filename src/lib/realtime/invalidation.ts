@@ -35,6 +35,7 @@ export const INVALIDATION_MAP: Readonly<Record<RealtimeResource, readonly (reado
   subscriptions: [["subscriptions"]],
   sinkingFunds: [["sinking-funds"], ["notifications"]],
   netWorth: [["net-worth"]],
+  aa: [["aa"], ["notifications"]],
   envelopes: [["envelopes"]],
   anomalies: [["anomalies"], ["notifications"]],
   holdings: [["holdings"], ["net-worth"]],

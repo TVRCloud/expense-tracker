@@ -89,7 +89,7 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `recurringId`, `recurrence*`, `installmentIndex`, `installmentStatus`, `paidAt` | | recurring series fields |
 | `splitGroupId` | ObjectId | shared by split-purchase siblings (2 to 20 lines, amounts add up to the purchase) |
 | `attachments` | [String] | ids of the `receipts` on this row, at most 5 |
-| `source` | String | `manual\|sms\|notification\|n8n\|recurring\|import`, default `manual`. `import` rows come from the CSV import (`/api/integrations/import/commit`) |
+| `source` | String | `manual\|sms\|notification\|n8n\|aa\|recurring\|import`, default `manual`. `import` rows come from the CSV import (`/api/integrations/import/commit`); `aa` rows from a bank link ([account-aggregator.md](account-aggregator.md)) |
 | `sourceCapture` | ObjectId | ref: CapturedMessage, the message whose values are in use |
 | `captures` | [ObjectId] | every captured message for this payment |
 | `reviewStatus` | String | `unreviewed\|confirmed\|corrected\|voided`, null for manual rows |
@@ -99,6 +99,7 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `reviewedAt` / `reviewedBy` | Date / ObjectId | |
 | `addedBy` | ObjectId | ref: User, the household editor who added the row to a shared account (unset otherwise) |
 | `deductible` | Boolean | Tax helper override on an expense: `true` or `false` wins over the user's deductible categories, unset follows them |
+| `balanceApplied` | Boolean | `false` on a row written without moving the account balance (CSV import with adjust balance off, bank link entry older than the link): delete, void and correct never move the balance for it. Absent on every other row; kept in backups |
 | `isDeleted` | Boolean | soft delete |
 | `deletedAt` | Date | |
 | `deletedBy` | ObjectId | ref: User |
@@ -378,7 +379,7 @@ Every bank message received from the phone (SMS / notification) or n8n. Nothing 
 | Field | Type | Notes |
 |-------|------|-------|
 | `user` | ObjectId | |
-| `channel` | String | `sms\|notification\|n8n` |
+| `channel` | String | `sms\|notification\|n8n\|aa` |
 | `apiKey` | ObjectId | ref: ApiKey, which caller sent it |
 | `sender` / `packageName` | String | DLT sender id, or the bank app |
 | `rawText` | `{iv, tag, ciphertext}` | AES-256-GCM with `CAPTURE_ENCRYPTION_KEY` |
@@ -387,7 +388,8 @@ Every bank message received from the phone (SMS / notification) or n8n. Nothing 
 | `alsoSeenIn` | [String] | channels the phone merged into this upload |
 | `parse` | Object | `{kind, parserId, version, confidence, fields}` |
 | `eventKey` | Object | `{account, type, amount, ref, at, hasTime}` for cross-channel matching |
-| `sourcePriority` | Number | sms 3, n8n 2, notification 1 |
+| `sourcePriority` | Number | sms 3, n8n 2, aa 2, notification 1 |
+| `historical` | Boolean | `aa` only: older than the link, so creating a transaction from it (also from the review inbox) changes no balance and fires no alerts |
 | `accountMatch` | String | `digits` or `bank`: how the account was picked (see docs/reconcile.md) |
 | `suggestedAccount` | ObjectId | ref: Account, likely account for an unmatched message |
 | `role` | String | `primary\|supporting` |
@@ -485,6 +487,32 @@ One cached rate table per base currency (open.er-api.com), refreshed after 24 ho
 | `rateDate` | Date | the provider's own update time |
 | `fetchedAt` | Date | when we fetched it |
 | `lastAttemptAt` | Date | set when a refresh failed; no new attempt for 10 minutes (a row can exist with no table yet) |
+
+## aa_consents
+
+Bank links through an Account Aggregator ([account-aggregator.md](account-aggregator.md)). Not in backups. Realtime resource `aa`.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | |
+| `provider` | String | the provider's name (`sandbox` today) |
+| `consentHandle` | `{iv, tag, ciphertext}` | the provider's opaque handle, AES-256-GCM with `CAPTURE_ENCRYPTION_KEY`; never returned to a client |
+| `handleHash` | String | sha256 of the handle |
+| `status` | String | `pending\|active\|paused\|revoked\|expired\|failed` |
+| `expiresAt` | Date | |
+| `activeAt` | Date | first time it became active (the person approved it): bank entries before it are history |
+| `linkedAccounts` | [Object] | `{_id, providerRef, bankName, maskedNumber (last four digits only), mappedAccount (ObjectId ref Account, null = not read), syncedUntil, syncedPartial}` |
+| `lastSyncAt` | Date | |
+| `lastError` | String | a short code (`provider_error`, `revoked_at_provider`, `not_found_at_provider`, `revoke_not_confirmed`, `provider_unavailable`), never a provider message |
+| `revokedAt` | Date | |
+| `lastRetryAt` | Date | last sweep attempt to withdraw an `withdrawPending` consent (oldest first; failures move to the back) |
+| `withdrawPending` | Boolean | this grant is waiting to be withdrawn at the provider (the person deleted their account first, or the five-link cap dropped it and the revoke failed): kept (encrypted handle) for the cron sweep to withdraw and then delete; never listed, counted toward the cap, synced or reachable by a user route |
+
+Indexes: `{user, status, createdAt}`, `{status, lastSyncAt}`, `{handleHash}`
+
+## aa_account_claims
+
+One row per account of the user that a live bank link feeds: the atomic "one feed per account" guard (unique `{user, account}`). Released when the mapping goes, the consent ends or the account is archived; a stale one can be taken over. Not in backups, no realtime resource. Fields: `user`, `account`, `consent` (the consent holding it), `linkedId` (the linked account inside that consent).
 
 ## credit_statements
 

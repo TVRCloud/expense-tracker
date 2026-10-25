@@ -4,7 +4,7 @@
 
 - Node.js 20+
 - Yarn (not npm or pnpm)
-- MongoDB running locally **as a replica set** (or an Atlas connection string in `.env.local`). A standalone `mongod` starts, but realtime and split-purchase edits need a replica set (`mongod --replSet rs0`, then `rs.initiate()` once)
+- MongoDB running locally **as a replica set** (or an Atlas connection string in `.env.local`). A standalone `mongod` starts, but realtime, split-purchase edits and every transaction create (the row and the balance move are written in one database transaction) need a replica set (`mongod --replSet rs0`, then `rs.initiate()` once)
 - Redis running locally (optional)
 
 ## Setup

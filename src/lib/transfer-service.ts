@@ -92,6 +92,8 @@ type TransferRow = {
   date: Date;
   note?: string;
   description?: string;
+  // False: written as history, never moved either balance, so editing it never does.
+  balanceApplied?: boolean;
   createdAt?: Date;
   updatedAt?: Date;
 };
@@ -207,7 +209,7 @@ export async function updateTransfer(input: UpdateTransferInput) {
   add(newTo, newAmount);
 
   for (const [accountId, by] of delta) {
-    if (by === 0) continue;
+    if (by === 0 || existing.balanceApplied === false) continue;
     const before = await Account.findOne({ _id: accountId, user: userId });
     const after = await Account.findOneAndUpdate({ _id: accountId, user: userId }, { $inc: { balance: by } }, { new: true });
     if (before && after) {

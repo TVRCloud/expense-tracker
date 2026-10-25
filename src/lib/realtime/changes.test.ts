@@ -22,13 +22,14 @@ describe("collectionToResource", () => {
     expect(collectionToResource("subscription_decisions")).toBe("subscriptions");
     expect(collectionToResource("sinking_funds")).toBe("sinkingFunds");
     expect(collectionToResource("manual_assets")).toBe("netWorth");
+    expect(collectionToResource("aa_consents")).toBe("aa");
     expect(collectionToResource("envelope_plans")).toBe("envelopes");
     expect(collectionToResource("anomalies")).toBe("anomalies");
     expect(collectionToResource("holdings")).toBe("holdings");
   });
   it("covers every resource", () => {
     expect([...RESOURCE_NAMES].sort()).toEqual(
-      ["accounts", "anomalies", "budgets", "captures", "envelopes", "goals", "holdings", "loans", "netWorth", "notifications", "repayments", "sinkingFunds", "spendLimits", "statements", "subscriptions", "transactions"]
+      ["aa", "accounts", "anomalies", "budgets", "captures", "envelopes", "goals", "holdings", "loans", "netWorth", "notifications", "repayments", "sinkingFunds", "spendLimits", "statements", "subscriptions", "transactions"]
     );
   });
 });

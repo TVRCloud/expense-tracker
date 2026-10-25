@@ -28,6 +28,7 @@ import { MAX_MINOR_AMOUNT } from "@/lib/currency";
 export const SOURCE_LABEL: Record<string, { label: string; priority: "primary" | "secondary" | "fallback" | "manual" }> = {
   sms: { label: "SMS (source of truth)", priority: "primary" },
   n8n: { label: "n8n (forwarded SMS)", priority: "secondary" },
+  aa: { label: "Bank link (Account Aggregator)", priority: "secondary" },
   notification: { label: "App notification (lower priority, verify)", priority: "fallback" },
   manual: { label: "Added by you", priority: "manual" },
 };
@@ -344,7 +345,7 @@ export type ResolveCaptureInput = z.infer<typeof resolveCaptureSchema>;
 async function loadPendingCapture(userId: string, captureId: string) {
   if (!Types.ObjectId.isValid(captureId)) throw new ReconcileError("NOT_FOUND", "Message not found");
   const capture = await CapturedMessage.findOne({ _id: captureId, user: userId }).lean<
-    RawCapture & { sourcePriority: number }
+    RawCapture & { sourcePriority: number; historical?: boolean }
   >();
   if (!capture) throw new ReconcileError("NOT_FOUND", "Message not found");
   if (capture.status !== "pending" || capture.outcome !== "queued") {
@@ -383,7 +384,7 @@ export async function resolveCapture(params: {
   const { userId, captureId, input, actor, via } = params;
   await connectDB();
   const capture = await loadPendingCapture(userId, captureId);
-  const channel = capture.channel as "sms" | "n8n" | "notification";
+  const channel = capture.channel as "sms" | "n8n" | "notification" | "aa";
 
   if (input.action === "create") {
     // The amount is what the bank message says, in rupees. With another base
@@ -400,12 +401,15 @@ export async function resolveCapture(params: {
       date: input.date ?? new Date(capture.receivedAt).toISOString(),
       tags: [],
       isRecurring: false,
+      // A bank-link entry older than the link is history the balance already shows: no balance change, no alerts.
+      ...(channel === "aa" && capture.historical ? { skipBalance: true } : {}),
       provenance: {
         source: channel,
         sourceCapture: captureId,
         captures: [captureId],
         // The user checked these values themselves.
         reviewStatus: "confirmed",
+        ...(channel === "aa" && capture.historical ? { historical: true } : {}),
       },
     });
     const txnId = (transaction as { _id: Types.ObjectId })._id.toString();

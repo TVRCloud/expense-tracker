@@ -11,6 +11,7 @@ import { sendSpendLimitSummaries } from "./src/lib/spend-limit";
 import { sendBillReminders } from "./src/lib/bill-reminders";
 import { recordSnapshotsForAllUsers } from "./src/lib/net-worth";
 import { sendWeeklyReviews } from "./src/lib/weekly-review";
+import { syncAllConsents } from "./src/lib/aa-service";
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = process.env.HOSTNAME ?? "localhost";
@@ -40,6 +41,8 @@ app.prepare().then(() => {
     setInterval(() => void sendBillReminders().catch((err) => console.error("sendBillReminders failed", err)), 30 * 60 * 1000);
     setInterval(() => void recordSnapshotsForAllUsers().catch((err) => console.error("recordSnapshotsForAllUsers failed", err)), 3 * 60 * 60 * 1000);
     setInterval(() => void sendWeeklyReviews().catch((err) => console.error("sendWeeklyReviews failed", err)), 30 * 60 * 1000);
+    // Bank links (Account Aggregator): a no-op until AA_PROVIDER is set.
+    setInterval(() => void syncAllConsents().catch((err) => console.error("syncAllConsents failed", err)), 6 * 60 * 60 * 1000);
     setInterval(() => void promoteStalePendingSms().catch((err) => console.error("promoteStalePendingSms failed", err)), 5 * 60 * 1000);
   });
 });

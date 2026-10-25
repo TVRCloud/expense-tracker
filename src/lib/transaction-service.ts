@@ -1,4 +1,4 @@
-import { type ClientSession, Types } from "mongoose";
+import mongoose, { type ClientSession, Types } from "mongoose";
 import { z } from "zod";
 import connectDB from "@/lib/mongodb";
 import Transaction from "@/models/Transaction";
@@ -7,7 +7,7 @@ import CreditStatement from "@/models/CreditStatement";
 import type { AuthUser } from "@/lib/auth-guard";
 import { redis } from "@/lib/redis";
 import { checkBudgetAlert } from "@/lib/budget-alert";
-import { detectAnomalies, retireAnomaliesForTransactions } from "@/lib/anomaly-service";
+import { detectAnomalies, retireAnomaliesForTransactions, type CheckedTransaction } from "@/lib/anomaly-service";
 import { runInBackground } from "@/lib/perf/background";
 import { checkSpendLimitAlert } from "@/lib/spend-limit";
 import { applyRoundUp } from "@/lib/goal-service";
@@ -139,10 +139,14 @@ export const transactionCreateSchema = z
 // transactionCreateSchema, so browser and integration callers can't set it
 // from a request body; only server code (src/lib/capture/*) passes it.
 export type TransactionProvenance = {
-  source: "sms" | "notification" | "n8n" | "manual" | "import";
+  source: "sms" | "notification" | "n8n" | "aa" | "manual" | "import";
   sourceCapture?: string;
   captures?: string[];
   reviewStatus?: "unreviewed" | "confirmed" | null;
+  // A bank-link row older than the link: history the balance already reflects.
+  // It leaves budget and spend limit alerts and the round-up alone (callers
+  // also pass skipBalance), but categorise rules still apply.
+  historical?: boolean;
   // Household editor who added the row to a shared account (single rows only). The owner's round-up
   // into a goal is skipped for such a row; budget and spend limit alerts still run.
   addedBy?: string;
@@ -308,9 +312,43 @@ async function resolveAmount(
   }
 }
 
+/**
+ * Ledger blocks for a create are written after its database transaction commits (the ledger is a per-person hash
+ * chain whose appends retry on a sequence clash, which cannot be done inside a database transaction). By then the
+ * row and the balance are committed, so a ledger failure must not turn the create into an error: the caller would
+ * retry and book the payment twice. It is logged instead; the gap is not repaired automatically.
+ */
+async function appendLedgerAfterCommit(input: Parameters<typeof appendLedgerBlock>[0]) {
+  try {
+    await appendLedgerBlock(input);
+  } catch (err) {
+    logger.error(
+      { err: err instanceof Error ? err.name : "unknown", scope: input.scope, entityId: input.entityId },
+      "ledger block not written after a committed create"
+    );
+  }
+}
+
+/**
+ * Runs `work` in one database transaction (production Mongo is a replica set, see docs/realtime.md): everything it
+ * writes commits together or not at all, and a write conflict runs it again on the new state, so it must start from
+ * nothing each time.
+ */
+async function inOneTransaction(work: (session: ClientSession) => Promise<void>): Promise<void> {
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      await work(session);
+    });
+  } finally {
+    await session.endSession();
+  }
+}
+
 export async function createTransaction(input: CreateTransactionInput): Promise<CreateTransactionResult> {
   const { userId, actor, accountId, transferToId, provenance, ruleText, skipBalance, ...restIn } = input;
-  const quiet = provenance?.source === "import";
+  const isImport = provenance?.source === "import";
+  const quiet = isImport || provenance?.historical === true;
   await connectDB();
 
   const account = await Account.findOne({ _id: accountId, user: userId, isArchived: { $ne: true } });
@@ -318,7 +356,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     throw new TransactionServiceError("ACCOUNT_NOT_FOUND", "Account not found");
   }
   if (transferToId) {
-    const transferAccount = await Account.findOne({ _id: transferToId, user: userId, isArchived: false });
+    const transferAccount = await Account.findOne({ _id: transferToId, user: userId, isArchived: { $ne: true } });
     if (!transferAccount) {
       throw new TransactionServiceError("TRANSFER_ACCOUNT_NOT_FOUND", "Transfer account not found");
     }
@@ -345,7 +383,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   // bank message. Plain transactions only, and never an import (the preview
   // shows the file's own category and description, so they are written as shown); splits, series and transfers are
   // always exactly what was asked for.
-  if (!rest.splits && !rest.isRecurring && rest.type !== "transfer" && !quiet) {
+  if (!rest.splits && !rest.isRecurring && rest.type !== "transfer" && !isImport) {
     const overrides = await ruleOverridesForTransaction(userId, {
       category: rest.category,
       description: rest.description,
@@ -370,17 +408,40 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   // !rest.isRecurring, and splits summing to rest.amount when this is set)
   if (rest.splits) {
     const splitGroupId = new Types.ObjectId();
+    const { splits, category: _unusedCategory, ...sharedRest } = rest;
+    const docs = splits.map((s) => ({
+      ...sharedRest,
+      category: s.category,
+      amount: s.amount,
+      description: s.description ?? sharedRest.description,
+      ...(skipBalance ? { balanceApplied: false } : {}),
+      account: accountId,
+      user: userId,
+      date: startDate,
+      splitGroupId,
+    }));
+    // The rows and the balance move commit together or not at all (a replica set, as for editing a split).
     // An import of history (skipBalance) leaves the balance alone, as for a single row.
+    const accountBefore = account.toObject();
+    let accountAfter: unknown = null;
+    let inserted: CheckedTransaction[] = [];
+    await inOneTransaction(async (session) => {
+      accountAfter = null;
+      if (!skipBalance) {
+        // Atomic $inc (not read-modify-write + save) so concurrent captures on
+        // the same account can't overwrite each other's balance change.
+        accountAfter = await Account.findOneAndUpdate(
+          { _id: account._id, user: userId, isArchived: { $ne: true } },
+          { $inc: { balance: -rest.amount } },
+          { new: true, session }
+        );
+        // Archived since it was read: roll everything back rather than move a balance nobody can see.
+        if (!accountAfter) throw new TransactionServiceError("ACCOUNT_NOT_FOUND", "Account not found");
+      }
+      inserted = (await Transaction.insertMany(docs, { session })) as unknown as CheckedTransaction[];
+    });
     if (!skipBalance) {
-      const accountBefore = account.toObject();
-      // Atomic $inc (not read-modify-write + save) so concurrent captures on
-      // the same account can't overwrite each other's balance change.
-      const accountAfter = await Account.findOneAndUpdate(
-        { _id: account._id, user: userId },
-        { $inc: { balance: -rest.amount } },
-        { new: true }
-      );
-      await appendLedgerBlock({
+      await appendLedgerAfterCommit({
         userId,
         scope: "account",
         entityId: account._id.toString(),
@@ -390,21 +451,8 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
         actor,
       });
     }
-
-    const { splits, category: _unusedCategory, ...sharedRest } = rest;
-    const docs = splits.map((s) => ({
-      ...sharedRest,
-      category: s.category,
-      amount: s.amount,
-      description: s.description ?? sharedRest.description,
-      account: accountId,
-      user: userId,
-      date: startDate,
-      splitGroupId,
-    }));
-    const inserted = await Transaction.insertMany(docs);
     for (const transaction of inserted) {
-      await appendLedgerBlock({
+      await appendLedgerAfterCommit({
         userId,
         scope: "transaction",
         entityId: transaction._id.toString(),
@@ -472,7 +520,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
 
     const inserted = await Transaction.insertMany(docs);
     for (const transaction of inserted) {
-      await appendLedgerBlock({
+      await appendLedgerAfterCommit({
         userId,
         scope: "transaction",
         entityId: transaction._id.toString(),
@@ -488,15 +536,48 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   }
 
   // ── Single transaction (non-recurring or recurring count = 1) ───────────
-  if (!skipBalance) {
-    const accountBefore = account.toObject();
-    const balanceDelta = rest.type === "income" ? rest.amount : -rest.amount;
-    const accountAfter = await Account.findOneAndUpdate(
-      { _id: account._id, user: userId },
-      { $inc: { balance: balanceDelta } },
-      { new: true }
+  // The row and the balance move(s) commit together or not at all: a failure (or a crash) between the two writes
+  // leaves neither, so a retry applies the balance once. Ledger blocks are written after the commit, from what
+  // the transaction changed.
+  const accountBefore = account.toObject();
+  const transferBefore = rest.type === "transfer" && transferToId && !skipBalance ? await Account.findOne({ _id: transferToId, user: userId }).lean() : null;
+  let transaction!: Awaited<ReturnType<typeof Transaction.create>>[number];
+  let accountAfter: unknown = null;
+  let transferAfter: unknown = null;
+  await inOneTransaction(async (session) => {
+    accountAfter = null;
+    transferAfter = null;
+    const [created] = await Transaction.create(
+      [
+        {
+          ...rest,
+          ...foreignFields.stored,
+          ...(provenance ?? {}),
+          ...(skipBalance ? { balanceApplied: false } : {}),
+          account: accountId,
+          user: userId,
+          date: startDate,
+          recurrenceInterval: rest.isRecurring ? (rest.recurrenceInterval ?? 1) : undefined,
+          recurrenceEndDate: rest.recurrenceEndDate ? new Date(rest.recurrenceEndDate) : undefined,
+          ...(transferToId ? { transferTo: transferToId } : {}),
+        },
+      ],
+      { session }
     );
-    await appendLedgerBlock({
+    transaction = created;
+    if (!skipBalance) {
+      const balanceDelta = rest.type === "income" ? rest.amount : -rest.amount;
+      accountAfter = await Account.findOneAndUpdate({ _id: account._id, user: userId, isArchived: { $ne: true } }, { $inc: { balance: balanceDelta } }, { new: true, session });
+      if (!accountAfter) throw new TransactionServiceError("ACCOUNT_NOT_FOUND", "Account not found");
+    }
+    // A transfer written as history leaves both sides alone, as the source side does.
+    if (rest.type === "transfer" && transferToId && !skipBalance) {
+      transferAfter = await Account.findOneAndUpdate({ _id: transferToId, user: userId, isArchived: { $ne: true } }, { $inc: { balance: rest.amount } }, { new: true, session });
+      if (!transferAfter) throw new TransactionServiceError("TRANSFER_ACCOUNT_NOT_FOUND", "Transfer account not found");
+    }
+  });
+  if (!skipBalance) {
+    await appendLedgerAfterCommit({
       userId,
       scope: "account",
       entityId: account._id.toString(),
@@ -506,39 +587,18 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
       actor,
     });
   }
-
-  if (rest.type === "transfer" && transferToId) {
-    const transferAccountBefore = await Account.findOne({ _id: transferToId, user: userId });
-    const transferAccount = await Account.findOneAndUpdate(
-      { _id: transferToId, user: userId },
-      { $inc: { balance: rest.amount } },
-      { new: true }
-    );
-    if (transferAccountBefore && transferAccount) {
-      await appendLedgerBlock({
-        userId,
-        scope: "account",
-        entityId: transferAccount._id.toString(),
-        action: "update",
-        before: transferAccountBefore,
-        after: transferAccount,
-        actor,
-      });
-    }
+  if (transferBefore && transferAfter) {
+    await appendLedgerAfterCommit({
+      userId,
+      scope: "account",
+      entityId: transferToId!,
+      action: "update",
+      before: transferBefore,
+      after: transferAfter,
+      actor,
+    });
   }
-
-  const transaction = await Transaction.create({
-    ...rest,
-    ...foreignFields.stored,
-    ...(provenance ?? {}),
-    account: accountId,
-    user: userId,
-    date: startDate,
-    recurrenceInterval: rest.isRecurring ? (rest.recurrenceInterval ?? 1) : undefined,
-    recurrenceEndDate: rest.recurrenceEndDate ? new Date(rest.recurrenceEndDate) : undefined,
-    ...(transferToId ? { transferTo: transferToId } : {}),
-  });
-  await appendLedgerBlock({
+  await appendLedgerAfterCommit({
     userId,
     scope: "transaction",
     entityId: transaction._id.toString(),
@@ -671,6 +731,7 @@ export async function deleteTransaction(userId: string, transactionId: string, a
     tags?: unknown[];
     recurringId?: unknown;
     installmentStatus?: string;
+    balanceApplied?: boolean;
   }>();
   if (!txn) {
     throw new TransactionServiceError("TRANSACTION_NOT_FOUND", "Transaction not found");
@@ -680,8 +741,9 @@ export async function deleteTransaction(userId: string, transactionId: string, a
     throw new TransactionServiceError("TRANSACTION_LOCKED", `${blocker} Use the linked record flow to reverse it.`);
   }
 
-  // Reverse account balance only for transactions that previously affected it.
-  const affectsBalance = !txn.recurringId || txn.installmentStatus === "paid";
+  // Reverse account balance only for transactions that previously affected it (a row written with
+  // balanceApplied: false never moved it).
+  const affectsBalance = txn.balanceApplied !== false && (!txn.recurringId || txn.installmentStatus === "paid");
   if (affectsBalance) {
     if (txn.type === "transfer") {
       const accountBefore = await Account.findOne({ _id: txn.account, user: userId });

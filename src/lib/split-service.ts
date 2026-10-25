@@ -56,6 +56,8 @@ type Row = {
   splitGroupId?: Types.ObjectId;
   originalCurrency?: string | null;
   deductible?: boolean | null;
+  // False: history that never moved the balance; new lines cloned from it are history too.
+  balanceApplied?: boolean;
   attachments?: string[];
 };
 
@@ -231,6 +233,7 @@ export async function replaceSplits(input: {
           note: base.note,
           // The tax helper's per-row choice carries over to the new lines.
           ...(typeof base.deductible === "boolean" ? { deductible: base.deductible } : {}),
+          ...(base.balanceApplied === false ? { balanceApplied: false } : {}),
           date: base.date,
           // Link tags (loan:, repayment:, credit_statement:) belong to one row; never copied.
           tags: (base.tags ?? []).filter((t) => !isReservedTag(t)),

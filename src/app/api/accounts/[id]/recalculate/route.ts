@@ -30,6 +30,8 @@ export async function POST(_req: NextRequest, { params }: { params: Params }) {
         $match: {
           user: new Types.ObjectId(user.id),
           isDeleted: { $ne: true },
+          // History rows never moved the balance (balanceApplied: false), so they are not counted either.
+          balanceApplied: { $ne: false },
           $or: [
             { account: accountObjectId },
             { transferTo: accountObjectId },

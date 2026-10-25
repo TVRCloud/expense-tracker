@@ -1,6 +1,8 @@
 import { z } from "zod";
 import connectDB from "@/lib/mongodb";
 import Account from "@/models/Account";
+import AaConsent from "@/models/AaConsent";
+import AaAccountClaim from "@/models/AaAccountClaim";
 import type { AuthUser } from "@/lib/auth-guard";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { isSupportedCurrency } from "@/lib/currency";
@@ -92,6 +94,14 @@ export async function archiveAccount(userId: string, accountId: string, actor: A
     { new: true }
   ).lean();
   if (!account) throw new AccountServiceError("ACCOUNT_NOT_FOUND", "Account not found");
+
+  // A bank link must not keep feeding an archived account: clear every mapping that points at it.
+  await AaConsent.updateMany(
+    { user: userId, "linkedAccounts.mappedAccount": account._id },
+    { $set: { "linkedAccounts.$[l].mappedAccount": null } },
+    { arrayFilters: [{ "l.mappedAccount": account._id }] }
+  );
+  await AaAccountClaim.deleteMany({ user: userId, account: account._id });
 
   await appendLedgerBlock({ userId, scope: "account", entityId: accountId, action: "delete", before, after: account, actor });
 }

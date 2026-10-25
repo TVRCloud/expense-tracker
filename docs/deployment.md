@@ -12,10 +12,11 @@
 Copy `.env.example` to `.env.local` and fill in all values. See the file for descriptions.
 
 Critical variables:
-- `MONGODB_URI` — MongoDB connection string. Must be a replica set or Atlas: realtime uses change streams and editing a split purchase uses a transaction (a standalone server answers "This server needs a MongoDB replica set")
+- `MONGODB_URI` — MongoDB connection string. Must be a replica set or Atlas: realtime uses change streams and editing a split purchase and every transaction create (manual, captured, imported) use a database transaction, so a standalone server fails them (split edits answer "This server needs a MongoDB replica set")
 - `CAPTURE_ENCRYPTION_KEY` — 32+ characters; encrypts captured messages and receipt photos. Changing it makes both unreadable
 - `NEXTAUTH_SECRET` — must be 32+ random characters
 - `NEXTAUTH_URL` — public URL of your deployment
+- `AA_PROVIDER` — optional. Unset (the default) turns bank linking off. `sandbox` is a fake provider for demos and tests, never for production (it is refused when `NODE_ENV=production` unless `AA_ALLOW_SANDBOX=true` is also set, for a demo server); a real provider needs the agreements listed in [account-aggregator.md](account-aggregator.md). Also schedule `GET /api/cron/aa-sync` with `Authorization: Bearer $CRON_SECRET` (every few hours; `server.ts` runs it every 6 hours itself) once a provider is set
 - `CAPTURE_ENCRYPTION_KEY` — 32+ random characters. Encrypts captured message text and receipts at rest and seeds the ids backup restore derives. Capture and receipt endpoints fail without it, and changing it makes stored captures and receipts unreadable and a re-run of an old restore add copies, so keep it the same across deploys and server moves
 
 ## Build
