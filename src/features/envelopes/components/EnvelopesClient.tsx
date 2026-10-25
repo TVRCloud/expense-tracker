@@ -3,6 +3,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { ArrowRightLeft, ChevronLeft, ChevronRight, Copy, Mails, Plus, X } from "lucide-react";
 import { toast } from "sonner";
+import { isDefiniteRefusal } from "@/lib/api-client";
 import { formatMinor } from "@/lib/money-format";
 import { getCategoryColor } from "@/lib/category-colors";
 import { Button } from "@/components/ui/button";
@@ -82,7 +83,9 @@ function MoveDialog({ plan, from, onClose }: { plan: EnvelopePlan; from: Envelop
   const [to, setTo] = useState("");
   const [text, setText] = useState("");
   const [overdraw, setOverdraw] = useState(false);
-  // One key per attempt, replaced after a refusal so the next try is a new request.
+  // One key per attempt at one move: kept through anything that may have run (a timeout, 5xx or in-progress conflict, so a
+  // retry of the same move replays instead of moving twice), replaced after a definite refusal and whenever the person
+  // changes the destination, amount or overdraw switch (a different move is a different request).
   const [key, setKey] = useState(() => crypto.randomUUID());
   useEffect(() => {
     setTo("");
@@ -102,7 +105,9 @@ function MoveDialog({ plan, from, onClose }: { plan: EnvelopePlan; from: Envelop
       {
         onSuccess: onClose,
         onError: (err) => {
-          setKey(crypto.randomUUID());
+          // Keep the key unless the server refused outright: after a timeout, a dropped
+          // connection, a 5xx or an in-progress conflict the first try may have run.
+          if (isDefiniteRefusal(err)) setKey(crypto.randomUUID());
           toast.error(err.message);
         },
       }
@@ -119,7 +124,7 @@ function MoveDialog({ plan, from, onClose }: { plan: EnvelopePlan; from: Envelop
               {formatMinor(from.assigned, plan.currency)} assigned, {formatMinor(from.spent, plan.currency)} spent.
             </DialogDescription>
           </DialogHeader>
-          <Select value={to} onValueChange={setTo}>
+          <Select value={to} onValueChange={(v) => { setTo(v); setKey(crypto.randomUUID()); }}>
             <SelectTrigger aria-label="Move to"><SelectValue placeholder="Move to…" /></SelectTrigger>
             <SelectContent>
               {others.map((e) => (
@@ -127,9 +132,9 @@ function MoveDialog({ plan, from, onClose }: { plan: EnvelopePlan; from: Envelop
               ))}
             </SelectContent>
           </Select>
-          <Input aria-label="Amount to move" inputMode="decimal" placeholder="Amount" value={text} onChange={(e) => setText(e.target.value)} autoFocus />
+          <Input aria-label="Amount to move" inputMode="decimal" placeholder="Amount" value={text} onChange={(e) => { setText(e.target.value); setKey(crypto.randomUUID()); }} autoFocus />
           <label className="flex items-center gap-3 text-sm" style={{ color: "var(--ink-2)" }}>
-            <Switch checked={overdraw} onCheckedChange={setOverdraw} aria-label="Allow taking money that is already spent" />
+            <Switch checked={overdraw} onCheckedChange={(v) => { setOverdraw(v); setKey(crypto.randomUUID()); }} aria-label="Allow taking money that is already spent" />
             Allow taking money that is already spent
           </label>
           <DialogFooter>

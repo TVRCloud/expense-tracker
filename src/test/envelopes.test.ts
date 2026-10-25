@@ -422,6 +422,7 @@ describe("envelope mode", () => {
       expect((await User.findById(a).lean<{ baseLocked?: boolean }>())!.baseLocked).toBeFalsy();
       // and a copy that works does lock it
       expect((await copy({ month: "2026-11", from: MONTH })).res.status).toBe(200);
+      expect((await User.findById(a).lean<{ baseLocked?: boolean }>())!.baseLocked).toBe(true);
     });
 
     it("handles January: the month before is December of the year before", async () => {
@@ -543,6 +544,10 @@ describe("envelope mode", () => {
       const statuses = both.map((r) => r.status);
       expect(statuses).toContain(200);
       expect(statuses.every((c) => c === 200 || c === 409)).toBe(true); // the other is replayed, or still in progress
+      // however the two settled, exactly one move ran
+      expect(row((await get()).json, "Fun").assigned).toBe(400);
+      const { default: EnvelopePlan } = await import("@/models/EnvelopePlan");
+      expect((await EnvelopePlan.findOne({ user: a, month: MONTH }).lean<{ moves: unknown[] }>())!.moves).toHaveLength(1);
       await send("dbl-1", 400); // a later retry replays
       expect(row((await get()).json, "Fun").assigned).toBe(400);
 

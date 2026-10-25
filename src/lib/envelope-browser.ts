@@ -41,6 +41,9 @@ export async function browserEnvelopeWrite<S extends z.ZodType>(
       endpoint: `envelopes:${label}`,
       key,
       body: { request: canonicalJson(parsed.data) },
+      // No pendingTtlSeconds on purpose: if the move committed but its answer was never stored, the key must stay
+      // pending (a retry gets 409 in progress) rather than expire and move money a second time. Cost: that one key
+      // is blocked for the idempotency TTL; a new attempt with a new key still works.
       execute: async (): Promise<{ status: number; body: Record<string, unknown> }> => {
         try {
           return { status: 200, body: { data: await run(parsed.data, user) } };
