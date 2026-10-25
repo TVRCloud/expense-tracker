@@ -134,7 +134,7 @@ export interface ITransaction {
   installmentStatus?: "upcoming" | "paid" | "overdue" | "skipped";
   paidAt?: string;
   splitGroupId?: string;
-  source?: "manual" | "sms" | "notification" | "n8n" | "recurring" | "import";
+  source?: "manual" | "sms" | "notification" | "n8n" | "aa" | "recurring" | "import";
   reviewStatus?: "unreviewed" | "confirmed" | "corrected" | "voided" | null;
   isDeleted?: boolean;
   deletedAt?: string;

@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { Types } from "mongoose";
 import connectDB from "@/lib/mongodb";
 import CapturedMessage from "@/models/CapturedMessage";
@@ -9,6 +10,7 @@ import type { AuthUser } from "@/lib/auth-guard";
 import { decryptField, encryptField } from "@/lib/crypto";
 import { createTransaction, TransactionServiceError } from "@/lib/transaction-service";
 import { getBaseCurrency } from "@/lib/base-currency";
+import { DEFAULT_TIME_ZONE, isValidTimeZone, localDateKey } from "@/lib/spend-limit-time";
 import { suggestRefundSafely } from "@/lib/refund-service";
 import { findCashAccount } from "@/lib/account-service";
 import { TRANSFER_CATEGORY } from "@/lib/transfer-service";
@@ -89,6 +91,8 @@ type CaptureDoc = {
   sender?: string;
   receivedAt: Date;
   sourcePriority: number;
+  // A bank-link entry older than the link (see ingestAaTransaction).
+  historical?: boolean;
   outcome: string;
   role: string;
   status: string;
@@ -115,6 +119,7 @@ const QUEUE_COPY: Record<string, string> = {
   unparsed: "Got a bank message that couldn't be read automatically.",
   low_confidence: "Got a bank message but wasn't sure about the details.",
   no_matching_account: "A bank message didn't match any of your accounts. Add the card or account digits to match it next time.",
+  aa_no_matching_account: "A payment from your bank link couldn't be placed because the account it feeds is gone. Choose an account for it, and link the bank account to one of yours again.",
   no_matching_loan: "An EMI payment message didn't match any of your loans.",
   possible_duplicate: "A payment looks like one you already have. Check whether it's the same one.",
   source_conflict: "An SMS disagrees with a transaction you already confirmed.",
@@ -127,7 +132,8 @@ async function queue(capture: CaptureDoc, reason: string, extra: Record<string, 
     { $set: { outcome: "queued", status: "pending", reason, ...extra } }
   );
   const title = reason === "source_conflict" ? "SMS doesn't match your transaction" : "Payment needs review";
-  const body = QUEUE_COPY[reason] ?? "A captured message needs review.";
+  const copyKey = capture.channel === "aa" && reason === "no_matching_account" ? "aa_no_matching_account" : reason;
+  const body = QUEUE_COPY[copyKey] ?? "A captured message needs review.";
   await Notification.create({
     user: capture.user,
     type: "system",
@@ -212,6 +218,10 @@ async function findCrossChannelMatch(capture: CaptureDoc): Promise<Match | null>
 // they were.
 const textOfParse = new WeakMap<MoneyParse, string>();
 
+function channelLabel(channel: CaptureChannel) {
+  return channel === "notification" ? "an app notification" : channel === "n8n" ? "n8n" : channel === "aa" ? "your bank link" : "SMS";
+}
+
 function descriptionOf(parse: MoneyParse) {
   return parse.merchant ?? parse.bankName ?? "Captured payment";
 }
@@ -252,16 +262,19 @@ async function createFromCapture(
         : { originalAmount: parse.amountMinor, originalCurrency: "INR" }),
       category: toCash ? TRANSFER_CATEGORY : "other",
       description: toCash ? "ATM withdrawal" : descriptionOf(parse),
-      note: `Auto-captured from ${capture.channel === "notification" ? "an app notification" : capture.channel === "n8n" ? "n8n" : "SMS"}`,
+      note: `Auto-captured from ${channelLabel(capture.channel)}`,
       date: (parse.date ?? capture.receivedAt).toISOString(),
       tags: [],
       isRecurring: false,
       ruleText: textOfParse.get(parse),
+      // The bank's own record is not put in the review inbox; a possible duplicate still queues.
+      ...(capture.channel === "aa" && capture.historical ? { skipBalance: true } : {}),
       provenance: {
         source: capture.channel,
         sourceCapture: captureId,
         captures: [captureId, ...supporting],
-        reviewStatus: "unreviewed",
+        reviewStatus: capture.channel === "aa" ? null : "unreviewed",
+        ...(capture.channel === "aa" && capture.historical ? { historical: true } : {}),
       },
     });
     const txnId = (transaction as { _id: Types.ObjectId })._id.toString();
@@ -660,4 +673,201 @@ export async function promoteStalePendingSms({ userId, now = new Date() }: { use
     promoted += 1;
   }
   return { promoted };
+}
+
+
+// ---------------------------------------------------------------------------
+// Account Aggregator feed (src/lib/aa-service.ts)
+// ---------------------------------------------------------------------------
+
+export type AaIngestInput = {
+  user: AuthUser;
+  provider: string;
+  /** The provider's id for the transaction: unique per provider, stable across fetches. */
+  providerTxnId: string;
+  /** Our account the feed lands in (the mapping the user chose). */
+  accountId: string;
+  bankName: string;
+  last4: string;
+  type: "income" | "expense";
+  /** Paise of INR. The caller has already refused other currencies. */
+  amountMinor: number;
+  at: Date;
+  narration: string;
+  reference?: string;
+  /** Older than the link: history the balance already shows (no balance change, no alerts). */
+  historical: boolean;
+};
+
+// A transaction not yet tied to any captured message (rows from before `captures` existed have no such field).
+const UNLINKED = {
+  $and: [{ $or: [{ captures: { $size: 0 } }, { captures: { $exists: false } }] }, { sourceCapture: { $exists: false } }],
+};
+
+/**
+ * The same payment already entered by hand (or imported): same account, type,
+ * amount (in rupees, whatever the base currency) and day on the user's clock,
+ * and not yet tied to any captured message. One bank entry claims one row, the
+ * closest in time, and the row's own values are left as they are.
+ */
+async function claimManualTransaction(capture: CaptureDoc, input: AaIngestInput): Promise<string | null> {
+  const owner = await User.findById(input.user.id).select("preferences.timezone").lean<{ preferences?: { timezone?: string } }>();
+  const tzRaw = owner?.preferences?.timezone;
+  const timeZone = tzRaw && isValidTimeZone(tzRaw) ? tzRaw : DEFAULT_TIME_ZONE;
+  const inrBase = (await getBaseCurrency(input.user.id)) === "INR";
+  const at = input.at.getTime();
+  const dayMs = 36 * 60 * 60 * 1000;
+
+  const candidates = await Transaction.find({
+    user: input.user.id,
+    account: input.accountId,
+    type: input.type,
+    isDeleted: { $ne: true },
+    source: { $in: ["manual", "import"] },
+    ...UNLINKED,
+    date: { $gte: new Date(at - dayMs), $lte: new Date(at + dayMs) },
+    ...(inrBase ? { amount: input.amountMinor, originalAmount: { $exists: false } } : { originalCurrency: "INR", originalAmount: input.amountMinor }),
+  })
+    .select("_id date")
+    .limit(20)
+    .lean<{ _id: Types.ObjectId; date: Date }[]>();
+
+  const day = localDateKey(input.at, timeZone);
+  const sameDay = candidates
+    .filter((c) => localDateKey(new Date(c.date), timeZone) === day)
+    .sort((a, b) => Math.abs(new Date(a.date).getTime() - at) - Math.abs(new Date(b.date).getTime() - at));
+  for (const c of sameDay) {
+    // Claim it so two bank entries never take the same row.
+    const claimed = await Transaction.findOneAndUpdate(
+      { _id: c._id, user: input.user.id, ...UNLINKED },
+      { $addToSet: { captures: capture._id } },
+      { new: true, projection: { _id: 1 } }
+    ).lean<{ _id: Types.ObjectId } | null>();
+    if (claimed) return claimed._id.toString();
+  }
+  return null;
+}
+
+function aaHash(provider: string, providerTxnId: string) {
+  return createHash("sha256").update(`aa:${provider}:${providerTxnId}`).digest("hex");
+}
+
+function aaParseOf(input: AaIngestInput): MoneyParse {
+  const parse: MoneyParse = {
+    kind: "money",
+    parserId: "aa",
+    confidence: 1,
+    type: input.type,
+    amountMinor: input.amountMinor,
+    currency: "INR",
+    last4: input.last4,
+    instrument: "account",
+    merchant: input.narration.replace(/\s+/g, " ").trim().slice(0, 120) || undefined,
+    ref: input.reference,
+    bankName: input.bankName,
+    date: input.at,
+    hasTime: true,
+  };
+  textOfParse.set(parse, input.narration);
+  return parse;
+}
+
+// A capture left in "processing" this long (far above the few database calls one entry takes) was cut off by a crash: the next read of the same bank entry finishes it.
+export const AA_PROCESSING_STALE_MS = 30 * 60 * 1000;
+
+async function decideAa(input: AaIngestInput, capture: CaptureDoc, parse: MoneyParse): Promise<IngestResult> {
+  try {
+    const match = await findCrossChannelMatch(capture);
+    if (!match) {
+      const manualId = await claimManualTransaction(capture, input);
+      if (manualId) {
+        await CapturedMessage.updateOne(
+          { _id: capture._id },
+          { $set: { outcome: "duplicate", role: "supporting", status: "resolved", resolvedAt: new Date(), transaction: manualId } }
+        );
+        return { httpStatus: 200, body: { status: "duplicate", captureId: capture._id.toString(), transactionId: manualId, reason: "matches_manual_entry" } };
+      }
+    }
+    return await decideMoney(input.user, capture, parse, input.accountId, { promoting: true });
+  } catch (err) {
+    // Never leave a message stuck in "processing" (see ingestCapture).
+    await CapturedMessage.updateOne(
+      { _id: capture._id, outcome: "processing" },
+      { $set: { outcome: "queued", status: "pending", reason: "processing_error" } }
+    ).catch(() => undefined);
+    throw err;
+  }
+}
+
+/**
+ * One transaction from a bank link, through the same path as an SMS: stored as a
+ * captured message (so a repeat is the same message and changes nothing), matched
+ * against SMS and notification captures and against rows entered by hand, and only
+ * then turned into a transaction. The feed's own id makes a re-sync idempotent. A
+ * capture a crash left in "processing" is picked up again (one reader wins the claim).
+ */
+export async function ingestAaTransaction(input: AaIngestInput): Promise<IngestResult> {
+  await connectDB();
+  const parse = aaParseOf(input);
+  const contentHash = aaHash(input.provider, input.providerTxnId);
+
+  let capture: CaptureDoc;
+  try {
+    const doc = await CapturedMessage.create({
+      user: input.user.id,
+      channel: "aa",
+      sender: input.bankName,
+      rawText: encryptField(
+        `${input.bankName} ${input.last4} ${input.type} ${(input.amountMinor / 100).toFixed(2)} ${input.narration}`,
+        CAPTURE_KEY_ENV
+      ),
+      receivedAt: input.at,
+      contentHash,
+      alsoSeenIn: [],
+      parse: { kind: "money", parserId: "aa", version: PARSER_VERSION, confidence: 1, fields: parse },
+      eventKey: { account: input.accountId, type: input.type, amount: input.amountMinor, ref: input.reference, at: input.at, hasTime: true },
+      sourcePriority: SOURCE_PRIORITY.aa,
+      accountMatch: "digits",
+      ...(input.historical ? { historical: true } : {}),
+      outcome: "processing",
+    });
+    capture = doc.toObject() as CaptureDoc;
+  } catch (err) {
+    if (!isDuplicateKey(err)) throw err;
+    // Seen before (a re-sync, or an overlapping fetch): never a second entry.
+    const existing = await CapturedMessage.findOne({ user: input.user.id, contentHash }).lean<CaptureDoc & { updatedAt?: Date }>();
+    const stuck =
+      existing?.outcome === "processing" &&
+      !existing.transaction &&
+      existing.updatedAt &&
+      Date.now() - new Date(existing.updatedAt).getTime() >= AA_PROCESSING_STALE_MS;
+    if (!existing || !stuck) {
+      return { httpStatus: 200, body: { status: "duplicate", captureId: id(existing?._id) ?? "", transactionId: id(existing?.transaction) } };
+    }
+    // Claim it: the update moves updatedAt, so a second reader's claim finds nothing.
+    const claimed = await CapturedMessage.findOneAndUpdate(
+      { _id: existing._id, outcome: "processing", updatedAt: existing.updatedAt },
+      { $set: { updatedAt: new Date() } },
+      { new: true }
+    ).lean<CaptureDoc>();
+    if (!claimed) return { httpStatus: 200, body: { status: "duplicate", captureId: existing._id.toString() } };
+    // The crash may have come after the transaction was written but before the capture was updated: finish that
+    // instead of booking the payment again (the row is tied to this capture by sourceCapture, or by captures for
+    // a manual row the entry had claimed).
+    const written = await Transaction.findOne({
+      user: input.user.id,
+      $or: [{ sourceCapture: claimed._id }, { captures: claimed._id }],
+    })
+      .select("_id")
+      .lean<{ _id: Types.ObjectId }>();
+    if (written) {
+      await CapturedMessage.updateOne(
+        { _id: claimed._id, outcome: "processing" },
+        { $set: { outcome: "duplicate", role: "supporting", status: "resolved", resolvedAt: new Date(), transaction: written._id } }
+      );
+      return { httpStatus: 200, body: { status: "duplicate", captureId: claimed._id.toString(), transactionId: written._id.toString() } };
+    }
+    capture = claimed;
+  }
+  return decideAa(input, capture, parse);
 }

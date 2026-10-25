@@ -13,6 +13,10 @@ import SpendLimit from "@/models/SpendLimit";
 import SubscriptionDecision from "@/models/SubscriptionDecision";
 import SinkingFund from "@/models/SinkingFund";
 import ManualAsset from "@/models/ManualAsset";
+import AaConsent from "@/models/AaConsent";
+import EnvelopePlan from "@/models/EnvelopePlan";
+import Anomaly from "@/models/Anomaly";
+import Holding from "@/models/Holding";
 import { RESOURCE_NAMES, type RealtimeResource } from "@/lib/realtime/changes";
 
 const MODELS: Record<RealtimeResource, Model<any>> = { // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -29,6 +33,16 @@ const MODELS: Record<RealtimeResource, Model<any>> = { // eslint-disable-line @t
   subscriptions: SubscriptionDecision,
   sinkingFunds: SinkingFund,
   netWorth: ManualAsset,
+  aa: AaConsent,
+  envelopes: EnvelopePlan,
+  anomalies: Anomaly,
+  holdings: Holding,
+};
+
+// Rows a person must not see (and whose bookkeeping writes must not wake the app): bank link consents waiting to be
+// withdrawn at the provider.
+const EXTRA_FILTER: Partial<Record<RealtimeResource, Record<string, unknown>>> = {
+  aa: { withdrawPending: { $ne: true } },
 };
 
 /** Parses `?since=` (epoch ms). Anything missing/non-numeric/<=0 is null. */
@@ -50,7 +64,7 @@ export async function resourcesChangedSince(userId: string, since: Date): Promis
   await connectDB();
   const flags = await Promise.all(
     RESOURCE_NAMES.map(async (name) => {
-      const hit = await MODELS[name].exists({ user: userId, updatedAt: { $gt: since } });
+      const hit = await MODELS[name].exists({ user: userId, updatedAt: { $gt: since }, ...(EXTRA_FILTER[name] ?? {}) });
       return hit ? name : null;
     })
   );

@@ -7,6 +7,7 @@ import { NextResponse } from "next/server";
 
 export const INTEGRATION_ERROR_STATUS = {
   UNAUTHORIZED: 401,
+  FORBIDDEN: 403,
   VALIDATION_ERROR: 400,
   NOT_FOUND: 404,
   CONFLICT: 409,
@@ -17,6 +18,8 @@ export const INTEGRATION_ERROR_STATUS = {
   BASE_CURRENCY_ONLY_TWO_DECIMALS: 400,
   RATE_LIMITED: 429,
   INTERNAL_ERROR: 500,
+  AA_PROVIDER_ERROR: 502,
+  AA_NOT_CONFIGURED: 503,
 } as const;
 
 export type IntegrationErrorCode = keyof typeof INTEGRATION_ERROR_STATUS;

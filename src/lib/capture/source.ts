@@ -1,16 +1,20 @@
 import { createHash } from "crypto";
 
-export type CaptureChannel = "sms" | "notification" | "n8n";
-export type TransactionSource = "manual" | "sms" | "notification" | "n8n" | "recurring" | "import";
+export type CaptureChannel = "sms" | "notification" | "n8n" | "aa";
+export type TransactionSource = "manual" | "sms" | "notification" | "n8n" | "aa" | "recurring" | "import";
 
 // Source of truth, highest first. The phone's own SMS receiver is primary.
-// n8n forwards SMS text too, so it ranks just below. A bank-app notification
+// n8n forwards SMS text too, so it ranks just below. The Account Aggregator
+// feed (src/lib/aa-service.ts) is the bank's own record but carries no
+// merchant wording, so it ranks with n8n: it fills gaps and corrects a bank-app
+// notification, and an SMS still wins. A bank-app notification
 // is only a fallback: it never overrides an SMS, and a transaction created
 // from one is labelled "lower priority, please verify" until an SMS arrives
 // or the user confirms it.
 export const SOURCE_PRIORITY: Record<CaptureChannel, number> = {
   sms: 3,
   n8n: 2,
+  aa: 2,
   notification: 1,
 };
 

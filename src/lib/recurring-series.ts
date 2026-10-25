@@ -167,6 +167,8 @@ export async function cancelRecurringSeries(userId: string, recurringId: string,
         account: accountObjectId,
         user: new Types.ObjectId(userId),
         isDeleted: { $ne: true },
+        // History rows never moved the balance (balanceApplied: false), so they are not counted either.
+        balanceApplied: { $ne: false },
         // Only count paid recurring installments + all regular transactions
         $nor: [{ recurringId: { $exists: true }, installmentStatus: { $nin: ["paid"] } }],
       },

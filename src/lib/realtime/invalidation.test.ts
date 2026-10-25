@@ -29,8 +29,19 @@ describe("INVALIDATION_MAP", () => {
       expect(INVALIDATION_MAP[r].map((k) => k[0])).toContain("net-worth");
     }
   });
+  it("anomaly alerts refresh the alerts list and the inbox", () => {
+    expect(INVALIDATION_MAP.anomalies).toEqual([["anomalies"], ["notifications"]]);
+  });
+  it("holdings refresh their list and net worth", () => {
+    expect(INVALIDATION_MAP.holdings).toEqual([["holdings"], ["net-worth"]]);
+  });
   it("spending refreshes the tax summary", () => {
     expect(INVALIDATION_MAP.transactions.map((k) => k[0])).toContain("tax");
+  });
+  it("envelope plans refresh the envelopes page, and so do spending and budget changes", () => {
+    expect(INVALIDATION_MAP.envelopes).toEqual([["envelopes"]]);
+    expect(INVALIDATION_MAP.transactions.map((k) => k[0])).toContain("envelopes");
+    expect(INVALIDATION_MAP.budgets.map((k) => k[0])).toContain("envelopes");
   });
   it("captures touch reconcile and notifications", () => {
     expect(INVALIDATION_MAP.captures).toEqual([["reconcile"], ["notifications"]]);

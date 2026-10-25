@@ -19,6 +19,34 @@ export async function readJsonBody(req: NextRequest): Promise<{ ok: true; body: 
   }
 }
 
+/** Idempotency conflict wording for writes whose pending key never expires on its own (the money-moving envelope writes). */
+export function conflictMessageCheckFirst(reason: string) {
+  return reason === "fingerprint_mismatch"
+    ? "Idempotency-Key was already used with a different request"
+    : "An earlier request with this Idempotency-Key has not reported back; the change may already have gone through, so check the plan before trying again with a new key";
+}
+
+/**
+ * A deep, key-sorted JSON string of a body. withIdempotency fingerprints only
+ * the top-level keys of what it is given (nested objects lose their own keys),
+ * so a route whose body has nested objects or arrays of objects passes
+ * `{ request: canonicalJson(body) }` as the fingerprint body instead.
+ */
+export function canonicalJson(value: unknown): string {
+  const sort = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(sort);
+    if (v && typeof v === "object") {
+      return Object.fromEntries(
+        Object.entries(v as Record<string, unknown>)
+          .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))
+          .map(([k, val]) => [k, sort(val)])
+      );
+    }
+    return v;
+  };
+  return JSON.stringify(sort(value));
+}
+
 export function conflictMessage(reason: string) {
   return reason === "fingerprint_mismatch"
     ? "Idempotency-Key was already used with a different request"

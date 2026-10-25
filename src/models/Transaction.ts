@@ -51,9 +51,13 @@ const TransactionSchema = new Schema(
     // inbox. Manual rows have no reviewStatus.
     source: {
       type: String,
-      enum: ["manual", "sms", "notification", "n8n", "recurring", "import"],
+      enum: ["manual", "sms", "notification", "n8n", "aa", "recurring", "import"],
       default: "manual",
     },
+    // False on a row written without touching the account balance (a CSV import with "adjust balance" off, a bank
+    // link entry older than the link): the balance already reflected it, so deleting, voiding or correcting the row
+    // must not move the balance either. Absent on every other row, which did move it.
+    balanceApplied: { type: Boolean },
     // The captured message whose values this transaction currently uses.
     sourceCapture: { type: Schema.Types.ObjectId, ref: "CapturedMessage" },
     // Every captured message linked to this payment (primary + supporting).
@@ -77,6 +81,8 @@ const TransactionSchema = new Schema(
     // Tax helper override (src/lib/tax-service.ts). Unset follows the user's
     // deductible categories; true or false wins over them for this row.
     deductible: { type: Boolean },
+    // Household sharing (src/lib/share-service.ts): the editor who added this row to a shared account.
+    addedBy: { type: Schema.Types.ObjectId, ref: "User" },
     isDeleted: { type: Boolean, default: false },
     deletedAt: { type: Date },
     deletedBy: { type: Schema.Types.ObjectId, ref: "User" },

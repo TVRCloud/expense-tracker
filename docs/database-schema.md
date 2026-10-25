@@ -23,7 +23,10 @@ All monetary fields are stored as **integers (cents)** — divide by 100 for dis
 | `preferences.currency` | String | ISO 4217, the base currency every `amount` is in; supported codes only, cannot change once the user has transactions |
 | `preferences.billReminders.enabled` | Boolean | default false; turns on bill due reminders |
 | `preferences.billReminders.leadDays` | Number | 1 to 14, default 3; how many days ahead to remind |
+| `preferences.envelopes.enabled` | Boolean | default false; turns on envelope mode |
 | `preferences.tax.deductibleCategories` | [String] | lower-case category names that count as deductible in the tax summary, up to 50 |
+| `preferences.anomalies.enabled` | Boolean | default true; unusual-spend alerts |
+| `preferences.anomalies.mutedCategories` | [String] | lower-case category names that raise no alerts, up to 50 |
 | `preferences.weeklyReview.enabled` | Boolean | default false; turns on the weekly review notification |
 | `preferences.weeklyReview.day` | Number | 0 (Sunday) to 6, default 1 (Monday); the weekday it arrives, from 09:00 on the user's clock |
 | `passwordResetToken` | String | hashed, single-use |
@@ -86,7 +89,7 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `recurringId`, `recurrence*`, `installmentIndex`, `installmentStatus`, `paidAt` | | recurring series fields |
 | `splitGroupId` | ObjectId | shared by split-purchase siblings (2 to 20 lines, amounts add up to the purchase) |
 | `attachments` | [String] | ids of the `receipts` on this row, at most 5 |
-| `source` | String | `manual\|sms\|notification\|n8n\|recurring\|import`, default `manual`. `import` rows come from the CSV import (`/api/integrations/import/commit`) |
+| `source` | String | `manual\|sms\|notification\|n8n\|aa\|recurring\|import`, default `manual`. `import` rows come from the CSV import (`/api/integrations/import/commit`); `aa` rows from a bank link ([account-aggregator.md](account-aggregator.md)) |
 | `sourceCapture` | ObjectId | ref: CapturedMessage, the message whose values are in use |
 | `captures` | [ObjectId] | every captured message for this payment |
 | `reviewStatus` | String | `unreviewed\|confirmed\|corrected\|voided`, null for manual rows |
@@ -94,7 +97,9 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `refundStatus` | String | `suggested\|confirmed\|rejected`, null otherwise. Only `confirmed` nets the pair out of stats and budgets |
 | `refundPriorCategory` | String | The category before the expense's was carried over; restored when a confirmed refund is unlinked |
 | `reviewedAt` / `reviewedBy` | Date / ObjectId | |
+| `addedBy` | ObjectId | ref: User, the household editor who added the row to a shared account (unset otherwise) |
 | `deductible` | Boolean | Tax helper override on an expense: `true` or `false` wins over the user's deductible categories, unset follows them |
+| `balanceApplied` | Boolean | `false` on a row written without moving the account balance (CSV import with adjust balance off, bank link entry older than the link): delete, void and correct never move the balance for it. Absent on every other row; kept in backups |
 | `isDeleted` | Boolean | soft delete |
 | `deletedAt` | Date | |
 | `deletedBy` | ObjectId | ref: User |
@@ -154,6 +159,24 @@ One row per user per local day: what net worth was the last time it was worked o
 | `assets` | Number | cents |
 | `liabilities` | Number | cents, positive |
 | `netWorth` | Number | cents, assets minus liabilities |
+
+## anomalies
+
+Unusual-spend alerts ([src/lib/anomaly-service.ts](../src/lib/anomaly-service.ts)). Realtime resource `anomalies`. Kept 365 days.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | |
+| `kind` | String | `large_spend`, `duplicate_charge`, `category_jump` |
+| `transaction` | ObjectId | the expense (not set for a category jump) |
+| `category` | String | |
+| `amount` | Number | minor units of the base currency: the expense, or the month to date for a jump |
+| `data` | Mixed | what the rule compared (typical amount, other transaction, baseline, month to date, month) |
+| `status` | String | `open` (default), `dismissed`, `confirmed_mine`, `reported` |
+| `dedupKey` | String | `large:<txn>`, `dup:<txnA>:<txnB>` (the two ids, sorted), `jump:<category>:<yyyy-mm>` |
+| `resolvedAt` | Date | when it was answered or retired |
+
+Indexes: unique `{user, dedupKey}` (one alert per cause, so a retry never alerts twice), `{user, status, createdAt}`, sparse `{user, transaction}`, TTL on `createdAt` (365 days).
 
 ## subscription_decisions
 
@@ -266,6 +289,42 @@ Money set aside for a cost on a due date. Progress (`remaining`, `percent`, `mon
 
 Index `{user, isDeleted, dueDate}`.
 
+## envelope_plans
+
+Envelope mode (zero-based budgeting): one document per user and month. Totals, `spent` and `left` are computed on read, never stored. Written only by single-document atomic updates (pipeline updates with the cap in the filter), so a move cannot take more than the source has assigned (or below what it had spent at the moment of the move, unless overspending is allowed), and two requests at once cannot spend the same money.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | |
+| `month` | String | `YYYY-MM` |
+| `income` | Number | expected income, minor units of the base currency |
+| `envelopes[]` | `{category, assigned}` | category is the exact budget category name, `assigned` minor units, at most 60 |
+| `moves[]` | `{from, to, amount, at}` | the last 50 moves between envelopes |
+| `createdAt` / `updatedAt` | Date | set by the updates themselves (no `timestamps` option) |
+
+Unique index `{user, month}`. Counted as money data by `hasMoneyData` (a plan with income or an assigned amount locks the base currency).
+
+## holdings
+
+An investment the person holds (stock, mutual fund, gold, fixed deposit, PPF, other). Kept apart from the ledger: no transaction is posted for it. It only feeds net worth. A fixed deposit's value is worked out on read from its terms (`src/lib/holding-math.ts`), never stored.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | |
+| `name` | String | 1 to 60 |
+| `kind` | String | `stock`, `mutual_fund`, `gold`, `fixed_deposit`, `ppf`, `other` |
+| `note` | String | up to 200 |
+| `unitsMicro` | Number | units in millionths (an integer), at most 1e15 |
+| `investedAmount` | Number | minor units of the base currency; a fixed deposit's principal |
+| `currentValue` | Number | the latest manual value (minor units); for a fixed deposit only the value at creation |
+| `valueUpdatedAt` | Date | |
+| `history` | `[{value, at}]` | the last 100 manual values, oldest first |
+| `sip` | `{amount, dayOfMonth, startDay, active}` | `startDay` is a `YYYY-MM-DD` day, not an instant |
+| `fd` | `{principal, rateBps, startDay, maturityDay}` | simple interest on actual days over 365 |
+| `isArchived` / `archivedAt` | Boolean / Date | soft delete |
+
+Index `{user, isArchived, createdAt}`. At most 500 live holdings per user. A holding counts as money data, so the first one locks the base currency.
+
 ## notifications
 
 | Field | Type | Notes |
@@ -320,7 +379,7 @@ Every bank message received from the phone (SMS / notification) or n8n. Nothing 
 | Field | Type | Notes |
 |-------|------|-------|
 | `user` | ObjectId | |
-| `channel` | String | `sms\|notification\|n8n` |
+| `channel` | String | `sms\|notification\|n8n\|aa` |
 | `apiKey` | ObjectId | ref: ApiKey, which caller sent it |
 | `sender` / `packageName` | String | DLT sender id, or the bank app |
 | `rawText` | `{iv, tag, ciphertext}` | AES-256-GCM with `CAPTURE_ENCRYPTION_KEY` |
@@ -329,7 +388,8 @@ Every bank message received from the phone (SMS / notification) or n8n. Nothing 
 | `alsoSeenIn` | [String] | channels the phone merged into this upload |
 | `parse` | Object | `{kind, parserId, version, confidence, fields}` |
 | `eventKey` | Object | `{account, type, amount, ref, at, hasTime}` for cross-channel matching |
-| `sourcePriority` | Number | sms 3, n8n 2, notification 1 |
+| `sourcePriority` | Number | sms 3, n8n 2, aa 2, notification 1 |
+| `historical` | Boolean | `aa` only: older than the link, so creating a transaction from it (also from the review inbox) changes no balance and fires no alerts |
 | `accountMatch` | String | `digits` or `bank`: how the account was picked (see docs/reconcile.md) |
 | `suggestedAccount` | ObjectId | ref: Account, likely account for an unmatched message |
 | `role` | String | `primary\|supporting` |
@@ -395,6 +455,27 @@ One live CSV import per user and account.
 | `user` / `account` | String | unique together: the lock |
 | `expiresAt` | Date | TTL, 2 minutes, frees a lock if the run was killed |
 
+## shares
+
+Household sharing (`src/lib/share-service.ts`, [household.md](household.md)): an owner shares accounts, and optionally budgets, with one other person.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `owner` | ObjectId | ref: User, the person whose accounts are shared |
+| `member` | ObjectId | ref: User, set when the invite is accepted |
+| `memberEmail` | String | lower-case address the invite is for |
+| `accountIds` | ObjectId[] | the owner's accounts that are shared (max 20) |
+| `includeBudgets` | Boolean | the owner's budgets are readable too |
+| `role` | String | `viewer\|editor` |
+| `status` | String | `pending\|active\|revoked\|declined` (an unaccepted invite past `inviteExpiresAt` is ended on the owner's next call) |
+| `inviteTokenHash` | String | sha256 of the one-time invite code; removed when the invite is accepted, declined, revoked or expires |
+| `inviteExpiresAt` | Date | 7 days after the invite (or after a new code) |
+| `acceptedAt` / `endedAt` | Date | |
+| `endedBy` | String | `owner\|member\|account_deleted` |
+| `cleanupAt` | Date | TTL: ended shares are removed 90 days after they end |
+
+Indexes: unique `{owner, memberEmail}` where status is `pending` or `active` (one live share per owner and address), `{member, status}`, `{memberEmail, status}`, `{owner, status}`, `{accountIds, status}`, TTL `{cleanupAt}`. Shares are not part of a backup.
+
 ## exchange_rates
 
 One cached rate table per base currency (open.er-api.com), refreshed after 24 hours by `src/lib/exchange-rate-service.ts`; rows are kept so an outage can fall back to the last table for up to 30 days.
@@ -406,6 +487,32 @@ One cached rate table per base currency (open.er-api.com), refreshed after 24 ho
 | `rateDate` | Date | the provider's own update time |
 | `fetchedAt` | Date | when we fetched it |
 | `lastAttemptAt` | Date | set when a refresh failed; no new attempt for 10 minutes (a row can exist with no table yet) |
+
+## aa_consents
+
+Bank links through an Account Aggregator ([account-aggregator.md](account-aggregator.md)). Not in backups. Realtime resource `aa`.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | |
+| `provider` | String | the provider's name (`sandbox` today) |
+| `consentHandle` | `{iv, tag, ciphertext}` | the provider's opaque handle, AES-256-GCM with `CAPTURE_ENCRYPTION_KEY`; never returned to a client |
+| `handleHash` | String | sha256 of the handle |
+| `status` | String | `pending\|active\|paused\|revoked\|expired\|failed` |
+| `expiresAt` | Date | |
+| `activeAt` | Date | first time it became active (the person approved it): bank entries before it are history |
+| `linkedAccounts` | [Object] | `{_id, providerRef, bankName, maskedNumber (last four digits only), mappedAccount (ObjectId ref Account, null = not read), syncedUntil, syncedPartial}` |
+| `lastSyncAt` | Date | |
+| `lastError` | String | a short code (`provider_error`, `revoked_at_provider`, `not_found_at_provider`, `revoke_not_confirmed`, `provider_unavailable`), never a provider message |
+| `revokedAt` | Date | |
+| `lastRetryAt` | Date | last sweep attempt to withdraw an `withdrawPending` consent (oldest first; failures move to the back) |
+| `withdrawPending` | Boolean | this grant is waiting to be withdrawn at the provider (the person deleted their account first, or the five-link cap dropped it and the revoke failed): kept (encrypted handle) for the cron sweep to withdraw and then delete; never listed, counted toward the cap, synced or reachable by a user route |
+
+Indexes: `{user, status, createdAt}`, `{status, lastSyncAt}`, `{handleHash}`
+
+## aa_account_claims
+
+One row per account of the user that a live bank link feeds: the atomic "one feed per account" guard (unique `{user, account}`). Released when the mapping goes, the consent ends or the account is archived; a stale one can be taken over. Not in backups, no realtime resource. Fields: `user`, `account`, `consent` (the consent holding it), `linkedId` (the linked account inside that consent).
 
 ## credit_statements
 
@@ -430,4 +537,4 @@ One cached rate table per base currency (open.er-api.com), refreshed after 24 ho
 
 ## Backup files
 
-No collection. A backup is built from the user's rows (accounts, transactions, budgets, goals, loans, repayments, rules, sinking funds, manual assets, subscription decisions, spend limit) and returned to the caller as an encrypted file; a restore inserts rows with the caller as `user`. Format and rules: [backup.md](backup.md).
+No collection. A backup is built from the user's rows (accounts, transactions, budgets, goals, loans, repayments, rules, sinking funds, manual assets, holdings, subscription decisions, spend limit) and returned to the caller as an encrypted file; a restore inserts rows with the caller as `user`. Format and rules: [backup.md](backup.md).

@@ -12,6 +12,7 @@ What each doc answers and when to read it. For "where is feature X in the code",
 | [api-contracts.md](api-contracts.md) | Browser API paths, auth and shapes | Changing or calling a `/api/*` route |
 | [n8n-integration.md](n8n-integration.md) | The API-key surface `/api/integrations/*`: auth, idempotency, errors, rate limits, app updates | Working on n8n or the mobile app's API |
 | [reconcile.md](reconcile.md) | How bank messages become transactions; source priority; dedupe; corrections | Touching capture, review or corrections |
+| [account-aggregator.md](account-aggregator.md) | The bank link framework: consent flow, sync, dedupe against SMS and manual entries, security, what is needed to go live | Touching `aa` code or planning a real AA provider |
 | [realtime.md](realtime.md) | SSE and change-stream events, invalidation map, polling fallback | Touching live updates |
 | [authentication.md](authentication.md) | Login, session tracking, guards, password reset, roles | Touching auth or access rules |
 | [notifications.md](notifications.md) | In-app notifications and web push | Touching alerts or push |
@@ -63,7 +64,7 @@ Reconcile (`/reconcile`) and Landing (`/`) have no page spec; see [reconcile.md]
 3. [database-schema.md](database-schema.md) and [authentication.md](authentication.md).
 4. The page spec and feature `CLAUDE.md` for the area you will change.
 5. [reconcile.md](reconcile.md) and [n8n-integration.md](n8n-integration.md) if you touch bank messages or the app API.
-6. [backup.md](backup.md) for the backup file format and its threat model, [realtime.md](realtime.md), [notifications.md](notifications.md), [pwa.md](pwa.md) as needed.
+6. [backup.md](backup.md) for the backup file format and its threat model, [household.md](household.md) for sharing accounts and its threat model, [realtime.md](realtime.md), [notifications.md](notifications.md), [pwa.md](pwa.md) as needed.
 7. [contributing.md](contributing.md) before you open a PR; skim [adr/README.md](adr/README.md) for past decisions.
 
 Note: some older docs lag the code; [feature-map.md](feature-map.md#known-doc-drift) lists the known gaps.

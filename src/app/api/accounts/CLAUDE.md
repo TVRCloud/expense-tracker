@@ -3,7 +3,7 @@ Purpose: account CRUD and balance recalculation.
 
 ## Files
 - route.ts: list and create. [id]/route.ts: get, patch, delete (archives).
-- [id]/recalculate/route.ts: recomputes the balance from transactions.
+- [id]/recalculate/route.ts: recomputes the balance from transactions, leaving out history rows (`balanceApplied: false`, which never moved it).
 
 ## Talks to
 - Libs: account-service (create, update, archive, shared with the integration routes), ledger. Models: Account, Transaction.

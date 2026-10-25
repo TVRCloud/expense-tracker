@@ -15,6 +15,7 @@ Purpose: review inbox for auto-captured transactions and queued bank messages; c
 
 ## Rules and gotchas
 - Business rules live in src/lib/reconcile and src/lib/capture; keep web and phone routes on those shared functions.
+- Source `aa` (a bank link, [docs/account-aggregator.md](../../../docs/account-aggregator.md)) has its own badge ("Bank link"); confirming a queued `aa` capture older than the link writes it with no balance change.
 - Correction rows are insert-only. Transfers, split, recurring and statement/loan-linked rows return 409.
 
 ## Tests

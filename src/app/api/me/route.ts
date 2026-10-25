@@ -8,6 +8,8 @@ import { z } from "zod";
 import { forgetUserSessions } from "@/lib/perf/session-cache";
 import { forgetUserKeys } from "@/lib/integrations/auth";
 import { deleteAllReceiptsOfUser } from "@/lib/receipt-service";
+import { deleteAaDataForUser, markAllConsentsWithdrawPending, purgeAaRecordsOfDeletedUser } from "@/lib/aa-service";
+import { revokeAllSharesOfUser } from "@/lib/share-service";
 
 const updateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
@@ -68,9 +70,19 @@ export async function DELETE() {
     await connectDB();
     const existing = await User.findById(user.id).select("email").lean<{ email: string }>();
     if (!existing) return NextResponse.json({ error: "User not found" }, { status: 404 });
+    // Bank links: withdrawn at the provider first, before anything is deleted for good (a link that cannot be withdrawn stops the deletion here), so nothing keeps reading the account.
+    const aa = await deleteAaDataForUser(user.id);
+    if (aa.remaining > 0) {
+      return NextResponse.json(
+        { error: "A bank link could not be withdrawn right now, so the account was not deleted. Remove the link from the Bank links screen, or try again later." },
+        { status: 409 }
+      );
+    }
     // Private receipt images go for good. First, while the account is still active: if this
     // fails the request fails and nothing is locked, so it can simply be tried again.
     await deleteAllReceiptsOfUser(user.id);
+    // Household sharing: every share they own or belong to ends now (also retryable while active).
+    await revokeAllSharesOfUser(user.id, existing.email);
     // Tombstone the email so the same address can register a fresh account.
     await User.findByIdAndUpdate(user.id, {
       $set: {
@@ -86,13 +98,26 @@ export async function DELETE() {
     await Session.updateMany({ user: user.id, isActive: true }, { $set: { isActive: false } });
     forgetUserSessions(user.id);
     forgetUserKeys(user.id);
-    // Once more, last: catches a receipt added by a request that was already running. The account
+    // Once more, last: catches an invite accepted by a request that was already running.
+    await revokeAllSharesOfUser(user.id, existing.email).catch((err) => logger.error({ err, userId: user.id }, "final share revoke failed"));
+    // And a receipt added by a request that was already running. The account
     // is locked by now, so a failure here is retried once and then only logged.
     try {
       await deleteAllReceiptsOfUser(user.id);
     } catch {
       await deleteAllReceiptsOfUser(user.id).catch((err) => logger.error({ err, userId: user.id }, "final receipt purge failed"));
     }
+    // Same for a bank link added by a request that was already running. The account is gone by now, so whatever
+    // still could not be withdrawn is logged (for withdrawing by hand) and its record removed.
+    await deleteAaDataForUser(user.id)
+      .then(async (r) => {
+        if (r.remaining > 0) await purgeAaRecordsOfDeletedUser(user.id);
+      })
+      .catch(async (err) => {
+        logger.error({ err: err instanceof Error ? err.name : "unknown", userId: user.id }, "final bank link purge failed");
+        // Hand whatever is left to the sweep (hidden, retried) rather than leave it active with no one reading it.
+        await markAllConsentsWithdrawPending(user.id).catch((e) => logger.error({ err: e instanceof Error ? e.name : "unknown", userId: user.id }, "could not hand bank links to the withdrawal sweep"));
+      });
 
     return NextResponse.json({ data: { message: "Account deleted" } });
   } catch (err) {
