@@ -8,6 +8,7 @@ import { z } from "zod";
 import { forgetUserSessions } from "@/lib/perf/session-cache";
 import { forgetUserKeys } from "@/lib/integrations/auth";
 import { deleteAllReceiptsOfUser } from "@/lib/receipt-service";
+import { deleteAaDataForUser } from "@/lib/aa-service";
 
 const updateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
@@ -71,6 +72,8 @@ export async function DELETE() {
     // Private receipt images go for good. First, while the account is still active: if this
     // fails the request fails and nothing is locked, so it can simply be tried again.
     await deleteAllReceiptsOfUser(user.id);
+    // Bank links: withdrawn at the provider (best effort) and the records removed, so nothing keeps reading the account.
+    await deleteAaDataForUser(user.id);
     // Tombstone the email so the same address can register a fresh account.
     await User.findByIdAndUpdate(user.id, {
       $set: {
@@ -93,6 +96,7 @@ export async function DELETE() {
     } catch {
       await deleteAllReceiptsOfUser(user.id).catch((err) => logger.error({ err, userId: user.id }, "final receipt purge failed"));
     }
+    await deleteAaDataForUser(user.id).catch((err) => logger.error({ err, userId: user.id }, "final bank link purge failed"));
 
     return NextResponse.json({ data: { message: "Account deleted" } });
   } catch (err) {

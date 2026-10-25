@@ -362,6 +362,22 @@ Authenticated with an integration API key (`Authorization: Bearer <key>`), like 
 
 `resource` is one of `transactions`, `accounts`, `budgets`, `goals`, `loans`, `notifications`, `captures`.
 
+## Account Aggregator (bank link, integrations only)
+
+Integration routes only, with the integration envelope. What it does and does not do (framework with a sandbox provider; not live): [account-aggregator.md](account-aggregator.md). With `AA_PROVIDER` unset, every route except the status one answers `503 AA_NOT_CONFIGURED`. A consent is shown as `{id, provider, status, createdAt, expiresAt, lastSyncAt, lastError, linkedAccounts: [{id, bankName, last4, mappedAccountId, syncedUntil}]}`; the provider's handle is never returned.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/integrations/aa` | `{configured, provider, consents[]}` (newest 20). Works when bank linking is off |
+| POST | `/api/integrations/aa/consents` | `Idempotency-Key` required. 201 `{consent, redirectUrl}`: the provider's consent screen address, in this answer only (a replayed request answers `redirectUrl: null`). 409 `reason: limit` at 5 live (pending, active, paused) consents; 502 `AA_PROVIDER_ERROR` when the provider cannot be reached (nothing stored) |
+| POST | `/api/integrations/aa/consents/:id/refresh` | Reads the status from the provider and fills `linkedAccounts` (auto-mapped by last four digits and bank). 200 `{consent}`. Safe to repeat. A consent the provider no longer knows becomes `failed` |
+| PATCH | `/api/integrations/aa/consents/:id/accounts/:linkedId` | Body `{accountId \| null}`; `Idempotency-Key` required. Feeds that linked bank account into one of your accounts, or stops feeding it. 404 for an account that is not yours; 409 when another linked account of the consent already feeds it. Unmapped linked accounts are never read |
+| POST | `/api/integrations/aa/consents/:id/sync` | Reads the new transactions now. 200 `{sync: {consentId, status, fetched, created, updated, duplicates, queued, skippedCurrency, skippedInvalid, unmappedAccounts, partial, error?, skipped?}}`; `partial: true` means a limit stopped it and the next call resumes. 429 with `retryAfterSeconds` within 5 minutes of the last read; 409 when the consent is not active |
+| POST | `/api/integrations/aa/consents/:id/revoke` | `Idempotency-Key` required. 200 `{consent, providerRevoked}`; `providerRevoked: false` means the provider did not confirm (the consent is still marked `revoked`, `lastError: revoke_not_confirmed`). Imported transactions stay |
+| GET | `/api/cron/aa-sync` | `Authorization: Bearer $CRON_SECRET`. Reads every active consent not read in the last hour; `{ok, checked, created, skipped?}`. A no-op while bank linking is off |
+
+Transactions it adds have `source: aa` and appear in the list endpoints like any other. A consent change is the `aa` realtime resource.
+
 ## Backup and restore
 
 Integration routes only, with the integration envelope. Design and threat model: [backup.md](backup.md). Both are `POST` because the passphrase must be in the body. The passphrase is 12 to 256 characters.

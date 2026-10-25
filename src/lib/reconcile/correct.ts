@@ -182,7 +182,7 @@ export type CorrectInput = {
   actor: AuthUser;
   capturedMessageId?: string;
   /** Set when a new capture's values replace the current ones (sms_override). */
-  sourceUpdate?: { source: "sms" | "n8n" | "notification"; sourceCapture: string };
+  sourceUpdate?: { source: "sms" | "n8n" | "notification" | "aa"; sourceCapture: string };
 };
 
 export async function correctTransaction(input: CorrectInput) {

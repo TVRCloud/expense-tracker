@@ -11,7 +11,7 @@ export type SourceInfo = { label: string; priority: "primary" | "secondary" | "f
 
 export type CaptureView = {
   id: string;
-  channel: "sms" | "notification" | "n8n";
+  channel: "sms" | "notification" | "n8n" | "aa";
   source: SourceInfo;
   sender: string | null;
   packageName: string | null;

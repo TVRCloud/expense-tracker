@@ -1,4 +1,4 @@
-import { BellRing, CircleAlert, CircleCheck, MessageSquareText, PencilLine, Workflow } from "lucide-react";
+import { BellRing, CircleAlert, CircleCheck, Landmark, MessageSquareText, PencilLine, Workflow } from "lucide-react";
 import type { SourceInfo } from "@/features/reconcile/hooks/useReconcile";
 
 // Small, consistent markers for where a transaction's values came from and
@@ -7,6 +7,7 @@ import type { SourceInfo } from "@/features/reconcile/hooks/useReconcile";
 const SOURCE_META: Record<string, { label: string; icon: React.ElementType; color: string }> = {
   sms: { label: "SMS", icon: MessageSquareText, color: "var(--violet)" },
   n8n: { label: "n8n", icon: Workflow, color: "var(--violet)" },
+  aa: { label: "Bank link", icon: Landmark, color: "var(--violet)" },
   notification: { label: "Notification", icon: BellRing, color: "var(--amber)" },
 };
 

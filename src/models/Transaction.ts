@@ -51,7 +51,7 @@ const TransactionSchema = new Schema(
     // inbox. Manual rows have no reviewStatus.
     source: {
       type: String,
-      enum: ["manual", "sms", "notification", "n8n", "recurring", "import"],
+      enum: ["manual", "sms", "notification", "n8n", "aa", "recurring", "import"],
       default: "manual",
     },
     // The captured message whose values this transaction currently uses.

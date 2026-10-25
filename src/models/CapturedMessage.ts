@@ -17,7 +17,7 @@ const EncryptedFieldSchema = new Schema(
 const CapturedMessageSchema = new Schema(
   {
     user: { type: Schema.Types.ObjectId, ref: "User", required: true },
-    channel: { type: String, enum: ["sms", "notification", "n8n"], required: true },
+    channel: { type: String, enum: ["sms", "notification", "n8n", "aa"], required: true },
     apiKey: { type: Schema.Types.ObjectId, ref: "ApiKey" },
     // DLT sender id for SMS (e.g. "VM-HDFCBK"), or the app name for a notification.
     sender: { type: String },

@@ -28,6 +28,7 @@ import { MAX_MINOR_AMOUNT } from "@/lib/currency";
 export const SOURCE_LABEL: Record<string, { label: string; priority: "primary" | "secondary" | "fallback" | "manual" }> = {
   sms: { label: "SMS (source of truth)", priority: "primary" },
   n8n: { label: "n8n (forwarded SMS)", priority: "secondary" },
+  aa: { label: "Bank link (Account Aggregator)", priority: "secondary" },
   notification: { label: "App notification (lower priority, verify)", priority: "fallback" },
   manual: { label: "Added by you", priority: "manual" },
 };
@@ -383,7 +384,7 @@ export async function resolveCapture(params: {
   const { userId, captureId, input, actor, via } = params;
   await connectDB();
   const capture = await loadPendingCapture(userId, captureId);
-  const channel = capture.channel as "sms" | "n8n" | "notification";
+  const channel = capture.channel as "sms" | "n8n" | "notification" | "aa";
 
   if (input.action === "create") {
     // The amount is what the bank message says, in rupees. With another base

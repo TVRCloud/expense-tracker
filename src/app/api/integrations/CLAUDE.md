@@ -21,6 +21,7 @@ Purpose: API-key surface for n8n and the Android companion app. Contracts: [docs
 - backup (POST: passphrase-encrypted file of the caller's data) and backup/restore (POST: dry run or merge-only restore, `Idempotency-Key` unless dry run); passphrase in the body, never logged. See [docs/backup.md](../../../../docs/backup.md).
 - export/transactions (GET a CSV file) and import/preview, import/commit (POST a CSV, dry run then write, commit needs `Idempotency-Key`): over transaction-export.ts and transaction-import.ts.
 - currencies (GET supported currencies, base and rates; PATCH base while there are no transactions): over currency.ts, exchange-rate-service and base-currency. `transactions` POST also takes `originalAmount`, `originalCurrency`, `rate` for foreign spend.
+- aa (GET status, `consents` POST, `consents/[id]/refresh` POST, `consents/[id]/sync` POST, `consents/[id]/revoke` POST, `consents/[id]/accounts/[linkedId]` PATCH): bank links through an Account Aggregator, framework only; `AA_NOT_CONFIGURED` (503) when `AA_PROVIDER` is unset. See [docs/account-aggregator.md](../../../../docs/account-aggregator.md).
 - stats (month totals, daily, history) and notifications (list, `[id]` PATCH, read-all POST).
 - events (SSE), changes (`?since=` polling): realtime for the app.
 - app-update, app-update/download: newest Android release and a signed APK URL.

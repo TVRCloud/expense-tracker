@@ -140,7 +140,7 @@ const transactionSchema = z.object({
   installmentStatus: nul(z.enum(["upcoming", "paid", "overdue", "skipped"])),
   paidAt: nul(when),
   splitGroupId: nul(oid),
-  source: nul(z.enum(["manual", "sms", "notification", "n8n", "recurring", "import"])),
+  source: nul(z.enum(["manual", "sms", "notification", "n8n", "aa", "recurring", "import"])),
   reviewStatus: nul(z.enum(["unreviewed", "confirmed", "corrected", "voided"])),
   reviewedAt: nul(when),
   refundOf: nul(oid),

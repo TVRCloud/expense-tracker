@@ -137,10 +137,14 @@ export const transactionCreateSchema = z
 // transactionCreateSchema, so browser and integration callers can't set it
 // from a request body; only server code (src/lib/capture/*) passes it.
 export type TransactionProvenance = {
-  source: "sms" | "notification" | "n8n" | "manual" | "import";
+  source: "sms" | "notification" | "n8n" | "aa" | "manual" | "import";
   sourceCapture?: string;
   captures?: string[];
   reviewStatus?: "unreviewed" | "confirmed" | null;
+  // A bank-link row older than the link: history the balance already reflects.
+  // It leaves budget and spend limit alerts and the round-up alone (callers
+  // also pass skipBalance), but categorise rules still apply.
+  historical?: boolean;
 };
 
 export type CreateTransactionInput = z.infer<typeof transactionCreateSchema> & {
@@ -305,7 +309,8 @@ async function resolveAmount(
 
 export async function createTransaction(input: CreateTransactionInput): Promise<CreateTransactionResult> {
   const { userId, actor, accountId, transferToId, provenance, ruleText, skipBalance, ...restIn } = input;
-  const quiet = provenance?.source === "import";
+  const isImport = provenance?.source === "import";
+  const quiet = isImport || provenance?.historical === true;
   await connectDB();
 
   const account = await Account.findOne({ _id: accountId, user: userId, isArchived: { $ne: true } });
@@ -340,7 +345,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   // bank message. Plain transactions only, and never an import (the preview
   // shows the file's own category and description, so they are written as shown); splits, series and transfers are
   // always exactly what was asked for.
-  if (!rest.splits && !rest.isRecurring && rest.type !== "transfer" && !quiet) {
+  if (!rest.splits && !rest.isRecurring && rest.type !== "transfer" && !isImport) {
     const overrides = await ruleOverridesForTransaction(userId, {
       category: rest.category,
       description: rest.description,

@@ -1,0 +1,614 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import mongoose from "mongoose";
+import { MongoMemoryServer } from "mongodb-memory-server";
+import { NextRequest } from "next/server";
+
+vi.mock("@/lib/redis", () => ({ redis: null }));
+
+process.env.CAPTURE_ENCRYPTION_KEY = "test-capture-encryption-key-at-least-32-chars";
+process.env.CRON_SECRET = "test-cron-secret-aa";
+
+let mongod: MongoMemoryServer;
+
+beforeAll(async () => {
+  mongod = await MongoMemoryServer.create();
+  process.env.MONGODB_URI = mongod.getUri();
+  const { default: connectDB } = await import("@/lib/mongodb");
+  await connectDB();
+});
+
+afterEach(async () => {
+  const { resetAuthCacheForTests } = await import("@/lib/integrations/auth");
+  const { resetRateLimitWindowsForTests } = await import("@/lib/integrations/rate-limit");
+  const { sandboxControl } = await import("@/lib/aa/sandbox");
+  resetAuthCacheForTests();
+  resetRateLimitWindowsForTests();
+  sandboxControl.reset();
+  delete process.env.AA_PROVIDER;
+  await Promise.all(Object.values(mongoose.connection.collections).map((c) => c.deleteMany({})));
+});
+
+afterAll(async () => {
+  await mongoose.disconnect();
+  await mongod.stop();
+});
+
+const KEY_A = "test-aa-api-key-user-a";
+const KEY_B = "test-aa-api-key-user-b";
+
+type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+describe("Account Aggregator sync (framework, sandbox provider)", () => {
+  let a: string;
+  let b: string;
+  let n = 0;
+
+  beforeEach(async () => {
+    process.env.N8N_RATE_LIMIT = "1000";
+    const { default: User } = await import("@/models/User");
+    const { default: ApiKey } = await import("@/models/ApiKey");
+    const { hashKey } = await import("@/lib/integrations/auth");
+    const ua = await User.create({ name: "A", email: `a${Date.now()}${Math.random()}@x.com`, password: "h", isActive: true });
+    const ub = await User.create({ name: "B", email: `b${Date.now()}${Math.random()}@x.com`, password: "h", isActive: true });
+    await ApiKey.create({ user: ua._id, label: "phone", keyHash: hashKey(KEY_A), lastFour: KEY_A.slice(-4) });
+    await ApiKey.create({ user: ub._id, label: "phone", keyHash: hashKey(KEY_B), lastFour: KEY_B.slice(-4) });
+    a = ua._id.toString();
+    b = ub._id.toString();
+  });
+
+  function req(path: string, method: string, key = KEY_A, body?: unknown, headers: Record<string, string> = {}) {
+    n += 1;
+    return new NextRequest(`http://localhost/api/integrations/${path}`, {
+      method,
+      headers: { authorization: `Bearer ${key}`, "content-type": "application/json", ...headers },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  }
+  const idem = (extra = "") => ({ "idempotency-key": `aa-${n + 1}${extra}` });
+
+  async function status(key = KEY_A) {
+    const { GET } = await import("@/app/api/integrations/aa/route");
+    return GET(req("aa", "GET", key), {});
+  }
+  async function create(key = KEY_A, headers: Record<string, string> = idem()) {
+    const { POST } = await import("@/app/api/integrations/aa/consents/route");
+    return POST(req("aa/consents", "POST", key, undefined, headers), {});
+  }
+  async function refresh(id: string, key = KEY_A) {
+    const { POST } = await import("@/app/api/integrations/aa/consents/[id]/refresh/route");
+    return POST(req(`aa/consents/${id}/refresh`, "POST", key), { params: Promise.resolve({ id }) });
+  }
+  async function revoke(id: string, key = KEY_A, headers: Record<string, string> = idem()) {
+    const { POST } = await import("@/app/api/integrations/aa/consents/[id]/revoke/route");
+    return POST(req(`aa/consents/${id}/revoke`, "POST", key, undefined, headers), { params: Promise.resolve({ id }) });
+  }
+  async function syncRoute(id: string, key = KEY_A) {
+    const { POST } = await import("@/app/api/integrations/aa/consents/[id]/sync/route");
+    return POST(req(`aa/consents/${id}/sync`, "POST", key), { params: Promise.resolve({ id }) });
+  }
+  async function mapRoute(id: string, linkedId: string, accountId: string | null, key = KEY_A) {
+    const { PATCH } = await import("@/app/api/integrations/aa/consents/[id]/accounts/[linkedId]/route");
+    return PATCH(req(`aa/consents/${id}/accounts/${linkedId}`, "PATCH", key, { accountId }, idem()), {
+      params: Promise.resolve({ id, linkedId }),
+    });
+  }
+
+  async function models() {
+    const M = async (name: string): Promise<mongoose.Model<Json>> => (await import(`@/models/${name}`)).default;
+    const [Account, Transaction, CapturedMessage, AaConsent, Notification] = await Promise.all(
+      ["Account", "Transaction", "CapturedMessage", "AaConsent", "Notification"].map(M)
+    );
+    return { Account, Transaction, CapturedMessage, AaConsent, Notification };
+  }
+
+  /** A consent made, approved and with the HDFC feed mapped to a saved account that has digits 1234. */
+  async function linked(userId = a, key = KEY_A) {
+    process.env.AA_PROVIDER = "sandbox";
+    const { Account } = await models();
+    const bank = await Account.create({ user: userId, name: "HDFC Savings", type: "bank", balance: 100000, smsLastFour: ["1234"] });
+    const res = await create(key);
+    const made = (await res.json()).data as Json;
+    const refreshed = (await (await refresh(made.consent.id, key)).json()).data.consent as Json;
+    return { bank, consentId: made.consent.id as string, consent: refreshed };
+  }
+
+  describe("when no provider is set", () => {
+    it("reports configured:false and refuses everything else with AA_NOT_CONFIGURED", async () => {
+      const res = await status();
+      expect(res.status).toBe(200);
+      expect((await res.json()).data).toEqual({ configured: false, provider: null, consents: [] });
+
+      const made = await create();
+      expect(made.status).toBe(503);
+      expect((await made.json()).error.code).toBe("AA_NOT_CONFIGURED");
+      expect((await refresh("64b000000000000000000000")).status).toBe(503);
+    });
+
+    it("leaves the rest of the app alone: nothing is stored, the cron route is a no-op", async () => {
+      await create();
+      const { AaConsent } = await models();
+      expect(await AaConsent.countDocuments({})).toBe(0);
+      const { GET } = await import("@/app/api/cron/aa-sync/route");
+      const unauth = await GET(new NextRequest("http://localhost/api/cron/aa-sync"));
+      expect(unauth.status).toBe(401);
+      const ok = await GET(new NextRequest("http://localhost/api/cron/aa-sync", { headers: { authorization: "Bearer test-cron-secret-aa" } }));
+      expect(ok.status).toBe(200);
+      expect(await ok.json()).toMatchObject({ ok: true, checked: 0, created: 0 });
+    });
+
+    it("an unknown AA_PROVIDER name also counts as not configured", async () => {
+      process.env.AA_PROVIDER = "no-such-provider";
+      expect((await create()).status).toBe(503);
+    });
+  });
+
+  describe("consent lifecycle with the sandbox", () => {
+    it("starts a consent, keeps the handle secret and encrypted, and returns the consent screen address once", async () => {
+      process.env.AA_PROVIDER = "sandbox";
+      const res = await create();
+      expect(res.status).toBe(201);
+      const text = JSON.stringify(await res.clone().json());
+      const body = (await res.json()).data as Json;
+      expect(body.redirectUrl).toMatch(/^sandbox:\/\/consent\//);
+      expect(body.consent).toMatchObject({ provider: "sandbox", status: "pending", linkedAccounts: [] });
+      expect(text).not.toMatch(/sbx_/);
+      expect(text).not.toMatch(/consentHandle|handleHash/);
+
+      const { AaConsent } = await models();
+      const stored = await AaConsent.findOne({ user: a }).lean<Json>();
+      expect(stored?.consentHandle?.ciphertext).toBeTruthy();
+      expect(JSON.stringify(stored)).not.toMatch(/sbx_[0-9a-f]{12}/);
+
+      const st = JSON.stringify((await (await status()).json()).data);
+      expect(st).not.toMatch(/sbx_/);
+      expect(st).not.toMatch(/consentHandle|handleHash|redirectUrl/);
+    });
+
+    it("an idempotent replay answers the same consent with no redirect address, and creates no second consent", async () => {
+      process.env.AA_PROVIDER = "sandbox";
+      const headers = { "idempotency-key": "aa-same-key" };
+      const first = (await (await create(KEY_A, headers)).json()).data as Json;
+      const again = await create(KEY_A, headers);
+      expect(again.status).toBe(201);
+      const second = (await again.json()).data as Json;
+      expect(second.consent.id).toBe(first.consent.id);
+      expect(second.redirectUrl).toBeNull();
+      const { AaConsent } = await models();
+      expect(await AaConsent.countDocuments({ user: a })).toBe(1);
+    });
+
+    it("needs an Idempotency-Key on writes", async () => {
+      process.env.AA_PROVIDER = "sandbox";
+      const res = await create(KEY_A, {});
+      expect(res.status).toBe(400);
+    });
+
+    it("refresh reads the status, fills the linked banks and maps by digits", async () => {
+      const { bank, consent } = await linked();
+      expect(consent.status).toBe("active");
+      expect(consent.linkedAccounts).toHaveLength(2);
+      const hdfc = consent.linkedAccounts.find((l: Json) => l.bankName === "HDFC Bank");
+      const axis = consent.linkedAccounts.find((l: Json) => l.bankName === "Axis Bank");
+      expect(hdfc).toMatchObject({ last4: "1234", mappedAccountId: String(bank._id) });
+      expect(axis).toMatchObject({ last4: "9876", mappedAccountId: null });
+      expect(JSON.stringify(consent)).not.toMatch(/providerRef|acct-/);
+    });
+
+    it("stays pending until the person approves", async () => {
+      process.env.AA_PROVIDER = "sandbox";
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      sandboxControl.setAutoApprove(false);
+      const made = (await (await create()).json()).data as Json;
+      const polled = (await (await refresh(made.consent.id)).json()).data.consent as Json;
+      expect(polled.status).toBe("pending");
+      expect(polled.linkedAccounts).toEqual([]);
+    });
+
+    it("limits live consents per user", async () => {
+      process.env.AA_PROVIDER = "sandbox";
+      for (let i = 0; i < 5; i += 1) expect((await create()).status).toBe(201);
+      const sixth = await create();
+      expect(sixth.status).toBe(409);
+      expect((await sixth.json()).error.reason).toBe("limit");
+    });
+
+    it("a provider failure on start answers AA_PROVIDER_ERROR and stores nothing", async () => {
+      process.env.AA_PROVIDER = "sandbox";
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      sandboxControl.failNext(1);
+      const res = await create();
+      expect(res.status).toBe(502);
+      expect((await res.json()).error.code).toBe("AA_PROVIDER_ERROR");
+      const { AaConsent } = await models();
+      expect(await AaConsent.countDocuments({})).toBe(0);
+    });
+
+    it("maps and unmaps a linked account, refuses an account that is not yours or already fed", async () => {
+      const { consentId, consent, bank } = await linked();
+      const { Account } = await models();
+      const axis = consent.linkedAccounts.find((l: Json) => l.bankName === "Axis Bank");
+      const hdfc = consent.linkedAccounts.find((l: Json) => l.bankName === "HDFC Bank");
+      const second = await Account.create({ user: a, name: "Axis", type: "bank", balance: 0 });
+      const theirs = await Account.create({ user: b, name: "Other", type: "bank", balance: 0 });
+
+      const ok = await mapRoute(consentId, axis.id, String(second._id));
+      expect(ok.status).toBe(200);
+      expect(((await ok.json()).data.consent.linkedAccounts.find((l: Json) => l.id === axis.id) as Json).mappedAccountId).toBe(String(second._id));
+
+      expect((await mapRoute(consentId, axis.id, String(theirs._id))).status).toBe(404);
+      const clash = await mapRoute(consentId, axis.id, String(bank._id));
+      expect(clash.status).toBe(409);
+
+      const cleared = await mapRoute(consentId, hdfc.id, null);
+      expect(((await cleared.json()).data.consent.linkedAccounts.find((l: Json) => l.id === hdfc.id) as Json).mappedAccountId).toBeNull();
+      expect((await mapRoute(consentId, "64b000000000000000000001", null)).status).toBe(404);
+    });
+  });
+
+  describe("sync", () => {
+    it("books the feed through the capture path: source aa, not in the review inbox, history leaves the balance alone", async () => {
+      const { bank, consentId } = await linked();
+      const res = await syncRoute(consentId);
+      expect(res.status).toBe(200);
+      const sync = (await res.json()).data.sync as Json;
+      // Three HDFC entries are mapped; the Axis one is not.
+      expect(sync).toMatchObject({ fetched: 3, created: 3, duplicates: 0, unmappedAccounts: 1, partial: false, status: "active" });
+
+      const { Transaction, Account, CapturedMessage } = await models();
+      const rows = await Transaction.find({ user: a }).sort({ amount: 1 }).lean<Json[]>();
+      expect(rows.map((r) => [r.type, r.amount])).toEqual([
+        ["expense", 45000],
+        ["expense", 120000],
+        ["income", 5000000],
+      ]);
+      for (const r of rows) {
+        expect(r.source).toBe("aa");
+        expect(r.reviewStatus ?? null).toBeNull();
+        expect(r.account.toString()).toBe(String(bank._id));
+        expect(r.captures).toHaveLength(1);
+      }
+      // All three are older than the link: history, so no balance change.
+      expect((await Account.findById(bank._id).lean<Json>())?.balance).toBe(100000);
+      const caps = await CapturedMessage.find({ user: a, channel: "aa" }).lean<Json[]>();
+      expect(caps).toHaveLength(3);
+      expect(caps.every((c) => c.sourcePriority === 2)).toBe(true);
+    });
+
+    it("an entry made after the link moves the balance like any capture", async () => {
+      const { bank, consentId, consent } = await linked();
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      const handle = await handleOf(consentId);
+      const hdfc = consent.linkedAccounts.find((l: Json) => l.bankName === "HDFC Bank");
+      sandboxControl.addTransactions(handle, await providerRef(consentId, hdfc.id), [
+        { id: "sbx-new-1", accountRef: await providerRef(consentId, hdfc.id), type: "expense", amountMinor: 25000, currency: "INR", at: new Date(), narration: "UPI/CHAI POINT", reference: "555500001111" },
+      ]);
+      await syncRoute(consentId);
+      const { Account, Transaction } = await models();
+      expect((await Account.findById(bank._id).lean<Json>())?.balance).toBe(75000);
+      const row = await Transaction.findOne({ user: a, amount: 25000 }).lean<Json>();
+      expect(row?.description).toBe("UPI/CHAI POINT");
+    });
+
+    it("is idempotent: reading the same feed again adds nothing", async () => {
+      const { consentId, consent } = await linked();
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      const hdfc = consent.linkedAccounts.find((l: Json) => l.bankName === "HDFC Bank");
+      const ref = await providerRef(consentId, hdfc.id);
+      // One entry from today, which the next read (it starts a little before the last one stopped) sees again.
+      sandboxControl.addTransactions(await handleOf(consentId), ref, [
+        { id: "today-1", accountRef: ref, type: "expense", amountMinor: 3300, currency: "INR", at: new Date(), narration: "UPI/BUS" },
+      ]);
+      await syncRoute(consentId);
+      const { syncNow } = await import("@/lib/aa-service");
+      const again = await syncNow(a, consentId, new Date(Date.now() + 10 * 60 * 1000));
+      expect(again.created).toBe(0);
+      expect(again.duplicates).toBe(1);
+      const { Transaction, CapturedMessage } = await models();
+      expect(await Transaction.countDocuments({ user: a })).toBe(4);
+      expect(await CapturedMessage.countDocuments({ user: a, channel: "aa" })).toBe(4);
+    });
+
+    it("refuses a read right after another with retryAfterSeconds", async () => {
+      const { consentId } = await linked();
+      expect((await syncRoute(consentId)).status).toBe(200);
+      const soon = await syncRoute(consentId);
+      expect(soon.status).toBe(429);
+      expect((await soon.json()).error.retryAfterSeconds).toBeGreaterThan(0);
+    });
+
+    it("does not book the same payment twice when an SMS already captured it", async () => {
+      const { consentId, bank } = await linked();
+      const { ingestCapture } = await import("@/lib/capture/ingest");
+      const when = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000);
+      when.setUTCHours(13, 15, 0, 0);
+      const dd = String(when.getUTCDate()).padStart(2, "0");
+      const mm = String(when.getUTCMonth() + 1).padStart(2, "0");
+      const sms = `Rs.450.00 debited from A/c XX1234 on ${dd}-${mm}-${String(when.getUTCFullYear()).slice(2)} to VPA swiggy@icici. UPI Ref 100000000002. Not you? Call 18002586161`;
+      const first = await ingestCapture({
+        user: { id: a, name: "A", email: "a@x.com", role: "user" },
+        channel: "sms",
+        text: sms,
+        receivedAt: when,
+        sender: "VM-HDFCBK",
+      });
+      expect(first.body.status).toBe("created");
+
+      const sync = (await (await syncRoute(consentId)).json()).data.sync as Json;
+      expect(sync.created).toBe(2);
+      expect(sync.duplicates).toBe(1);
+      const { Transaction, CapturedMessage } = await models();
+      const swiggy = await Transaction.find({ user: a, amount: 45000 }).lean<Json[]>();
+      expect(swiggy).toHaveLength(1);
+      // The SMS stays the source of truth; the bank entry is a supporting record.
+      expect(swiggy[0].source).toBe("sms");
+      expect(swiggy[0].account.toString()).toBe(String(bank._id));
+      const aaCap = await CapturedMessage.findOne({ user: a, channel: "aa", "eventKey.amount": 45000 }).lean<Json>();
+      expect(aaCap).toMatchObject({ outcome: "duplicate", role: "supporting" });
+    });
+
+    it("an entry made by hand is matched, not duplicated, and its own values are kept", async () => {
+      const { consentId, bank } = await linked();
+      const { Transaction } = await models();
+      const when = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+      when.setUTCHours(7, 40, 0, 0);
+      const manual = await Transaction.create({
+        user: a, account: bank._id, type: "expense", amount: 120000, category: "Groceries", description: "Big basket order", date: when,
+      });
+      const sync = (await (await syncRoute(consentId)).json()).data.sync as Json;
+      expect(sync).toMatchObject({ created: 2, duplicates: 1 });
+      expect(await Transaction.countDocuments({ user: a, amount: 120000 })).toBe(1);
+      const kept = await Transaction.findById(manual._id).lean<Json>();
+      expect(kept).toMatchObject({ category: "Groceries", description: "Big basket order", source: "manual" });
+      expect(kept?.captures).toHaveLength(1);
+    });
+
+    it("matches a row from before captures existed (no captures field)", async () => {
+      const { consentId, bank } = await linked();
+      const { Transaction } = await models();
+      const when = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+      when.setUTCHours(8, 0, 0, 0);
+      await Transaction.collection.insertOne({
+        user: new mongoose.Types.ObjectId(a), account: bank._id, type: "expense", amount: 120000, currency: "INR",
+        category: "Groceries", date: when, source: "manual", isDeleted: false, createdAt: when, updatedAt: when,
+      });
+      const sync = (await (await syncRoute(consentId)).json()).data.sync as Json;
+      expect(sync).toMatchObject({ created: 2, duplicates: 1 });
+      expect(await Transaction.countDocuments({ user: a, amount: 120000 })).toBe(1);
+    });
+
+    it("one bank entry claims one manual row: two equal manual rows keep one for the next entry", async () => {
+      const { consentId, consent } = await linked();
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      const { Transaction } = await models();
+      const handle = await handleOf(consentId);
+      const hdfc = consent.linkedAccounts.find((l: Json) => l.bankName === "HDFC Bank");
+      const ref = await providerRef(consentId, hdfc.id);
+      const day = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      day.setUTCHours(9, 0, 0, 0);
+      const accountId = hdfc.mappedAccountId;
+      await Transaction.create([
+        { user: a, account: accountId, type: "expense", amount: 2000, category: "Food", date: day },
+        { user: a, account: accountId, type: "expense", amount: 2000, category: "Food", date: day },
+      ]);
+      sandboxControl.setTransactions(handle, ref, [
+        { id: "e1", accountRef: ref, type: "expense", amountMinor: 2000, currency: "INR", at: day, narration: "TEA" },
+        { id: "e2", accountRef: ref, type: "expense", amountMinor: 2000, currency: "INR", at: new Date(day.getTime() + 60_000), narration: "TEA" },
+        { id: "e3", accountRef: ref, type: "expense", amountMinor: 2000, currency: "INR", at: new Date(day.getTime() + 120_000), narration: "TEA" },
+      ]);
+      const sync = (await (await syncRoute(consentId)).json()).data.sync as Json;
+      expect(sync).toMatchObject({ created: 1, duplicates: 2 });
+      expect(await Transaction.countDocuments({ user: a, amount: 2000 })).toBe(3);
+    });
+
+    it("skips a feed in another currency and an invalid amount, and counts them", async () => {
+      const { consentId, consent } = await linked();
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      const handle = await handleOf(consentId);
+      const hdfc = consent.linkedAccounts.find((l: Json) => l.bankName === "HDFC Bank");
+      const ref = await providerRef(consentId, hdfc.id);
+      sandboxControl.setTransactions(handle, ref, [
+        { id: "u1", accountRef: ref, type: "expense", amountMinor: 1500, currency: "USD", at: new Date(), narration: "AMZN US" },
+        { id: "u2", accountRef: ref, type: "expense", amountMinor: -5, currency: "INR", at: new Date(), narration: "BAD" },
+        { id: "u3", accountRef: ref, type: "expense", amountMinor: 1.5, currency: "INR", at: new Date(), narration: "BAD" },
+        { id: "u4", accountRef: ref, type: "expense", amountMinor: 700, currency: "INR", at: new Date(), narration: "OK" },
+      ]);
+      const sync = (await (await syncRoute(consentId)).json()).data.sync as Json;
+      expect(sync).toMatchObject({ fetched: 4, created: 1, skippedCurrency: 1, skippedInvalid: 2 });
+    });
+
+    it("is bounded: a long feed is read in runs and nothing is lost or doubled", async () => {
+      const { consentId, consent } = await linked();
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      const { SYNC_LIMITS, syncNow } = await import("@/lib/aa-service");
+      const handle = await handleOf(consentId);
+      const hdfc = consent.linkedAccounts.find((l: Json) => l.bankName === "HDFC Bank");
+      const ref = await providerRef(consentId, hdfc.id);
+      const start = Date.now() - 20 * 24 * 60 * 60 * 1000;
+      const feed = Array.from({ length: 70 }, (_, i) => ({
+        id: `bulk-${i}`, accountRef: ref, type: "expense" as const, amountMinor: 100 + i, currency: "INR",
+        at: new Date(start + i * 60 * 60 * 1000), narration: `BULK ${i}`,
+      }));
+      sandboxControl.setTransactions(handle, ref, feed);
+      const saved = { ...SYNC_LIMITS };
+      SYNC_LIMITS.transactions = 30;
+      try {
+        const first = await syncNow(a, consentId, new Date());
+        expect(first).toMatchObject({ partial: true, created: 30 });
+        let created = first.created;
+        let t = Date.now();
+        for (let i = 0; i < 6 && created < 70; i += 1) {
+          t += 10 * 60 * 1000;
+          const next = await syncNow(a, consentId, new Date(t));
+          created += next.created;
+        }
+        expect(created).toBe(70);
+      } finally {
+        Object.assign(SYNC_LIMITS, saved);
+      }
+      const { Transaction } = await models();
+      expect(await Transaction.countDocuments({ user: a, source: "aa", description: /^BULK/ })).toBe(70);
+    });
+
+    it("pages through a feed larger than one page", async () => {
+      const { consentId, consent } = await linked();
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      const { PAGE_SIZE } = await import("@/lib/aa-service");
+      const handle = await handleOf(consentId);
+      const hdfc = consent.linkedAccounts.find((l: Json) => l.bankName === "HDFC Bank");
+      const ref = await providerRef(consentId, hdfc.id);
+      const start = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      const total = PAGE_SIZE + 5;
+      sandboxControl.setTransactions(
+        handle,
+        ref,
+        Array.from({ length: total }, (_, i) => ({
+          id: `pg-${i}`, accountRef: ref, type: "income" as const, amountMinor: 10 + i, currency: "INR", at: new Date(start + i * 60_000), narration: `PG ${i}`,
+        }))
+      );
+      const sync = (await (await syncRoute(consentId)).json()).data.sync as Json;
+      expect(sync).toMatchObject({ fetched: total, created: total, partial: false });
+    });
+
+    it("a provider error mid-way keeps what was read, reports provider_error and the next run continues", async () => {
+      const { consentId } = await linked();
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      const { syncNow } = await import("@/lib/aa-service");
+      sandboxControl.failNext(1, "fetchTransactions");
+      const res = await syncNow(a, consentId, new Date());
+      expect(res.error).toBe("provider_error");
+      const { AaConsent } = await models();
+      expect((await AaConsent.findOne({ user: a }).lean<Json>())?.lastError).toBe("provider_error");
+      const ok = await syncNow(a, consentId, new Date(Date.now() + 10 * 60 * 1000));
+      expect(ok.error).toBeUndefined();
+      expect(ok.created).toBe(3);
+    });
+  });
+
+  describe("ending a consent", () => {
+    it("revoke tells the provider, stops sync and keeps what was added", async () => {
+      const { consentId } = await linked();
+      await syncRoute(consentId);
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      const handle = await handleOf(consentId);
+      const res = await revoke(consentId);
+      expect(res.status).toBe(200);
+      const body = (await res.json()).data as Json;
+      expect(body).toMatchObject({ providerRevoked: true, consent: { status: "revoked" } });
+      expect(sandboxControl.isRevoked(handle)).toBe(true);
+
+      const after = await syncRoute(consentId);
+      expect(after.status).toBe(409);
+      const { Transaction } = await models();
+      expect(await Transaction.countDocuments({ user: a, source: "aa" })).toBe(3);
+
+      // The timer ignores it too.
+      const { syncAllConsents } = await import("@/lib/aa-service");
+      expect((await syncAllConsents()).checked).toBe(0);
+    });
+
+    it("revoke when the provider does not confirm still stops sync and says so", async () => {
+      const { consentId } = await linked();
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      const { revokeConsent } = await import("@/lib/aa-service");
+      const providers = await import("@/lib/aa/providers");
+      const provider = providers.getAaProvider()!;
+      const spy = vi.spyOn(provider, "revoke").mockRejectedValueOnce(new Error("boom"));
+      const out = await revokeConsent(a, consentId);
+      expect(out.providerRevoked).toBe(false);
+      expect(out.consent.status).toBe("revoked");
+      expect(out.consent.lastError).toBe("revoke_not_confirmed");
+      spy.mockRestore();
+      void sandboxControl;
+    });
+
+    it("revoking twice is fine", async () => {
+      const { consentId } = await linked();
+      expect((await revoke(consentId, KEY_A, { "idempotency-key": "r1" })).status).toBe(200);
+      expect((await revoke(consentId, KEY_A, { "idempotency-key": "r2" })).status).toBe(200);
+    });
+
+    it("an expired consent is marked expired by the sync, with one notification", async () => {
+      const { consentId } = await linked();
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      const { syncNow } = await import("@/lib/aa-service");
+      sandboxControl.expire(await handleOf(consentId));
+      const res = await syncNow(a, consentId, new Date());
+      expect(res.status).toBe("expired");
+      const { AaConsent, Notification, Transaction } = await models();
+      expect((await AaConsent.findOne({ user: a }).lean<Json>())?.status).toBe("expired");
+      expect(await Notification.countDocuments({ user: a, "meta.kind": "aa_consent" })).toBe(1);
+      expect(await Transaction.countDocuments({ user: a })).toBe(0);
+      // Not read again, no second notification.
+      await expect(syncNow(a, consentId, new Date(Date.now() + 10 * 60 * 1000))).rejects.toMatchObject({ code: "INVALID_STATE" });
+      expect(await Notification.countDocuments({ user: a, "meta.kind": "aa_consent" })).toBe(1);
+    });
+
+    it("a withdrawal at the provider is noticed on the next sync", async () => {
+      const { consentId } = await linked();
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      const { syncNow } = await import("@/lib/aa-service");
+      sandboxControl.setStatus(await handleOf(consentId), "revoked");
+      const res = await syncNow(a, consentId, new Date());
+      expect(res).toMatchObject({ status: "revoked", skipped: "not_active", created: 0 });
+      const { AaConsent, Notification } = await models();
+      const c = await AaConsent.findOne({ user: a }).lean<Json>();
+      expect(c).toMatchObject({ status: "revoked", lastError: "revoked_at_provider" });
+      expect(await Notification.countDocuments({ user: a, "meta.kind": "aa_consent" })).toBe(1);
+    });
+
+    it("the timer reads active consents once, skips recent ones and runs one sweep at a time", async () => {
+      const { consentId } = await linked();
+      const { syncAllConsents } = await import("@/lib/aa-service");
+      const [one, two] = await Promise.all([syncAllConsents(), syncAllConsents()]);
+      const ran = [one, two].filter((r) => !r.skipped);
+      expect(ran).toHaveLength(1);
+      expect(ran[0]).toMatchObject({ checked: 1, created: 3 });
+      // Read less than an hour ago: not due.
+      expect(await syncAllConsents()).toMatchObject({ checked: 0 });
+      void consentId;
+    });
+
+    it("deleting the account's data withdraws the consents and removes the records", async () => {
+      const { consentId } = await linked();
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      const { deleteAaDataForUser } = await import("@/lib/aa-service");
+      const handle = await handleOf(consentId);
+      await deleteAaDataForUser(a);
+      const { AaConsent } = await models();
+      expect(await AaConsent.countDocuments({ user: a })).toBe(0);
+      expect(sandboxControl.isRevoked(handle)).toBe(true);
+    });
+  });
+
+  describe("isolation", () => {
+    it("one person cannot see, refresh, map, sync or revoke another's consent", async () => {
+      const { consentId, consent } = await linked();
+      const theirs = await status(KEY_B);
+      expect((await theirs.json()).data.consents).toEqual([]);
+      expect((await refresh(consentId, KEY_B)).status).toBe(404);
+      expect((await syncRoute(consentId, KEY_B)).status).toBe(404);
+      expect((await revoke(consentId, KEY_B)).status).toBe(404);
+      expect((await mapRoute(consentId, consent.linkedAccounts[0].id, null, KEY_B)).status).toBe(404);
+      const { AaConsent } = await models();
+      expect((await AaConsent.findOne({ user: a }).lean<Json>())?.status).toBe("active");
+    });
+
+    it("an invalid id is a 404, not an error", async () => {
+      process.env.AA_PROVIDER = "sandbox";
+      expect((await refresh("not-an-id")).status).toBe(404);
+    });
+  });
+
+  // Helpers that read what the app never sees: the provider's handle and a linked account's reference.
+  async function handleOf(consentId: string) {
+    const { AaConsent } = await models();
+    const { decryptField } = await import("@/lib/crypto");
+    const c = await AaConsent.findById(consentId).lean<Json>();
+    return decryptField(c!.consentHandle, "CAPTURE_ENCRYPTION_KEY");
+  }
+  async function providerRef(consentId: string, linkedId: string) {
+    const { AaConsent } = await models();
+    const c = await AaConsent.findById(consentId).lean<Json>();
+    return c!.linkedAccounts.find((l: Json) => l._id.toString() === linkedId).providerRef as string;
+  }
+});

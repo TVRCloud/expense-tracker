@@ -10,6 +10,7 @@ Code: `src/lib/capture/*` (ingest, parsers, source priority), `src/lib/reconcile
 |---|---|---|---|
 | `sms` | Android app, SMS receiver | 3 | **Source of truth** |
 | `n8n` | n8n forwarding SMS text (`POST /api/integrations/sms`) | 2 | SMS text, used when the phone didn't capture it |
+| `aa` | A bank link through an Account Aggregator ([account-aggregator.md](account-aggregator.md)); no merchant wording, so it ranks with n8n | 2 | Fills gaps and corrects a notification; an SMS still wins. Also matched against rows entered by hand |
 | `notification` | Android app, bank-app notification listener | 1 | Low-priority fallback only |
 
 Every message is stored in `captured_messages`. The raw text is encrypted with `CAPTURE_ENCRYPTION_KEY`, and nothing in the collection expires. Transactions carry:

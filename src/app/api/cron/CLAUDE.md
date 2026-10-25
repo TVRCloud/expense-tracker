@@ -7,10 +7,11 @@ Purpose: scheduler hooks for jobs that also run from server.ts.
 - bill-reminders/route.ts: reminders for bills inside each opted-in user's lead time, from 09:00 on their clock, once per bill per due date.
 - net-worth-snapshot/route.ts: stores today's net worth point for every active user that has something or already had a point (every 3 hours from server.ts; last write of the day wins; one run at a time per process, an overlapping call answers `skipped: true`; a run older than 10 minutes counts as hung and no longer blocks).
 - weekly-review/route.ts: the weekly review notification for opted-in users, on their chosen weekday from 09:00 on their clock, once per week (claimed through a unique partial index; one run at a time per process, a run older than 10 minutes counts as hung).
+- aa-sync/route.ts: reads every active bank link not read in the last hour (every 6 hours from server.ts; a no-op while `AA_PROVIDER` is unset; one sweep at a time per process).
 - spend-limit-summary/route.ts: end-of-day spend limit notice, once per user per local day from 21:00 in their time zone.
 
 ## Talks to
-- Libs: cron-auth, net-worth (`recordSnapshotsForAllUsers`), spend-limit (`sendSpendLimitSummaries`), bill-reminders (`sendBillReminders`), weekly-review (`sendWeeklyReviews`), capture/ingest (`promoteStalePendingSms`), recurring-topup, reminder-scheduler.
+- Libs: cron-auth, net-worth (`recordSnapshotsForAllUsers`), spend-limit (`sendSpendLimitSummaries`), bill-reminders (`sendBillReminders`), weekly-review (`sendWeeklyReviews`), aa-service (`syncAllConsents`), capture/ingest (`promoteStalePendingSms`), recurring-topup, reminder-scheduler.
 - Schedulers: `vercel.json` runs recurring-topup daily at 03:00; promote-captures, spend-limit-summary, bill-reminders and weekly-review need an external scheduler on Vercel (see [docs/reconcile.md](../../../../docs/reconcile.md) Setup; call spend-limit-summary and bill-reminders every 30 minutes and net-worth-snapshot every few hours).
 
 ## Rules and gotchas
