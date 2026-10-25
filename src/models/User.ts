@@ -48,6 +48,12 @@ const UserSchema = new Schema(
       envelopes: {
         enabled: { type: Boolean, default: false },
       },
+      // Anomaly alerts (src/lib/anomaly-service.ts): on unless the person turns
+      // them off; lower-case category names they muted.
+      anomalies: {
+        enabled: { type: Boolean, default: true },
+        mutedCategories: [{ type: String }],
+      },
     },
     passwordResetToken: { type: String },
     passwordResetExpires: { type: Date },

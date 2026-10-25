@@ -1331,6 +1331,37 @@ describe("encrypted backup and restore", () => {
       expect((await nulled.json()).data.warnings.join(" ")).toContain("were restored");
     });
 
+    it("alert settings: a changed setting travels in the backup and is restored only where nothing was changed", async () => {
+      const { default: User } = await import("@/models/User");
+      type Prefs = { preferences?: { anomalies?: { enabled?: boolean; mutedCategories?: string[] } } };
+      // defaults are not written into the file at all
+      const plain = await (await exportBackup()).json();
+      const noSettings = await craftFile({ baseCurrency: "INR" }, {});
+      expect(plain.data.backup).toBeTruthy();
+      expect((await (await restore({ passphrase: PASS, backup: noSettings }, { idem: "anom-none" })).json()).data.warnings.join(" ")).not.toContain("alert settings");
+
+      await User.updateOne({ _id: a }, { $set: { "preferences.anomalies": { enabled: false, mutedCategories: ["Dining", "travel"] } } });
+      const { data } = await (await exportBackup()).json();
+      const fresh = await newUser("fresh-key-for-alert-settings-1");
+      const dry = await restore({ passphrase: PASS, backup: data.backup, dryRun: true }, { key: "fresh-key-for-alert-settings-1", idem: null });
+      expect((await dry.json()).data.warnings.join(" ")).toContain("alert settings will be restored");
+      expect(((await User.findById(fresh).lean<Prefs>())!.preferences?.anomalies?.mutedCategories ?? [])).toEqual([]);
+
+      const real = await restore({ passphrase: PASS, backup: data.backup }, { key: "fresh-key-for-alert-settings-1" });
+      expect((await real.json()).data.warnings.join(" ")).toContain("alert settings were restored");
+      expect((await User.findById(fresh).lean<Prefs>())!.preferences?.anomalies).toMatchObject({ enabled: false, mutedCategories: ["dining", "travel"] });
+
+      // a re-run says nothing
+      const again = await restore({ passphrase: PASS, backup: data.backup }, { key: "fresh-key-for-alert-settings-1", idem: "anom-again" });
+      expect((await again.json()).data.warnings.join(" ")).not.toContain("alert settings");
+
+      // someone who already changed theirs keeps them, and is told
+      await User.updateOne({ _id: b }, { $set: { "preferences.anomalies": { enabled: true, mutedCategories: ["rent"] } } });
+      const other = await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B });
+      expect((await other.json()).data.warnings.join(" ")).toContain("alert settings were not changed");
+      expect((await User.findById(b).lean<Prefs>())!.preferences?.anomalies?.mutedCategories).toEqual(["rent"]);
+    });
+
     it("counts only the receipts on rows that are in the file", async () => {
       const ids = await seed(a);
       const { default: Transaction } = await import("@/models/Transaction");

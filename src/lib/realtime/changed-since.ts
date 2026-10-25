@@ -14,6 +14,7 @@ import SubscriptionDecision from "@/models/SubscriptionDecision";
 import SinkingFund from "@/models/SinkingFund";
 import ManualAsset from "@/models/ManualAsset";
 import EnvelopePlan from "@/models/EnvelopePlan";
+import Anomaly from "@/models/Anomaly";
 import Holding from "@/models/Holding";
 import { RESOURCE_NAMES, type RealtimeResource } from "@/lib/realtime/changes";
 
@@ -32,6 +33,7 @@ const MODELS: Record<RealtimeResource, Model<any>> = { // eslint-disable-line @t
   sinkingFunds: SinkingFund,
   netWorth: ManualAsset,
   envelopes: EnvelopePlan,
+  anomalies: Anomaly,
   holdings: Holding,
 };
 

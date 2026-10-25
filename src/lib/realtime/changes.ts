@@ -21,7 +21,8 @@ export type RealtimeResource =
   | "sinkingFunds"
   | "netWorth"
   | "envelopes"
-  | "holdings";
+  | "holdings"
+  | "anomalies";
 
 // Allow-list: MongoDB collection name -> resource name sent to clients. Every
 // model listed here has a required `user` ObjectId field, which is what the
@@ -42,6 +43,7 @@ export const RESOURCES: Readonly<Record<string, RealtimeResource>> = {
   sinking_funds: "sinkingFunds",
   manual_assets: "netWorth",
   envelope_plans: "envelopes",
+  anomalies: "anomalies",
   holdings: "holdings",
 };
 
