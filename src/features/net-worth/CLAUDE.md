@@ -13,11 +13,13 @@ Purpose: one number for what the user owns minus what they owe, with the rows be
 ## Rules and gotchas
 - Amounts are cents, shown with `useCurrency().formatCurrency`.
 - Reading net worth stores today's point, so the trend always ends today.
-- Realtime resource `netWorth` (manual assets) plus `transactions`, `accounts`, `loans`, `repayments` invalidate the `["net-worth"]` keys.
+- Realtime resource `netWorth` (manual assets) plus `transactions`, `accounts`, `loans`, `repayments`, `holdings` invalidate the `["net-worth"]` keys.
+- Holdings (investments page) count as one Owned row `holdings`; an `investment` account is counted on its own, so the same money must not be entered as both.
 - The Analytics page has its own older chart (`NetWorthTrendChart`) rebuilt from monthly totals; it does not use this data.
 
 ## Tests
 - `src/test/integrations.test.ts` ("net worth").
 
 ## Last changed
+- feat: holdings count in net worth
 - feat(integrations): net worth with a daily trend and manual assets
