@@ -73,7 +73,13 @@ export async function DELETE() {
     // fails the request fails and nothing is locked, so it can simply be tried again.
     await deleteAllReceiptsOfUser(user.id);
     // Bank links: withdrawn at the provider (best effort) and the records removed, so nothing keeps reading the account.
-    await deleteAaDataForUser(user.id);
+    const aa = await deleteAaDataForUser(user.id);
+    if (aa.remaining > 0) {
+      return NextResponse.json(
+        { error: "A bank link could not be withdrawn right now, so the account was not deleted. Remove the link from the Bank links screen, or try again later." },
+        { status: 409 }
+      );
+    }
     // Tombstone the email so the same address can register a fresh account.
     await User.findByIdAndUpdate(user.id, {
       $set: {
@@ -96,7 +102,7 @@ export async function DELETE() {
     } catch {
       await deleteAllReceiptsOfUser(user.id).catch((err) => logger.error({ err, userId: user.id }, "final receipt purge failed"));
     }
-    await deleteAaDataForUser(user.id).catch((err) => logger.error({ err, userId: user.id }, "final bank link purge failed"));
+    await deleteAaDataForUser(user.id).catch((err) => logger.error({ err: err instanceof Error ? err.name : "unknown", userId: user.id }, "final bank link purge failed"));
 
     return NextResponse.json({ data: { message: "Account deleted" } });
   } catch (err) {

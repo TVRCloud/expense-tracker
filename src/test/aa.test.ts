@@ -617,7 +617,7 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
     });
 
     it("two consents cannot both feed one account: auto-map and manual map are both refused", async () => {
-      const { bank, consent } = await linked();
+      const { bank, consent, consentId: firstId } = await linked();
       expect(consent.linkedAccounts.find((l: Json) => l.bankName === "HDFC Bank").mappedAccountId).toBe(String(bank._id));
       const second = (await (await create()).json()).data.consent as Json;
       const refreshed = (await (await refresh(second.id)).json()).data.consent as Json;
@@ -626,8 +626,7 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
       const clash = await mapRoute(second.id, hdfc.id, String(bank._id));
       expect(clash.status).toBe(409);
       // A revoked consent no longer holds the account.
-      const { AaConsent } = await models();
-      await AaConsent.updateMany({ _id: { $ne: second.id }, user: a }, { $set: { status: "revoked" } });
+      expect((await revoke(firstId)).status).toBe(200);
       expect((await mapRoute(second.id, hdfc.id, String(bank._id))).status).toBe(200);
     });
 
@@ -706,7 +705,7 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
       expect((await ingestAaTransaction(input)).body.status).toBe("duplicate");
       expect(await Transaction.countDocuments({ user: a })).toBe(0);
       // Stale: picked up.
-      await CapturedMessage.collection.updateOne({ user: new mongoose.Types.ObjectId(a), channel: "aa" }, { $set: { updatedAt: new Date(Date.now() - 10 * 60 * 1000) } });
+      await CapturedMessage.collection.updateOne({ user: new mongoose.Types.ObjectId(a), channel: "aa" }, { $set: { updatedAt: new Date(Date.now() - 60 * 60 * 1000) } });
       const [one, two] = await Promise.all([ingestAaTransaction(input), ingestAaTransaction(input)]);
       expect([one.body.status, two.body.status].sort()).toEqual(["created", "duplicate"]);
       expect(await Transaction.countDocuments({ user: a })).toBe(1);
@@ -724,7 +723,7 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
       await ingestAaTransaction(input);
       await CapturedMessage.collection.updateOne(
         { user: new mongoose.Types.ObjectId(a), channel: "aa" },
-        { $set: { outcome: "processing", status: "pending", updatedAt: new Date(Date.now() - 10 * 60 * 1000) }, $unset: { transaction: "" } }
+        { $set: { outcome: "processing", status: "pending", updatedAt: new Date(Date.now() - 60 * 60 * 1000) }, $unset: { transaction: "" } }
       );
       expect((await ingestAaTransaction(input)).body.status).toBe("duplicate");
       expect(await Transaction.countDocuments({ user: a })).toBe(1);
@@ -828,6 +827,222 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
         SWEEP_LIMITS.budgetMs = saved;
       }
       expect(await syncAllConsents()).toMatchObject({ checked: 1 });
+    });
+  });
+
+  describe("second review fixes", () => {
+    const actor = () => ({ id: a, name: "A", email: "a@x.com", role: "user" });
+    const feed = (ref: string, list: Array<Partial<Json> & { id: string }>) =>
+      list.map((t) => ({ accountRef: ref, type: "expense", amountMinor: 500, currency: "INR", at: new Date(), narration: "X", ...t }));
+
+    /** Two approved consents whose HDFC accounts are unmapped because the user's account has no digits saved. */
+    async function twoUnmapped() {
+      process.env.AA_PROVIDER = "sandbox";
+      const { Account } = await models();
+      const bank = await Account.create({ user: a, name: "Savings", type: "bank", balance: 100000 });
+      const out: Array<{ id: string; hdfc: string }> = [];
+      for (let i = 0; i < 2; i += 1) {
+        const made = (await (await create(KEY_A, { "idempotency-key": `two-${i}` })).json()).data.consent as Json;
+        const r = (await (await refresh(made.id)).json()).data.consent as Json;
+        out.push({ id: made.id, hdfc: r.linkedAccounts.find((l: Json) => l.bankName === "HDFC Bank").id });
+      }
+      return { bank, a: out[0], b: out[1] };
+    }
+
+    it("exactly one of two concurrent mappings of one account across consents wins", async () => {
+      const { bank, a: c1, b: c2 } = await twoUnmapped();
+      const results = await Promise.all([mapRoute(c1.id, c1.hdfc, String(bank._id)), mapRoute(c2.id, c2.hdfc, String(bank._id))]);
+      expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+      const { AaAccountClaim } = await import("@/models/AaAccountClaim").then((m) => ({ AaAccountClaim: m.default as mongoose.Model<Json> }));
+      expect(await AaAccountClaim.countDocuments({ user: a, account: bank._id })).toBe(1);
+      // Unmapping releases it for the other consent.
+      const winner = results[0].status === 200 ? c1 : c2;
+      const loser = winner === c1 ? c2 : c1;
+      expect((await mapRoute(winner.id, winner.hdfc, null)).status).toBe(200);
+      expect((await mapRoute(loser.id, loser.hdfc, String(bank._id))).status).toBe(200);
+    });
+
+    it("concurrent refreshes of two consents auto-map one account into only one", async () => {
+      process.env.AA_PROVIDER = "sandbox";
+      const { Account } = await models();
+      await Account.create({ user: a, name: "HDFC Savings", type: "bank", balance: 1, smsLastFour: ["1234"] });
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      sandboxControl.setAutoApprove(false);
+      const ids: string[] = [];
+      for (let i = 0; i < 2; i += 1) ids.push(((await (await create(KEY_A, { "idempotency-key": `ar-${i}` })).json()).data.consent as Json).id);
+      sandboxControl.setAutoApprove(true);
+      const out = await Promise.all(ids.map((id) => refresh(id)));
+      const mapped = (await Promise.all(out.map(async (r) => ((await r.json()).data.consent as Json).linkedAccounts)))
+        .flat()
+        .filter((l: Json) => l.mappedAccountId);
+      expect(mapped).toHaveLength(1);
+    });
+
+    it("a history row never moves the balance when it is deleted, voided or corrected", async () => {
+      const { bank } = await linked();
+      const { Account, Transaction } = await models();
+      const { ingestAaTransaction } = await import("@/lib/capture/ingest");
+      const { deleteTransaction } = await import("@/lib/transaction-service");
+      const { correctTransaction } = await import("@/lib/reconcile/correct");
+      const mk = async (id: string, amount: number) => {
+        const r = await ingestAaTransaction({
+          user: actor(), provider: "sandbox", providerTxnId: id, accountId: String(bank._id), bankName: "HDFC Bank", last4: "1234",
+          type: "expense", amountMinor: amount, at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), narration: id, historical: true,
+        });
+        return r.body.transactionId as string;
+      };
+      const balance = async () => (await Account.findById(bank._id).lean<Json>())?.balance;
+      const t1 = await mk("hist-1", 1111);
+      const t2 = await mk("hist-2", 2222);
+      const t3 = await mk("hist-3", 3333);
+      expect((await Transaction.findById(t1).lean<Json>())?.balanceApplied).toBe(false);
+      expect(await balance()).toBe(100000);
+      await deleteTransaction(a, t1, actor());
+      expect(await balance()).toBe(100000);
+      await correctTransaction({ userId: a, transactionId: t2, changes: { amount: 9999 }, reason: "wrong_amount" as never, via: "mobile", actor: actor() });
+      expect(await balance()).toBe(100000);
+      await correctTransaction({ userId: a, transactionId: t3, changes: {}, reason: "not_a_transaction", via: "mobile", actor: actor() });
+      expect(await balance()).toBe(100000);
+      // A normal row still moves it, both ways.
+      const live = await ingestAaTransaction({
+        user: actor(), provider: "sandbox", providerTxnId: "live-1", accountId: String(bank._id), bankName: "HDFC Bank", last4: "1234",
+        type: "expense", amountMinor: 4000, at: new Date(), narration: "live", historical: false,
+      });
+      expect(await balance()).toBe(96000);
+      await deleteTransaction(a, live.body.transactionId as string, actor());
+      expect(await balance()).toBe(100000);
+    });
+
+    it("a failed create leaves the balance alone and a retry applies it once", async () => {
+      const { bank } = await linked();
+      const { Account, Transaction } = await models();
+      const { createTransaction } = await import("@/lib/transaction-service");
+      const input = { userId: a, actor: actor(), accountId: String(bank._id), type: "expense" as const, amount: 5000, category: "food", date: new Date().toISOString(), tags: [], isRecurring: false };
+      const spy = vi.spyOn(Transaction, "create").mockRejectedValueOnce(new Error("boom") as never);
+      await expect(createTransaction(input as never)).rejects.toThrow("boom");
+      spy.mockRestore();
+      expect((await Account.findById(bank._id).lean<Json>())?.balance).toBe(100000);
+      expect(await Transaction.countDocuments({ user: a })).toBe(0);
+      await createTransaction(input as never);
+      expect((await Account.findById(bank._id).lean<Json>())?.balance).toBe(95000);
+      expect(await Transaction.countDocuments({ user: a })).toBe(1);
+    });
+
+    it("a failure while moving the balance removes the row again", async () => {
+      const { bank } = await linked();
+      const { Account, Transaction } = await models();
+      const { createTransaction } = await import("@/lib/transaction-service");
+      const input = { userId: a, actor: actor(), accountId: String(bank._id), type: "expense" as const, amount: 5000, category: "food", date: new Date().toISOString(), tags: [], isRecurring: false };
+      const spy = vi.spyOn(Account, "findOneAndUpdate").mockRejectedValueOnce(new Error("inc failed") as never);
+      await expect(createTransaction(input as never)).rejects.toThrow("inc failed");
+      spy.mockRestore();
+      expect((await Account.findById(bank._id).lean<Json>())?.balance).toBe(100000);
+      expect(await Transaction.countDocuments({ user: a })).toBe(0);
+    });
+
+    it("invalid and far-dated rows do not stall the link, and out-of-range dates are refused", async () => {
+      const { consentId, consent } = await linked();
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      const { SYNC_LIMITS, syncNow } = await import("@/lib/aa-service");
+      const ref = await providerRef(consentId, consent.linkedAccounts.find((l: Json) => l.bankName === "HDFC Bank").id);
+      const t0 = Date.now() - 5 * 24 * 60 * 60 * 1000;
+      const list = [
+        ...[0, 1, 2, 3, 4].map((i) => ({ id: `bad-${i}`, amountMinor: -1, at: new Date(t0 + i * 60_000) })),
+        { id: "future-1", at: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000) },
+        { id: "ok-1", at: new Date(t0 + 10 * 60_000), narration: "REAL" },
+      ];
+      sandboxControl.setTransactions(await handleOf(consentId), ref, feed(ref, list) as never);
+      const saved = { ...SYNC_LIMITS };
+      SYNC_LIMITS.transactions = 3;
+      try {
+        let created = 0;
+        let invalid = 0;
+        let t = Date.now();
+        for (let i = 0; i < 6; i += 1) {
+          t += 10 * 60 * 1000;
+          const r = await syncNow(a, consentId, new Date(t));
+          created += r.created;
+          invalid += r.skippedInvalid;
+        }
+        expect(created).toBe(1);
+        expect(invalid).toBeGreaterThanOrEqual(6);
+      } finally {
+        Object.assign(SYNC_LIMITS, saved);
+      }
+      const { Transaction } = await models();
+      expect(await Transaction.countDocuments({ user: a, description: /^(bad|future)/ })).toBe(0);
+    });
+
+    it("entries before the person approved the link are history, not only those before it was created", async () => {
+      process.env.AA_PROVIDER = "sandbox";
+      const { Account, Transaction } = await models();
+      const bank = await Account.create({ user: a, name: "HDFC Savings", type: "bank", balance: 100000, smsLastFour: ["1234"] });
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      sandboxControl.setAutoApprove(false);
+      const made = (await (await create()).json()).data.consent as Json;
+      const entryAt = new Date();
+      await new Promise((r) => setTimeout(r, 25));
+      sandboxControl.setAutoApprove(true);
+      const refreshed = (await (await refresh(made.id)).json()).data.consent as Json;
+      const ref = await providerRef(made.id, refreshed.linkedAccounts.find((l: Json) => l.bankName === "HDFC Bank").id);
+      sandboxControl.setTransactions(await handleOf(made.id), ref, feed(ref, [{ id: "between-1", at: entryAt, amountMinor: 6000 }]) as never);
+      await syncRoute(made.id);
+      const row = await Transaction.findOne({ user: a, amount: 6000 }).lean<Json>();
+      expect(row?.balanceApplied).toBe(false);
+      expect((await Account.findById(bank._id).lean<Json>())?.balance).toBe(100000);
+    });
+
+    it("keeps consents it could not withdraw when the account is deleted", async () => {
+      const { consentId } = await linked();
+      const { deleteAaDataForUser } = await import("@/lib/aa-service");
+      const { AaConsent } = await models();
+      // Its provider is no longer registered: the grant cannot be withdrawn, so the record is kept.
+      await AaConsent.updateOne({ user: a }, { $set: { provider: "retired" } });
+      expect(await deleteAaDataForUser(a)).toEqual({ remaining: 1 });
+      expect(await AaConsent.countDocuments({ user: a })).toBe(1);
+      await AaConsent.updateOne({ user: a }, { $set: { provider: "sandbox" } });
+      expect(await deleteAaDataForUser(a)).toEqual({ remaining: 0 });
+      expect(await AaConsent.countDocuments({ user: a })).toBe(0);
+      void consentId;
+    });
+
+    it("refuses the sandbox in production unless it is allowed on purpose", async () => {
+      process.env.AA_PROVIDER = "sandbox";
+      vi.stubEnv("NODE_ENV", "production");
+      try {
+        expect((await (await status()).json()).data.configured).toBe(false);
+        expect((await create()).status).toBe(503);
+        vi.stubEnv("AA_ALLOW_SANDBOX", "true");
+        expect((await (await status()).json()).data.configured).toBe(true);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it("a provider call that does not answer in time is a provider error, and the run stops before another page when out of time", async () => {
+      const { consentId } = await linked();
+      const providers = await import("@/lib/aa/providers");
+      const { PROVIDER_TIMEOUT, SYNC_LIMITS, syncNow } = await import("@/lib/aa-service");
+      const provider = providers.getAaProvider()!;
+      const spy = vi.spyOn(provider, "fetchTransactions").mockImplementation(() => new Promise(() => undefined));
+      const savedMs = PROVIDER_TIMEOUT.ms;
+      PROVIDER_TIMEOUT.ms = 30;
+      try {
+        expect((await syncNow(a, consentId, new Date())).error).toBe("provider_error");
+      } finally {
+        PROVIDER_TIMEOUT.ms = savedMs;
+      }
+      spy.mockClear();
+      const savedBudget = SYNC_LIMITS.budgetMs;
+      SYNC_LIMITS.budgetMs = -1;
+      try {
+        const out = await syncNow(a, consentId, new Date(Date.now() + 10 * 60 * 1000));
+        expect(out.partial).toBe(true);
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        SYNC_LIMITS.budgetMs = savedBudget;
+        spy.mockRestore();
+      }
     });
   });
 

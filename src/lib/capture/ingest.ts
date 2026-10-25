@@ -772,8 +772,8 @@ function aaParseOf(input: AaIngestInput): MoneyParse {
   return parse;
 }
 
-// A capture left in "processing" this long was cut off by a crash: the next read of the same bank entry finishes it.
-export const AA_PROCESSING_STALE_MS = 5 * 60 * 1000;
+// A capture left in "processing" this long (far above the few database calls one entry takes) was cut off by a crash: the next read of the same bank entry finishes it.
+export const AA_PROCESSING_STALE_MS = 30 * 60 * 1000;
 
 async function decideAa(input: AaIngestInput, capture: CaptureDoc, parse: MoneyParse): Promise<IngestResult> {
   try {

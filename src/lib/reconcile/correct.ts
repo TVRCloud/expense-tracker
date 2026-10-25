@@ -101,6 +101,8 @@ type TxnDoc = {
   // Foreign spend (src/lib/exchange-rate-service.ts): `amount` is converted from these.
   originalAmount?: number;
   originalCurrency?: string;
+  // False: written without moving the balance (see Transaction.balanceApplied), so no change here moves it.
+  balanceApplied?: boolean;
 };
 
 export type Snapshot = {
@@ -223,7 +225,9 @@ export async function correctTransaction(input: CorrectInput) {
   const oldEffect = balanceEffect(before.type, before.amount);
   const newEffect = balanceEffect(after.type, after.amount);
   const balanceEffects: { account: string; delta: number }[] = [];
-  if (after.account === before.account) {
+  if (txn.balanceApplied === false) {
+    // History the balance already reflected: editing it changes the row, never the balance.
+  } else if (after.account === before.account) {
     const delta = newEffect - oldEffect;
     if (delta !== 0) balanceEffects.push({ account: before.account, delta });
   } else {
@@ -360,7 +364,7 @@ async function voidTransaction(input: CorrectInput) {
     note: input.note,
     via: input.via,
     correctedBy: input.via === "system" ? undefined : input.userId,
-    balanceEffects: [{ account: before.account, delta: -balanceEffect(before.type, before.amount) }],
+    balanceEffects: txn.balanceApplied === false ? [] : [{ account: before.account, delta: -balanceEffect(before.type, before.amount) }],
     ledgerSequence: lastBlock?.sequence,
   });
 

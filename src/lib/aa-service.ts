@@ -5,6 +5,7 @@ import logger from "@/lib/logger";
 import AaConsent from "@/models/AaConsent";
 import Account from "@/models/Account";
 import Notification from "@/models/Notification";
+import AaAccountClaim from "@/models/AaAccountClaim";
 import User from "@/models/User";
 import { decryptField, encryptField } from "@/lib/crypto";
 import { CAPTURE_KEY_ENV, ingestAaTransaction } from "@/lib/capture/ingest";
@@ -25,8 +26,7 @@ import {
 
 // Account Aggregator (AA) sync: bank transactions pulled through a user's
 // consent, as a second source next to SMS. The provider seam is src/lib/aa/;
-// today only a sandbox exists, so this never reaches a bank (docs/security.md,
-// "Account Aggregator"). Each transaction goes through ingestAaTransaction
+// today only a sandbox exists, so this never reaches a bank (docs/account-aggregator.md). Each transaction goes through ingestAaTransaction
 // (src/lib/capture/ingest.ts): the same matching against SMS captures and manual
 // entries, and one captured message per provider transaction id, which makes a
 // re-sync idempotent.
@@ -57,6 +57,8 @@ export const FIRST_SYNC_DAYS = 90;
 /** Later syncs ask from a little before where the last one stopped; repeats are no-ops. */
 export const OVERLAP_MS = 2 * DAY;
 export const PAGE_SIZE = 100;
+/** An entry dated more than a day ahead, or more than a day before the window asked for, is refused. */
+export const MAX_FUTURE_MS = 24 * 60 * 60 * 1000;
 export const SYNC_LIMITS = { pages: 10, transactions: 1000, budgetMs: 20_000 };
 
 type LinkedDoc = {
@@ -78,6 +80,7 @@ type ConsentDoc = {
   status: AaConsentStatus;
   expiresAt?: Date | null;
   linkedAccounts: LinkedDoc[];
+  activeAt?: Date | null;
   lastSyncAt?: Date | null;
   lastError?: string | null;
   revokedAt?: Date | null;
@@ -139,16 +142,69 @@ function checked<T>(schema: { safeParse: (v: unknown) => { success: true; data: 
   return parsed.data;
 }
 
-/** True when a live consent (any of the user's, other than `exceptId`) already feeds this account. */
-async function accountFedElsewhere(userId: string, accountId: string, exceptId: Types.ObjectId): Promise<boolean> {
-  return Boolean(
-    await AaConsent.exists({
-      user: userId,
-      _id: { $ne: exceptId },
-      status: { $in: LIVE },
-      "linkedAccounts.mappedAccount": new Types.ObjectId(accountId),
-    })
-  );
+/** Every provider call has a time limit; one that does not answer in time is a provider error. */
+export const PROVIDER_TIMEOUT = { ms: 15_000 };
+
+async function withTimeout<T>(call: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const ctl = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      call(ctl.signal),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          ctl.abort();
+          reject(new AaProviderError("PROVIDER_ERROR", "timeout"));
+        }, PROVIDER_TIMEOUT.ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** A short code for the log: never the error object (it can carry a URL, headers or a token). */
+const codeOf = (err: unknown) => (err instanceof AaProviderError ? err.code : err instanceof Error ? err.name : "unknown");
+
+// ── One feed per account ────────────────────────────────────────────────────
+// Two live bank links feeding one account would book every payment twice. The claim (AaAccountClaim, unique on
+// user + account) is the atomic guard: it is taken before a mapping is written and released when the mapping goes.
+
+const CLAIM_GRACE_MS = 60_000;
+const isDuplicateKey = (err: unknown) => typeof err === "object" && err !== null && (err as { code?: number }).code === 11000;
+
+async function claimHolds(userId: string, claim: { consent: Types.ObjectId; linkedId: Types.ObjectId }, accountId: string): Promise<boolean> {
+  const holder = await AaConsent.exists({
+    _id: claim.consent,
+    user: userId,
+    status: { $in: LIVE },
+    linkedAccounts: { $elemMatch: { _id: claim.linkedId, mappedAccount: new Types.ObjectId(accountId) } },
+  });
+  return Boolean(holder);
+}
+
+/** Takes the account for this linked account. False when another live link already feeds it. */
+async function claimAccount(userId: string, accountId: string, consentId: Types.ObjectId, linkedId: Types.ObjectId): Promise<boolean> {
+  const mine = { user: userId, account: new Types.ObjectId(accountId), consent: consentId, linkedId };
+  try {
+    await AaAccountClaim.create(mine);
+    return true;
+  } catch (err) {
+    if (!isDuplicateKey(err)) throw err;
+  }
+  const held = await AaAccountClaim.findOne({ user: userId, account: mine.account }).lean<{ _id: Types.ObjectId; consent: Types.ObjectId; linkedId: Types.ObjectId; updatedAt: Date } | null>();
+  if (!held) return claimAccount(userId, accountId, consentId, linkedId);
+  if (held.consent.equals(consentId) && held.linkedId.equals(linkedId)) return true;
+  // A claim is taken just before its mapping is written, so a young one counts even before the mapping shows.
+  if (Date.now() - new Date(held.updatedAt).getTime() < CLAIM_GRACE_MS) return false;
+  if (await claimHolds(userId, held, accountId)) return false;
+  // Stale (its consent ended or no longer maps here): take it over, but only if nobody else did first.
+  const taken = await AaAccountClaim.findOneAndUpdate({ _id: held._id, consent: held.consent, linkedId: held.linkedId }, { $set: { consent: consentId, linkedId } });
+  return Boolean(taken);
+}
+
+async function releaseClaim(userId: string, accountId: string | Types.ObjectId, consentId: Types.ObjectId, linkedId?: Types.ObjectId) {
+  await AaAccountClaim.deleteMany({ user: userId, account: new Types.ObjectId(String(accountId)), consent: consentId, ...(linkedId ? { linkedId } : {}) });
 }
 
 async function loadConsent(userId: string, id: string): Promise<ConsentDoc> {
@@ -179,9 +235,9 @@ export async function startConsent(userId: string): Promise<{ consent: AaConsent
   try {
     // An opaque, stable id for the person: never the email or name.
     const userRef = createHash("sha256").update(`aa-user:${userId}`).digest("hex").slice(0, 32);
-    created = checked(createdConsentSchema, await provider.createConsent({ userRef, durationDays: CONSENT_DAYS }));
+    created = checked(createdConsentSchema, await withTimeout((signal) => provider.createConsent({ userRef, durationDays: CONSENT_DAYS, signal })));
   } catch (err) {
-    logger.error({ err: err instanceof AaProviderError ? err.code : "unknown", provider: provider.name }, "aa: could not start a consent");
+    logger.error({ err: codeOf(err), provider: provider.name }, "aa: could not start a consent");
     throw new AaServiceError("PROVIDER_ERROR", "The bank linking provider could not be reached. Try again later.");
   }
   const doc = await AaConsent.create({
@@ -202,12 +258,12 @@ export async function startConsent(userId: string): Promise<{ consent: AaConsent
     const excess = await AaConsent.find({ user: userId, status: "pending", _id: { $nin: keep } }).lean<ConsentDoc[]>();
     for (const x of excess) {
       // Withdraw at the provider first: a handle we stop tracking must not stay a live grant there.
-      await providerByName(x.provider)?.revoke(handleOf(x)).catch(() => undefined);
+      await withTimeout((signal) => providerByName(x.provider)!.revoke(handleOf(x), { signal })).catch(() => undefined);
     }
     await AaConsent.deleteMany({ user: userId, status: "pending", _id: { $in: excess.map((x) => x._id) } });
   }
   if (!(await AaConsent.exists({ _id: doc._id, user: userId }))) {
-    await provider.revoke(created.handle).catch(() => undefined);
+    await withTimeout((signal) => provider.revoke(created.handle, { signal })).catch(() => undefined);
     throw new AaServiceError("LIMIT", `You can have at most ${MAX_LIVE_CONSENTS} bank links at once. Remove one first.`);
   }
   return { consent: consentView(doc.toObject() as ConsentDoc), redirectUrl: created.redirectUrl };
@@ -222,7 +278,7 @@ async function notifyEnded(c: ConsentDoc, status: AaConsentStatus) {
   const n = copy[status];
   if (!n) return;
   await Notification.create({ user: c.user, type: "system", title: n.title, body: n.body, meta: { kind: "aa_consent", consentId: c._id.toString() } }).catch(
-    (err) => logger.error({ err }, "aa: could not record the notification")
+    (err) => logger.error({ err: codeOf(err) }, "aa: could not record the notification")
   );
 }
 
@@ -231,26 +287,27 @@ async function applyStatus(c: ConsentDoc, status: AaConsentStatus, extra: Record
   if (status === c.status) return;
   const res = await AaConsent.updateOne(
     { _id: c._id, status: c.status },
-    { $set: { status, ...(status === "revoked" ? { revokedAt: new Date() } : {}), ...extra } }
+    { $set: { status, ...(status === "revoked" ? { revokedAt: new Date() } : {}), ...(status === "active" && !c.activeAt ? { activeAt: new Date() } : {}), ...extra } }
   );
-  if (res.modifiedCount && (status === "expired" || status === "revoked" || status === "failed")) await notifyEnded(c, status);
+  if (res.modifiedCount && (status === "expired" || status === "revoked" || status === "failed")) {
+    await AaAccountClaim.deleteMany({ consent: c._id });
+    await notifyEnded(c, status);
+  }
 }
 
 /** The linked accounts the provider reports that this consent does not hold yet, auto-mapped where the match is clear. */
 async function newLinkedAccounts(c: ConsentDoc, accounts: AaFinancialAccount[]): Promise<LinkedDoc[]> {
   const known = new Set((c.linkedAccounts ?? []).map((l) => l.providerRef));
-  const taken = new Set((c.linkedAccounts ?? []).filter((l) => l.mappedAccount).map((l) => l.mappedAccount!.toString()));
   const out: LinkedDoc[] = [];
   for (const a of accounts.slice(0, 20)) {
     if (known.has(a.ref) || out.some((o) => o.providerRef === a.ref)) continue;
     // A new account: map it to one of the user's own when the digits and bank point at exactly one, and no
     // other bank link already feeds it (two feeds into one account would book each payment twice).
     const m = await matchAccountForMessage(c.user.toString(), { last4: a.last4, bankName: a.bankName, instrument: a.instrument }).catch(() => null);
-    const candidate = m?.accountId && !taken.has(m.accountId) ? m.accountId : null;
-    const pick = candidate && !(await accountFedElsewhere(c.user.toString(), candidate, c._id)) ? candidate : null;
-    if (pick) taken.add(pick);
+    const id = new Types.ObjectId();
+    const pick = m?.accountId && (await claimAccount(c.user.toString(), m.accountId, c._id, id)) ? m.accountId : null;
     out.push({
-      _id: new Types.ObjectId(),
+      _id: id,
       providerRef: a.ref,
       bankName: a.bankName.slice(0, 60),
       maskedNumber: a.last4.slice(-4),
@@ -269,20 +326,22 @@ export async function refreshConsent(userId: string, id: string): Promise<AaCons
   const provider = providerOf(c);
   let state: AaConsentState;
   try {
-    state = checked(consentStateSchema, await provider.consentStatus(handleOf(c)));
+    state = checked(consentStateSchema, await withTimeout((signal) => provider.consentStatus(handleOf(c), { signal })));
   } catch (err) {
     if (err instanceof AaProviderError && err.code === "CONSENT_NOT_FOUND") {
       await applyStatus(c, "failed", { lastError: "not_found_at_provider" });
       return consentView(await loadConsent(userId, id));
     }
-    logger.error({ err: err instanceof AaProviderError ? err.code : "unknown", consentId: id }, "aa: status check failed");
+    logger.error({ err: codeOf(err), consentId: id }, "aa: status check failed");
     throw new AaServiceError("PROVIDER_ERROR", "The bank linking provider could not be reached. Try again later.");
   }
   // Only accounts new to the consent are added, one element at a time: a mapping the person changed since this
   // read, or another refresh adding the same account, is never overwritten.
   const added = state.status === "active" || state.status === "paused" ? await newLinkedAccounts(c, state.accounts) : [];
   for (const l of added) {
-    await AaConsent.updateOne({ _id: c._id, user: userId, "linkedAccounts.providerRef": { $ne: l.providerRef } }, { $push: { linkedAccounts: l } });
+    const res = await AaConsent.updateOne({ _id: c._id, user: userId, "linkedAccounts.providerRef": { $ne: l.providerRef } }, { $push: { linkedAccounts: l } });
+    // Another refresh added this account first: give back the account this one had claimed for it.
+    if (!res.matchedCount && l.mappedAccount) await releaseClaim(userId, l.mappedAccount, c._id, l._id);
   }
   await AaConsent.updateOne({ _id: c._id }, { $set: { ...(state.expiresAt ? { expiresAt: state.expiresAt } : {}), lastError: null } });
   await applyStatus(c, state.status, state.status === "revoked" ? { lastError: "revoked_at_provider" } : {});
@@ -295,28 +354,28 @@ export async function mapLinkedAccount(userId: string, id: string, linkedId: str
   const c = await loadConsent(userId, id);
   const linked = c.linkedAccounts.find((l) => l._id.toString() === linkedId);
   if (!linked) throw new AaServiceError("NOT_FOUND", "Linked account not found");
+  const previous = linked.mappedAccount ? linked.mappedAccount.toString() : null;
+  if (accountId === previous) return consentView(c);
   if (accountId) {
     if (!Types.ObjectId.isValid(accountId)) throw new AaServiceError("VALIDATION", "Account is invalid");
     const mine = await Account.exists({ _id: accountId, user: userId, isArchived: { $ne: true } });
     if (!mine) throw new AaServiceError("NOT_FOUND", "Account not found");
-    // One of your accounts is fed by one linked account: two feeds into one would book the same payment twice.
-    const clash = c.linkedAccounts.some((l) => l._id.toString() !== linkedId && l.mappedAccount?.toString() === accountId);
-    if (clash || (await accountFedElsewhere(userId, accountId, c._id))) {
+    // One of your accounts is fed by one live bank link: two feeds into one would book each payment twice. The
+    // claim is atomic, so requests at once (even on different consents) cannot both win.
+    if (!(await claimAccount(userId, accountId, c._id, linked._id))) {
       throw new AaServiceError("INVALID_STATE", "That account is already fed by another linked account");
     }
   }
-  if (accountId && linked.mappedAccount?.toString() === accountId) return consentView(c);
-  // The clash check above read a snapshot: the write itself refuses an account another element now holds.
   const res = await AaConsent.updateOne(
-    {
-      _id: c._id,
-      user: userId,
-      "linkedAccounts._id": linked._id,
-      ...(accountId ? { "linkedAccounts.mappedAccount": { $ne: new Types.ObjectId(accountId) } } : {}),
-    },
+    { _id: c._id, user: userId, linkedAccounts: { $elemMatch: { _id: linked._id, mappedAccount: previous ? new Types.ObjectId(previous) : { $in: [null] } } } },
     { $set: { "linkedAccounts.$.mappedAccount": accountId ? new Types.ObjectId(accountId) : null } }
   );
-  if (!res.matchedCount && accountId) throw new AaServiceError("INVALID_STATE", "That account is already fed by another linked account");
+  if (!res.matchedCount) {
+    // The mapping changed under this request: undo the claim it took and let the caller retry.
+    if (accountId) await releaseClaim(userId, accountId, c._id, linked._id);
+    throw new AaServiceError("INVALID_STATE", "This linked account was changed by another request. Try again.");
+  }
+  if (previous) await releaseClaim(userId, previous, c._id, linked._id);
   return consentView(await loadConsent(userId, id));
 }
 
@@ -330,10 +389,10 @@ export async function revokeConsent(userId: string, id: string): Promise<{ conse
   if (!provider) providerRevoked = false;
   else {
     try {
-      await provider.revoke(handleOf(c));
+      await withTimeout((signal) => provider.revoke(handleOf(c), { signal }));
     } catch (err) {
       providerRevoked = false;
-      logger.error({ err: err instanceof AaProviderError ? err.code : "unknown", consentId: id }, "aa: provider did not confirm the revoke");
+      logger.error({ err: codeOf(err), consentId: id }, "aa: provider did not confirm the revoke");
     }
   }
   // Sync stops either way. If the provider did not confirm, say so: the person may need to withdraw at the bank.
@@ -341,6 +400,7 @@ export async function revokeConsent(userId: string, id: string): Promise<{ conse
     { _id: c._id, user: userId },
     { $set: { status: "revoked", revokedAt: new Date(), lastError: providerRevoked ? null : "revoke_not_confirmed" } }
   );
+  await AaAccountClaim.deleteMany({ consent: c._id });
   return { consent: consentView(await loadConsent(userId, id)), providerRevoked };
 }
 
@@ -402,7 +462,7 @@ export async function syncConsent(c: ConsentDoc, now = new Date()): Promise<AaSy
       return { ...result, status: "expired" };
     }
     try {
-      const state = checked(consentStateSchema, await provider.consentStatus(handle));
+      const state = checked(consentStateSchema, await withTimeout((signal) => provider.consentStatus(handle, { signal })));
       if (state.status !== "active") {
         await applyStatus(c, state.status, state.status === "revoked" ? { lastError: "revoked_at_provider" } : {});
         return { ...result, status: state.status, skipped: "not_active" };
@@ -444,7 +504,12 @@ export async function syncConsent(c: ConsentDoc, now = new Date()): Promise<AaSy
         let newest = l.syncedUntil ? new Date(l.syncedUntil) : null;
         let finished = false;
         for (let page = 0; page < SYNC_LIMITS.pages; page += 1) {
-          const got = checked(fetchPageSchema, await provider.fetchTransactions(handle, { accountRef: l.providerRef, from, cursor, limit: PAGE_SIZE }));
+          // Out of time before asking for another page: stop here and resume next run.
+          if (Date.now() - started > SYNC_LIMITS.budgetMs) {
+            result.partial = true;
+            break;
+          }
+          const got = checked(fetchPageSchema, await withTimeout((signal) => provider.fetchTransactions(handle, { accountRef: l.providerRef, from, cursor, limit: PAGE_SIZE, signal })));
           for (const raw of got.transactions) {
             if (processed >= SYNC_LIMITS.transactions || Date.now() - started > SYNC_LIMITS.budgetMs) {
               result.partial = true;
@@ -452,19 +517,24 @@ export async function syncConsent(c: ConsentDoc, now = new Date()): Promise<AaSy
             }
             processed += 1;
             result.fetched += 1;
+            // Every entry moves the resume point, a skipped one too (as long as its date is plausible): a long run
+            // of invalid or foreign rows must not stall the link by using up the budget at the same place.
+            const rawAt = raw && typeof raw === "object" ? (raw as { at?: unknown }).at : undefined;
+            if (rawAt instanceof Date && !Number.isNaN(rawAt.getTime()) && rawAt.getTime() <= now.getTime() + MAX_FUTURE_MS && (!newest || rawAt.getTime() > newest.getTime())) {
+              newest = rawAt;
+            }
             const parsed = transactionSchema.safeParse(raw);
             if (!parsed.success) {
               result.skippedInvalid += 1;
               continue;
             }
             const t = parsed.data;
-            // Only this linked account's entries: a provider answering with another account's rows must not land here.
-            if (t.accountRef !== l.providerRef) {
+            // Only this linked account's entries, and only dates in range: a provider answering with another
+            // account's rows, or with a date far in the future or before the window asked for, must not land here.
+            if (t.accountRef !== l.providerRef || t.at.getTime() > now.getTime() + MAX_FUTURE_MS || t.at.getTime() < from.getTime() - MAX_FUTURE_MS) {
               result.skippedInvalid += 1;
               continue;
             }
-            // Skipped entries move the resume point too: a long run of them must not stall the link.
-            if (!newest || t.at.getTime() > newest.getTime()) newest = t.at;
             if (t.currency !== "INR") {
               result.skippedCurrency += 1;
               continue;
@@ -481,7 +551,7 @@ export async function syncConsent(c: ConsentDoc, now = new Date()): Promise<AaSy
               at: t.at,
               narration: t.narration.slice(0, 300),
               reference: t.reference,
-              historical: t.at.getTime() < new Date(c.createdAt).getTime(),
+              historical: t.at.getTime() < new Date(c.activeAt ?? c.createdAt).getTime(),
             });
             if (out.body.status === "created") result.created += 1;
             else if (out.body.status === "updated") result.updated += 1;
@@ -574,7 +644,7 @@ export async function syncAllConsents(now = new Date()): Promise<{ checked: numb
       try {
         created += (await syncConsent(c, now)).created;
       } catch (err) {
-        logger.error({ err, consentId: c._id.toString() }, "aa sync failed for a consent");
+        logger.error({ err: codeOf(err), consentId: c._id.toString() }, "aa sync failed for a consent");
       }
     }
     return { checked: checkedCount, created, ...(partial ? { partial: true as const } : {}) };
@@ -583,19 +653,33 @@ export async function syncAllConsents(now = new Date()): Promise<{ checked: numb
   }
 }
 
-/** Account deletion: withdraw every consent at the provider (best effort) and remove the records. */
-export async function deleteAaDataForUser(userId: string): Promise<void> {
+/**
+ * Account deletion: withdraw every consent at the provider and remove the records. A consent that could not be
+ * withdrawn (no provider available, or it did not confirm) is kept, so the grant is not lost with its handle, and is
+ * counted in `remaining`; the caller refuses the deletion while any remain.
+ */
+export async function deleteAaDataForUser(userId: string): Promise<{ remaining: number }> {
   await connectDB();
   const all = await AaConsent.find({ user: userId }).lean<ConsentDoc[]>();
+  const done: Types.ObjectId[] = [];
+  let remaining = 0;
   for (const c of all) {
-    if (c.status === "revoked") continue;
+    if (c.status === "revoked") {
+      done.push(c._id);
+      continue;
+    }
     const provider = providerByName(c.provider);
-    if (!provider) continue;
     try {
-      await provider.revoke(handleOf(c));
+      if (!provider) throw new AaProviderError("PROVIDER_ERROR", "provider_unavailable");
+      await withTimeout((signal) => provider.revoke(handleOf(c), { signal }));
+      done.push(c._id);
     } catch (err) {
-      logger.error({ err: err instanceof AaProviderError ? err.code : "unknown", consentId: c._id.toString() }, "aa: could not withdraw a consent while deleting an account");
+      remaining += 1;
+      logger.error({ err: codeOf(err), consentId: c._id.toString() }, "aa: could not withdraw a consent while deleting an account");
     }
   }
-  await AaConsent.deleteMany({ user: userId });
+  await AaConsent.deleteMany({ user: userId, _id: { $in: done } });
+  await AaAccountClaim.deleteMany({ user: userId, consent: { $in: done } });
+  if (remaining) logger.warn({ userId, remaining }, "aa: consents kept because they could not be withdrawn");
+  return { remaining };
 }

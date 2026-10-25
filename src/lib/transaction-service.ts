@@ -397,6 +397,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
       category: s.category,
       amount: s.amount,
       description: s.description ?? sharedRest.description,
+      ...(skipBalance ? { balanceApplied: false } : {}),
       account: accountId,
       user: userId,
       date: startDate,
@@ -479,49 +480,13 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   }
 
   // ── Single transaction (non-recurring or recurring count = 1) ───────────
-  if (!skipBalance) {
-    const accountBefore = account.toObject();
-    const balanceDelta = rest.type === "income" ? rest.amount : -rest.amount;
-    const accountAfter = await Account.findOneAndUpdate(
-      { _id: account._id, user: userId },
-      { $inc: { balance: balanceDelta } },
-      { new: true }
-    );
-    await appendLedgerBlock({
-      userId,
-      scope: "account",
-      entityId: account._id.toString(),
-      action: "update",
-      before: accountBefore,
-      after: accountAfter,
-      actor,
-    });
-  }
-
-  if (rest.type === "transfer" && transferToId) {
-    const transferAccountBefore = await Account.findOne({ _id: transferToId, user: userId });
-    const transferAccount = await Account.findOneAndUpdate(
-      { _id: transferToId, user: userId },
-      { $inc: { balance: rest.amount } },
-      { new: true }
-    );
-    if (transferAccountBefore && transferAccount) {
-      await appendLedgerBlock({
-        userId,
-        scope: "account",
-        entityId: transferAccount._id.toString(),
-        action: "update",
-        before: transferAccountBefore,
-        after: transferAccount,
-        actor,
-      });
-    }
-  }
-
+  // The row is written first and the balance moved after it: a failure while writing leaves nothing behind, and a
+  // failure while moving the balance removes the row again (and puts back what had moved), so a retry applies once.
   const transaction = await Transaction.create({
     ...rest,
     ...foreignFields.stored,
     ...(provenance ?? {}),
+    ...(skipBalance ? { balanceApplied: false } : {}),
     account: accountId,
     user: userId,
     date: startDate,
@@ -529,6 +494,61 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     recurrenceEndDate: rest.recurrenceEndDate ? new Date(rest.recurrenceEndDate) : undefined,
     ...(transferToId ? { transferTo: transferToId } : {}),
   });
+  const applied: { account: string; delta: number }[] = [];
+  try {
+    if (!skipBalance) {
+      const accountBefore = account.toObject();
+      const balanceDelta = rest.type === "income" ? rest.amount : -rest.amount;
+      const accountAfter = await Account.findOneAndUpdate(
+        { _id: account._id, user: userId },
+        { $inc: { balance: balanceDelta } },
+        { new: true }
+      );
+      applied.push({ account: account._id.toString(), delta: balanceDelta });
+      await appendLedgerBlock({
+        userId,
+        scope: "account",
+        entityId: account._id.toString(),
+        action: "update",
+        before: accountBefore,
+        after: accountAfter,
+        actor,
+      });
+    }
+
+    if (rest.type === "transfer" && transferToId) {
+      const transferAccountBefore = await Account.findOne({ _id: transferToId, user: userId });
+      const transferAccount = await Account.findOneAndUpdate(
+        { _id: transferToId, user: userId },
+        { $inc: { balance: rest.amount } },
+        { new: true }
+      );
+      applied.push({ account: transferToId, delta: rest.amount });
+      if (transferAccountBefore && transferAccount) {
+        await appendLedgerBlock({
+          userId,
+          scope: "account",
+          entityId: transferAccount._id.toString(),
+          action: "update",
+          before: transferAccountBefore,
+          after: transferAccount,
+          actor,
+        });
+      }
+    }
+  } catch (err) {
+    // Undo: the balance moves already made, then the row. Best effort; the original error is what the caller gets.
+    for (const u of applied) {
+      await Account.updateOne({ _id: u.account, user: userId }, { $inc: { balance: -u.delta } }).catch((undoErr) =>
+        logger.error({ err: undoErr, userId }, "could not undo a balance move after a failed create")
+      );
+    }
+    await Transaction.deleteOne({ _id: transaction._id, user: userId }).catch((undoErr) =>
+      logger.error({ err: undoErr, userId }, "could not remove a row after a failed create")
+    );
+    throw err;
+  }
+
   await appendLedgerBlock({
     userId,
     scope: "transaction",
@@ -618,6 +638,7 @@ export async function deleteTransaction(userId: string, transactionId: string, a
     tags?: unknown[];
     recurringId?: unknown;
     installmentStatus?: string;
+    balanceApplied?: boolean;
   }>();
   if (!txn) {
     throw new TransactionServiceError("TRANSACTION_NOT_FOUND", "Transaction not found");
@@ -627,8 +648,9 @@ export async function deleteTransaction(userId: string, transactionId: string, a
     throw new TransactionServiceError("TRANSACTION_LOCKED", `${blocker} Use the linked record flow to reverse it.`);
   }
 
-  // Reverse account balance only for transactions that previously affected it.
-  const affectsBalance = !txn.recurringId || txn.installmentStatus === "paid";
+  // Reverse account balance only for transactions that previously affected it (a row written with
+  // balanceApplied: false never moved it).
+  const affectsBalance = txn.balanceApplied !== false && (!txn.recurringId || txn.installmentStatus === "paid");
   if (affectsBalance) {
     if (txn.type === "transfer") {
       const accountBefore = await Account.findOne({ _id: txn.account, user: userId });

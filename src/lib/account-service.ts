@@ -2,6 +2,7 @@ import { z } from "zod";
 import connectDB from "@/lib/mongodb";
 import Account from "@/models/Account";
 import AaConsent from "@/models/AaConsent";
+import AaAccountClaim from "@/models/AaAccountClaim";
 import type { AuthUser } from "@/lib/auth-guard";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { isSupportedCurrency } from "@/lib/currency";
@@ -100,6 +101,7 @@ export async function archiveAccount(userId: string, accountId: string, actor: A
     { $set: { "linkedAccounts.$[l].mappedAccount": null } },
     { arrayFilters: [{ "l.mappedAccount": account._id }] }
   );
+  await AaAccountClaim.deleteMany({ user: userId, account: account._id });
 
   await appendLedgerBlock({ userId, scope: "account", entityId: accountId, action: "delete", before, after: account, actor });
 }

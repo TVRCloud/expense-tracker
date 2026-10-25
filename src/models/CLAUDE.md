@@ -7,7 +7,7 @@ Purpose: Mongoose schemas, one file per collection. Field tables: [docs/database
 - Budget, SpendLimit (one doc per user: daily and weekly limit, plus `limitHistory` of the amounts over time), SubscriptionDecision (confirm or dismiss choice per detected subscription), ManualAsset (property, gold and so on counted in net worth; archived, not deleted), NetWorthSnapshot (one row per user per local day for the net worth trend), Goal, SinkingFund (money set aside for a cost on a due date), Loan, Repayment, Rule (categorise rules; hard-deleted), Notification, PushSubscription: feature data.
 - CapturedMessage, IdempotencyRecord: bank message inbox; integration idempotency.
 - Receipt (a receipt photo on a transaction, encrypted, hard-deleted with it), ExchangeRate (one cached rate table per base currency, kept for outages), ImportLock (one live CSV import per user and account): Phase 6 data.
-- AaConsent (a bank link through an Account Aggregator: the provider handle encrypted, linked accounts with last four digits and a mapping, status; not in backups; realtime resource `aa`): Phase 7.
+- AaAccountClaim (one row per account a live bank link feeds, unique on user and account: the atomic one-feed-per-account guard), AaConsent (a bank link through an Account Aggregator: the provider handle encrypted, linked accounts with last four digits and a mapping, status; not in backups; realtime resource `aa`): Phase 7.
 - LedgerBlock, LedgerBackfill, LogSecurity, LogUnlockSession, SecurityRateLimit: ledger chain, logs unlock, rate limits.
 - Shared TypeScript shapes live in src/types/models.ts.
 

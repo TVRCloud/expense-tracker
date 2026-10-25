@@ -6,7 +6,7 @@ import { MAX_MINOR_AMOUNT } from "@/lib/currency";
 // implements AaProvider plus one line in providers.ts. Today the only
 // implementation is the deterministic sandbox, so the feature cannot reach a
 // bank: going live needs a licensed FIU/TSP agreement, provider credentials and
-// legal review (docs/security.md, "Account Aggregator").
+// legal review (docs/account-aggregator.md, "Going live").
 
 export type AaConsentStatus = "pending" | "active" | "paused" | "revoked" | "expired" | "failed";
 
@@ -58,15 +58,15 @@ export type AaFetchPage = {
 export interface AaProvider {
   readonly name: string;
   /** Starts a consent for one user. `userRef` is an opaque, stable id for the person (never the email). */
-  createConsent(input: { userRef: string; durationDays: number }): Promise<AaCreatedConsent>;
-  consentStatus(handle: string): Promise<AaConsentState>;
+  createConsent(input: { userRef: string; durationDays: number; signal?: AbortSignal }): Promise<AaCreatedConsent>;
+  consentStatus(handle: string, opts?: { signal?: AbortSignal }): Promise<AaConsentState>;
   /** Transactions of one linked account from `from` (or after `cursor`), at most `limit` per page. */
   fetchTransactions(
     handle: string,
-    input: { accountRef: string; from: Date; cursor?: string; limit: number }
+    input: { accountRef: string; from: Date; cursor?: string; limit: number; signal?: AbortSignal }
   ): Promise<AaFetchPage>;
   /** Withdraws the consent at the provider. Must be safe to call twice. */
-  revoke(handle: string): Promise<void>;
+  revoke(handle: string, opts?: { signal?: AbortSignal }): Promise<void>;
 }
 
 /** A provider failure the caller may show as a short code. Never carries a provider message or token. */

@@ -54,6 +54,10 @@ const TransactionSchema = new Schema(
       enum: ["manual", "sms", "notification", "n8n", "aa", "recurring", "import"],
       default: "manual",
     },
+    // False on a row written without touching the account balance (a CSV import with "adjust balance" off, a bank
+    // link entry older than the link): the balance already reflected it, so deleting, voiding or correcting the row
+    // must not move the balance either. Absent on every other row, which did move it.
+    balanceApplied: { type: Boolean },
     // The captured message whose values this transaction currently uses.
     sourceCapture: { type: Schema.Types.ObjectId, ref: "CapturedMessage" },
     // Every captured message linked to this payment (primary + supporting).

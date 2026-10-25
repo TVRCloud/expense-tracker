@@ -253,6 +253,18 @@ describe("encrypted backup and restore", () => {
     expect(await Account.countDocuments({ _id: { $in: [ids.bank, ids.card] }, user: a })).toBe(2);
   });
 
+  it("keeps balanceApplied: false on a history row through a restore", async () => {
+    const ids = await seed(a);
+    const { default: Transaction } = await import("@/models/Transaction");
+    await Transaction.create({ user: a, account: ids.bank, type: "expense", amount: 777, category: "Food", date: new Date("2026-03-09T10:00:00Z"), balanceApplied: false });
+    const { data } = await (await exportBackup()).json();
+    const res = await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B });
+    expect(res.status).toBe(200);
+    const row = await Transaction.findOne({ user: b, amount: 777 }).lean<{ balanceApplied?: boolean }>();
+    expect(row?.balanceApplied).toBe(false);
+    expect(await Transaction.countDocuments({ user: b, balanceApplied: { $ne: false } })).toBe(5);
+  });
+
   it("a wrong passphrase and a changed file give the same generic answer and write nothing", async () => {
     await seed(a);
     const { data } = await (await exportBackup()).json();

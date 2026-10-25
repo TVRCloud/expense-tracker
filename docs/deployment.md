@@ -16,7 +16,7 @@ Critical variables:
 - `CAPTURE_ENCRYPTION_KEY` — 32+ characters; encrypts captured messages and receipt photos. Changing it makes both unreadable
 - `NEXTAUTH_SECRET` — must be 32+ random characters
 - `NEXTAUTH_URL` — public URL of your deployment
-- `AA_PROVIDER` — optional. Unset (the default) turns bank linking off. `sandbox` is a fake provider for demos and tests, never for production; a real provider needs the agreements listed in [account-aggregator.md](account-aggregator.md). Also schedule `GET /api/cron/aa-sync` with `Authorization: Bearer $CRON_SECRET` (every few hours; `server.ts` runs it every 6 hours itself) once a provider is set
+- `AA_PROVIDER` — optional. Unset (the default) turns bank linking off. `sandbox` is a fake provider for demos and tests, never for production (it is refused when `NODE_ENV=production` unless `AA_ALLOW_SANDBOX=true` is also set, for a demo server); a real provider needs the agreements listed in [account-aggregator.md](account-aggregator.md). Also schedule `GET /api/cron/aa-sync` with `Authorization: Bearer $CRON_SECRET` (every few hours; `server.ts` runs it every 6 hours itself) once a provider is set
 - `CAPTURE_ENCRYPTION_KEY` — 32+ random characters. Encrypts captured message text and receipts at rest and seeds the ids backup restore derives. Capture and receipt endpoints fail without it, and changing it makes stored captures and receipts unreadable and a re-run of an old restore add copies, so keep it the same across deploys and server moves
 
 ## Build

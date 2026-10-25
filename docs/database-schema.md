@@ -95,6 +95,8 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `refundPriorCategory` | String | The category before the expense's was carried over; restored when a confirmed refund is unlinked |
 | `reviewedAt` / `reviewedBy` | Date / ObjectId | |
 | `deductible` | Boolean | Tax helper override on an expense: `true` or `false` wins over the user's deductible categories, unset follows them |
+| `balanceApplied` | Boolean | `false` on a row written without moving the account balance (CSV import with adjust balance off, bank link entry older than the link): delete, void and correct never move the balance for it. Absent on every other row |
+| `balanceApplied` | Boolean | `false` on a row written without moving the account balance (CSV import with adjust balance off, bank link entry older than the link): delete, void and correct never move the balance for it. Absent on every other row; kept in backups |
 | `isDeleted` | Boolean | soft delete |
 | `deletedAt` | Date | |
 | `deletedBy` | ObjectId | ref: User |
@@ -420,12 +422,17 @@ Bank links through an Account Aggregator ([account-aggregator.md](account-aggreg
 | `handleHash` | String | sha256 of the handle |
 | `status` | String | `pending\|active\|paused\|revoked\|expired\|failed` |
 | `expiresAt` | Date | |
+| `activeAt` | Date | first time it became active (the person approved it): bank entries before it are history |
 | `linkedAccounts` | [Object] | `{_id, providerRef, bankName, maskedNumber (last four digits only), mappedAccount (ObjectId ref Account, null = not read), syncedUntil, syncedPartial}` |
 | `lastSyncAt` | Date | |
 | `lastError` | String | a short code (`provider_error`, `revoked_at_provider`, `not_found_at_provider`, `revoke_not_confirmed`, `provider_unavailable`), never a provider message |
 | `revokedAt` | Date | |
 
 Indexes: `{user, status, createdAt}`, `{status, lastSyncAt}`, `{handleHash}`
+
+## aa_account_claims
+
+One row per account of the user that a live bank link feeds: the atomic "one feed per account" guard (unique `{user, account}`). Released when the mapping goes, the consent ends or the account is archived; a stale one can be taken over. Not in backups, no realtime resource. Fields: `user`, `account`, `consent`, `linkedId`.
 
 ## credit_statements
 

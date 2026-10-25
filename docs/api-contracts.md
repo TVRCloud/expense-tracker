@@ -376,7 +376,7 @@ Integration routes only, with the integration envelope. What it does and does no
 | POST | `/api/integrations/aa/consents/:id/revoke` | `Idempotency-Key` required. 200 `{consent, providerRevoked}`; `providerRevoked: false` means the provider did not confirm (the consent is still marked `revoked`, `lastError: revoke_not_confirmed`). Imported transactions stay |
 | GET | `/api/cron/aa-sync` | `Authorization: Bearer $CRON_SECRET`. Reads every active consent not read in the last hour, longest unread first; `{ok, checked, created, skipped?, partial?}`; `partial: true` means it ran out of time (240 s) and the rest wait for the next run. While bank linking is off it answers `200 {ok:true, checked:0, created:0}` on purpose |
 
-Transactions it adds have `source: aa` and appear in the list endpoints like any other. A consent change is the `aa` realtime resource.
+Transactions it adds have `source: aa` and appear in the list endpoints like any other. A consent change is the `aa` realtime resource. `DELETE /api/me` answers 409 while a bank link cannot be withdrawn at its provider.
 
 ## Backup and restore
 

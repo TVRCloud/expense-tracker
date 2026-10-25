@@ -38,6 +38,9 @@ const AaConsentSchema = new Schema(
       required: true,
     },
     expiresAt: { type: Date },
+    // When it first became active (the person approved it). Entries older than this are history: they never
+    // move a balance, which the person set to match the bank at that moment.
+    activeAt: { type: Date },
     linkedAccounts: { type: [LinkedAccountSchema], default: [] },
     lastSyncAt: { type: Date },
     // A short code for the last failure ("provider_error", "revoked_at_provider"), never a provider message.
