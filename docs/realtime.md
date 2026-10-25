@@ -62,7 +62,7 @@ Auth `Authorization: Bearer <key>`, same as other integration routes; 401 `UNAUT
 
 | Resource | Invalidated query keys |
 |----------|------------------------|
-| `transactions` | transactions, accounts, credit-summary, credit-statements, upcoming-installments, recurring-series, recurring-series-detail, budgets, spend-limit, analytics, reconcile, notifications, subscriptions, savings-rate, net-worth |
+| `transactions` | transactions, accounts, credit-summary, credit-statements, upcoming-installments, recurring-series, recurring-series-detail, budgets, spend-limit, analytics, reconcile, notifications, subscriptions, savings-rate, net-worth, tax |
 | `accounts` | accounts, credit-summary, credit-statements, net-worth |
 | `budgets` | budgets, notifications |
 | `goals` | goals, notifications |

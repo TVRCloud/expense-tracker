@@ -19,9 +19,11 @@ All monetary fields are stored as **integers (cents)** — divide by 100 for dis
 | `preferences.emailNotifications` | Boolean | |
 | `preferences.weekStartsOn` | Number | 0=Sun, 1=Mon |
 | `preferences.timezone` | String | IANA zone, default `Asia/Kolkata`; decides where a day starts for spend limits |
-| `preferences.currency` | String | ISO 4217 |
+| `baseLocked` | Boolean | set atomically by the first write of any base-unit amount; once set the base currency cannot change |
+| `preferences.currency` | String | ISO 4217, the base currency every `amount` is in; supported codes only, cannot change once the user has transactions |
 | `preferences.billReminders.enabled` | Boolean | default false; turns on bill due reminders |
 | `preferences.billReminders.leadDays` | Number | 1 to 14, default 3; how many days ahead to remind |
+| `preferences.tax.deductibleCategories` | [String] | lower-case category names that count as deductible in the tax summary, up to 50 |
 | `preferences.weeklyReview.enabled` | Boolean | default false; turns on the weekly review notification |
 | `preferences.weeklyReview.day` | Number | 0 (Sunday) to 6, default 1 (Monday); the weekday it arrives, from 09:00 on the user's clock |
 | `passwordResetToken` | String | hashed, single-use |
@@ -46,7 +48,7 @@ All monetary fields are stored as **integers (cents)** — divide by 100 for dis
 | `name` | String | |
 | `type` | String | `cash\|bank\|credit_card\|savings\|investment\|wallet` |
 | `balance` | Number | cents, integer |
-| `currency` | String | ISO 4217 |
+| `currency` | String | ISO 4217, supported codes only; a label for the account's own currency, `balance` stays in the user's base currency |
 | `color` | String | hex |
 | `icon` | String | |
 | `isArchived` | Boolean | soft delete |
@@ -66,18 +68,25 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `account` | ObjectId | ref: Account |
 | `type` | String | `income\|expense\|transfer` |
 | `amount` | Number | cents, always positive |
-| `currency` | String | |
+| `currency` | String | code of the base currency `amount` is in |
+| `originalAmount` | Number | foreign spend only: minor units of `originalCurrency` |
+| `originalCurrency` | String | foreign spend only: ISO 4217 |
+| `originalExponent` | Number | foreign spend only: minor-unit digits of `originalCurrency` (JPY 0, USD 2, KWD 3) |
+| `rate` | Number | foreign spend only: base units per 1 unit of `originalCurrency`, 10 significant digits |
+| `rateDate` | Date | foreign spend only: when the provider published the rate; unset for a client rate |
+| `rateSource` | String | foreign spend only: `provider\|client` |
 | `category` | String | |
 | `subcategory` | String | |
 | `description` | String | full-text indexed |
 | `note` | String | full-text indexed |
 | `date` | Date | |
-| `tags` | [String] | |
+| `tags` | [String] | lower-case, at most 10 of 40 characters; tags with a colon are server link tags (`loan:`, `repayment:`, `credit_statement:`) |
 | `transferTo` | ObjectId | ref: Account, only for transfers |
 | `isRecurring` | Boolean | |
 | `recurringId`, `recurrence*`, `installmentIndex`, `installmentStatus`, `paidAt` | | recurring series fields |
-| `splitGroupId` | ObjectId | shared by split-purchase siblings |
-| `source` | String | `manual\|sms\|notification\|n8n\|recurring\|import`, default `manual` |
+| `splitGroupId` | ObjectId | shared by split-purchase siblings (2 to 20 lines, amounts add up to the purchase) |
+| `attachments` | [String] | ids of the `receipts` on this row, at most 5 |
+| `source` | String | `manual\|sms\|notification\|n8n\|recurring\|import`, default `manual`. `import` rows come from the CSV import (`/api/integrations/import/commit`) |
 | `sourceCapture` | ObjectId | ref: CapturedMessage, the message whose values are in use |
 | `captures` | [ObjectId] | every captured message for this payment |
 | `reviewStatus` | String | `unreviewed\|confirmed\|corrected\|voided`, null for manual rows |
@@ -85,11 +94,12 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `refundStatus` | String | `suggested\|confirmed\|rejected`, null otherwise. Only `confirmed` nets the pair out of stats and budgets |
 | `refundPriorCategory` | String | The category before the expense's was carried over; restored when a confirmed refund is unlinked |
 | `reviewedAt` / `reviewedBy` | Date / ObjectId | |
+| `deductible` | Boolean | Tax helper override on an expense: `true` or `false` wins over the user's deductible categories, unset follows them |
 | `isDeleted` | Boolean | soft delete |
 | `deletedAt` | Date | |
 | `deletedBy` | ObjectId | ref: User |
 
-Indexes: `{user, isDeleted, date}` plus `{user, isDeleted, <account\|transferTo\|type\|category\|splitGroupId\|reviewStatus\|refundStatus>, date}`, sparse `{user, refundOf}`, recurring-series indexes, `{user, tags}`, full-text on `{description, note}`
+Indexes: `{user, isDeleted, date}` plus `{user, isDeleted, <account\|transferTo\|type\|category\|splitGroupId\|reviewStatus\|refundStatus>, date}`, sparse `{user, refundOf}`, sparse `{recurringId}` and `{splitGroupId}` (restore checks whether other people's rows use an id), recurring-series indexes, `{user, tags}`, full-text on `{description, note}`
 
 ## budgets
 
@@ -207,6 +217,20 @@ Sparse index: `{user, externalLoanId}`
 | `date` | Date | |
 | `note` | String | |
 | `account` | ObjectId | ref: Account |
+
+## receipts
+
+A receipt photo on a transaction. The image is encrypted at rest and only leaves through an authenticated route that checks the owner; hard-deleted with its transaction.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | ref: User |
+| `transaction` | ObjectId | ref: Transaction |
+| `contentType` | String | `image/jpeg\|image/png\|image/webp\|image/heic`, from the file's bytes |
+| `size` | Number | bytes of the original image, at most 3 MB |
+| `iv`, `tag`, `data` | Buffer | AES-256-GCM. Key derived from `CAPTURE_ENCRYPTION_KEY` with a receipt label; `<user>:<receipt id>` is bound in as additional data, so a copied blob does not decrypt |
+
+Index: `{user, transaction}`. Limits per user: 200 files, 150 MB. No new environment variable.
 
 ## goals
 
@@ -360,7 +384,28 @@ Index: `{user, revoked}`
 | `fingerprint` | String | sha256 of the request body |
 | `status` | String | `pending\|completed` |
 | `responseStatus` / `responseBody` | | replayed on retry |
-| `expiresAt` | Date | TTL, `N8N_IDEMPOTENCY_TTL_SECONDS` |
+| `expiresAt` | Date | TTL, `N8N_IDEMPOTENCY_TTL_SECONDS`; a pending record of a long write (CSV import) expires after 2 minutes until it completes |
+
+## import_locks
+
+One live CSV import per user and account.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` / `account` | String | unique together: the lock |
+| `expiresAt` | Date | TTL, 2 minutes, frees a lock if the run was killed |
+
+## exchange_rates
+
+One cached rate table per base currency (open.er-api.com), refreshed after 24 hours by `src/lib/exchange-rate-service.ts`; rows are kept so an outage can fall back to the last table for up to 30 days.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `base` | String | unique; ISO 4217 |
+| `rates` | Object | code to units of that currency per 1 unit of `base` (supported codes only) |
+| `rateDate` | Date | the provider's own update time |
+| `fetchedAt` | Date | when we fetched it |
+| `lastAttemptAt` | Date | set when a refresh failed; no new attempt for 10 minutes (a row can exist with no table yet) |
 
 ## credit_statements
 
@@ -382,3 +427,7 @@ Index: `{user, revoked}`
 | `keys.p256dh` | String | |
 | `keys.auth` | String | |
 | `isActive` | Boolean | set false on 410 |
+
+## Backup files
+
+No collection. A backup is built from the user's rows (accounts, transactions, budgets, goals, loans, repayments, rules, sinking funds, manual assets, subscription decisions, spend limit) and returned to the caller as an encrypted file; a restore inserts rows with the caller as `user`. Format and rules: [backup.md](backup.md).

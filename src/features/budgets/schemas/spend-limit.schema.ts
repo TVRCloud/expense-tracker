@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_MINOR_AMOUNT } from "@/lib/currency";
 
 // Single source of truth for spend-limit validation: the settings dialog
 // (SpendLimitCard.tsx) and the server (src/lib/spend-limit.ts re-exports this)
@@ -6,8 +7,8 @@ import { z } from "zod";
 // imports server-only mongoose code that must never reach a client bundle.
 export const spendLimitUpdateSchema = z.object({
   // null clears the limit.
-  dailyAmount: z.number().int().positive().nullable().optional(),
-  weeklyAmount: z.number().int().positive().nullable().optional(),
+  dailyAmount: z.number().int().positive().max(MAX_MINOR_AMOUNT).nullable().optional(),
+  weeklyAmount: z.number().int().positive().max(MAX_MINOR_AMOUNT).nullable().optional(),
   alertAt: z.number().int().min(1).max(100).optional(),
   excludeCategories: z.array(z.string().min(1).max(60)).max(50).optional(),
   rollover: z.boolean().optional(),

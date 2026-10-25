@@ -5,6 +5,7 @@ import { integrationOk } from "@/lib/integrations/response";
 import { getMonthlyStats } from "@/lib/stats-service";
 import { listBudgetsWithSpend } from "@/lib/budget-service";
 import { getSpendLimitStatusIfConfigured } from "@/lib/spend-limit";
+import { getBaseCurrency } from "@/lib/base-currency";
 
 // GET /api/integrations/summary — an automation-oriented snapshot combining
 // account balances, this month's income/expense (via the same cached
@@ -17,10 +18,11 @@ export const GET = withIntegrationRoute("summary", async ({ req, user, requestId
   const year = parseInt(searchParams.get("year") ?? String(now.getFullYear()), 10);
 
   await connectDB();
-  const [accounts, stats, budgets, spendLimit] = await Promise.all([
+  const [accounts, baseCurrency, stats, budgets, spendLimit] = await Promise.all([
     Account.find({ user: user.id, isArchived: false })
       .select("_id name type balance currency")
       .lean(),
+    getBaseCurrency(user.id),
     getMonthlyStats(user.id, year, month),
     listBudgetsWithSpend(user.id, year, month),
     getSpendLimitStatusIfConfigured(user.id),
@@ -31,7 +33,8 @@ export const GET = withIntegrationRoute("summary", async ({ req, user, requestId
       // Who this key acts as, so a connected app can show "Connected as <name>".
       user: { name: user.name },
       period: { month, year },
-      accounts,
+      // Balances are in the base currency; the account's own `currency` is a label.
+      accounts: accounts.map((a) => ({ ...a, currency: baseCurrency })),
       stats,
       budgets,
       // Null until the user sets a daily or weekly limit.

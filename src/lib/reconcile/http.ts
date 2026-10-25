@@ -11,13 +11,16 @@ import logger from "@/lib/logger";
 
 function statusOf(err: ReconcileError | TransactionServiceError) {
   if (err instanceof TransactionServiceError) {
-    return err.code === "TRANSACTION_LOCKED" ? 409 : 404;
+    if (err.code === "TRANSACTION_LOCKED") return 409;
+    if (err.code === "RATE_UNAVAILABLE" || err.code === "RATE_OUT_OF_BAND" || err.code === "CONVERSION_FAILED" || err.code === "CURRENCY_MISMATCH" || err.code === "UNSUPPORTED_BASE_CURRENCY") return 400;
+    return 404;
   }
   switch (err.code) {
     case "NOT_FOUND":
     case "ACCOUNT_NOT_FOUND":
       return 404;
     case "NO_CHANGES":
+    case "FOREIGN_AMOUNT":
       return 400;
     default:
       return 409;

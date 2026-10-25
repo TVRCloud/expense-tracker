@@ -36,12 +36,18 @@ export async function withIdempotency<T extends Record<string, unknown>>(params:
   key: string;
   body: unknown;
   execute: () => Promise<{ status: number; body: T }>;
+  // A long write can be cut off (function timeout) before the cleanup below
+  // runs. With this set, the pending record expires after that many seconds
+  // instead of the full TTL, so a retry is not blocked for a day; on success
+  // the record gets the full TTL.
+  pendingTtlSeconds?: number;
 }): Promise<IdempotencyOutcome<T>> {
-  const { userId, endpoint, key, body, execute } = params;
+  const { userId, endpoint, key, body, execute, pendingTtlSeconds } = params;
   await connectDB();
 
   const requestFingerprint = fingerprint(body);
-  const expiresAt = new Date(Date.now() + config.integrations.idempotencyTtlSeconds * 1000);
+  const fullTtlMs = config.integrations.idempotencyTtlSeconds * 1000;
+  const expiresAt = new Date(Date.now() + (pendingTtlSeconds ? Math.min(pendingTtlSeconds * 1000, fullTtlMs) : fullTtlMs));
 
   try {
     await IdempotencyRecord.create({
@@ -76,13 +82,9 @@ export async function withIdempotency<T extends Record<string, unknown>>(params:
     return { kind: "conflict", reason: "in_progress" };
   }
 
+  let result: { status: number; body: T };
   try {
-    const result = await execute();
-    await IdempotencyRecord.findOneAndUpdate(
-      { userId, endpoint, key },
-      { $set: { status: "completed", responseStatus: result.status, responseBody: result.body } }
-    );
-    return { kind: "executed", status: result.status, body: result.body };
+    result = await execute();
   } catch (error) {
     // Don't let a transient failure permanently block retries under this key
     // before the TTL would otherwise expire it.
@@ -93,4 +95,24 @@ export async function withIdempotency<T extends Record<string, unknown>>(params:
     }
     throw error;
   }
+
+  // The work is done. If only recording it fails, the record stays pending (a
+  // retry is told to wait rather than doing the write again) and the caller
+  // still gets the result.
+  try {
+    await IdempotencyRecord.findOneAndUpdate(
+      { userId, endpoint, key },
+      {
+        $set: {
+          status: "completed",
+          responseStatus: result.status,
+          responseBody: result.body,
+          expiresAt: new Date(Date.now() + fullTtlMs),
+        },
+      }
+    );
+  } catch (err) {
+    logger.error({ err, userId, endpoint }, "Failed to record the idempotency result after a successful write");
+  }
+  return { kind: "executed", status: result.status, body: result.body };
 }

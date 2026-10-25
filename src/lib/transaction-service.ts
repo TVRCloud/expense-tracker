@@ -1,4 +1,4 @@
-import { Types } from "mongoose";
+import { type ClientSession, Types } from "mongoose";
 import { z } from "zod";
 import connectDB from "@/lib/mongodb";
 import Transaction from "@/models/Transaction";
@@ -13,6 +13,11 @@ import { computeInstallmentDates, OPEN_ENDED_WINDOW } from "@/lib/recurrence";
 import { appendLedgerBlock } from "@/lib/ledger";
 import { ruleOverridesForTransaction } from "@/lib/rule-service";
 import logger from "@/lib/logger";
+import { isReservedTag, MAX_TAGS, mergeUserTags, normaliseTags, tagListSchema } from "@/lib/tags";
+import { deleteReceiptsOfTransaction } from "@/lib/receipt-service";
+import { getBaseState, lockBaseCurrency, type BaseState } from "@/lib/base-currency";
+import { BASE_CURRENCY_ONLY_TWO_DECIMALS, isSupportedAsBase, convertMinor, CurrencyError, isSupportedCurrency, MAX_MINOR_AMOUNT, minorExponent } from "@/lib/currency";
+import { getRate, RateUnavailableError } from "@/lib/exchange-rate-service";
 
 // Shared transaction-creation business logic, used by both the browser-facing
 // POST /api/transactions route and the n8n-facing POST /api/integrations/transactions
@@ -22,18 +27,36 @@ import logger from "@/lib/logger";
 // mongoose sessions/transactions are used anywhere in this codebase, so
 // mutations below remain sequential and non-atomic, same as before extraction.
 
+export const MAX_SPLIT_LINES = 20;
+
+export const splitLineSchema = z.object({
+  category: z.string().trim().min(1),
+  amount: z.number().int().positive().max(MAX_MINOR_AMOUNT),
+  description: z.string().optional(),
+});
+
 export const transactionCreateSchema = z
   .object({
     accountId: z.string(),
     type: z.enum(["income", "expense", "transfer"]),
-    amount: z.number().int().positive(),
-    currency: z.string().default("INR"),
+    // Paise of the base currency. Leave out when sending originalAmount.
+    amount: z.number().int().positive().max(MAX_MINOR_AMOUNT).optional(),
+    // Only the base currency's code is accepted (another code is a 400: send
+    // originalAmount and originalCurrency instead). A stored row's currency is
+    // always the base currency.
+    currency: z.string().optional(),
+    // Foreign spend: minor units of originalCurrency (cents, yen, fils...).
+    // The server converts to the base currency and sets `amount`.
+    originalAmount: z.number().int().positive().max(MAX_MINOR_AMOUNT).optional(),
+    originalCurrency: z.string().refine(isSupportedCurrency, "Unsupported currency").optional(),
+    // Base units per 1 unit of originalCurrency; the server's own rate is used when omitted.
+    rate: z.number().positive().finite().optional(),
     category: z.string().min(1).optional(),
     subcategory: z.string().optional(),
     description: z.string().optional(),
     note: z.string().optional(),
     date: z.string(),
-    tags: z.array(z.string()).default([]),
+    tags: tagListSchema.default([]),
     transferToId: z.string().optional(),
     isRecurring: z.boolean().default(false),
     recurrenceFrequency: z.enum(["daily", "weekly", "monthly", "yearly"]).optional(),
@@ -44,15 +67,36 @@ export const transactionCreateSchema = z
     // Split-purchase lines — when present, `category` above is ignored and
     // one sibling Transaction document is created per split line instead
     // (see splitGroupId on the model). Sum of split amounts must equal `amount`.
-    splits: z.array(z.object({
-      category: z.string().min(1),
-      amount: z.number().int().positive(),
-      description: z.string().optional(),
-    })).min(2).optional(),
+    splits: z.array(splitLineSchema).min(2).max(MAX_SPLIT_LINES).optional(),
   })
   .superRefine((data, ctx) => {
     if (!Types.ObjectId.isValid(data.accountId)) {
       ctx.addIssue({ code: "custom", path: ["accountId"], message: "Invalid account" });
+    }
+    const foreign = data.originalAmount !== undefined || data.originalCurrency !== undefined;
+    if (foreign) {
+      if (data.originalAmount === undefined || data.originalCurrency === undefined) {
+        ctx.addIssue({ code: "custom", path: ["originalAmount"], message: "Send originalAmount and originalCurrency together" });
+      }
+      if (data.amount !== undefined) {
+        ctx.addIssue({ code: "custom", path: ["amount"], message: "Send either amount or originalAmount, not both" });
+      }
+      if (data.type === "transfer") {
+        ctx.addIssue({ code: "custom", path: ["originalAmount"], message: "Transfers must be in the base currency" });
+      }
+      if (data.splits) {
+        ctx.addIssue({ code: "custom", path: ["originalAmount"], message: "Split transactions must be in the base currency" });
+      }
+      if (data.isRecurring) {
+        ctx.addIssue({ code: "custom", path: ["originalAmount"], message: "Recurring transactions must be in the base currency" });
+      }
+    } else {
+      if (data.amount === undefined) {
+        ctx.addIssue({ code: "custom", path: ["amount"], message: "Amount is required" });
+      }
+      if (data.rate !== undefined) {
+        ctx.addIssue({ code: "custom", path: ["rate"], message: "rate only applies with originalAmount" });
+      }
     }
     if (data.splits) {
       if (data.type !== "expense") {
@@ -62,7 +106,7 @@ export const transactionCreateSchema = z
         ctx.addIssue({ code: "custom", path: ["splits"], message: "Split transactions can't be recurring" });
       }
       const splitTotal = data.splits.reduce((sum, s) => sum + s.amount, 0);
-      if (splitTotal !== data.amount) {
+      if (data.amount !== undefined && splitTotal !== data.amount) {
         ctx.addIssue({ code: "custom", path: ["splits"], message: "Split amounts must add up to the total" });
       }
     } else if (!data.category) {
@@ -93,7 +137,7 @@ export const transactionCreateSchema = z
 // transactionCreateSchema, so browser and integration callers can't set it
 // from a request body; only server code (src/lib/capture/*) passes it.
 export type TransactionProvenance = {
-  source: "sms" | "notification" | "n8n" | "manual";
+  source: "sms" | "notification" | "n8n" | "manual" | "import";
   sourceCapture?: string;
   captures?: string[];
   reviewStatus?: "unreviewed" | "confirmed" | null;
@@ -106,6 +150,11 @@ export type CreateTransactionInput = z.infer<typeof transactionCreateSchema> & {
   // The bank message text, so a "text contains" categorise rule can match a
   // capture. Server code only (like provenance); never read from a request body.
   ruleText?: string;
+  // Server code only. A statement import records history the account balance
+  // already reflects, so it can leave the balance alone. Plain income and
+  // expense rows only; a "import" source also skips budget and spend limit
+  // alerts and the round-up, which are about spending now, not old rows.
+  skipBalance?: boolean;
 };
 
 export type CreateTransactionResult =
@@ -116,9 +165,16 @@ export type CreateTransactionResult =
 export type TransactionServiceErrorCode =
   | "ACCOUNT_NOT_FOUND"
   | "TRANSFER_ACCOUNT_NOT_FOUND"
+  | "RATE_UNAVAILABLE"
+  | "CONVERSION_FAILED"
+  | "RATE_OUT_OF_BAND"
+  | "CURRENCY_MISMATCH"
+  | "UNSUPPORTED_BASE_CURRENCY"
   | "TRANSACTION_NOT_FOUND"
   | "TRANSACTION_LOCKED"
-  | "INSTALLMENT_NOT_FOUND";
+  | "INSTALLMENT_NOT_FOUND"
+  | "INVALID_SPLIT"
+  | "TOO_MANY_RECEIPTS";
 
 export class TransactionServiceError extends Error {
   code: TransactionServiceErrorCode;
@@ -135,7 +191,7 @@ export const transactionUpdateSchema = z.object({
   note: z.string().optional(),
   category: z.string().optional(),
   subcategory: z.string().optional(),
-  tags: z.array(z.string()).optional(),
+  tags: tagListSchema.optional(),
   date: z.string().optional(),
 });
 
@@ -149,12 +205,12 @@ function hasRepaymentTag(tags?: unknown[]) {
   return (tags ?? []).some((tag) => typeof tag === "string" && tag.startsWith("repayment:"));
 }
 
-export async function getLinkedTransactionBlocker(userId: string, transactionId: string, tags?: unknown[]) {
+export async function getLinkedTransactionBlocker(userId: string, transactionId: string, tags?: unknown[], session?: ClientSession) {
   const linkedStatement = await CreditStatement.findOne({
     user: userId,
     paymentTransactionId: transactionId,
     isDeleted: { $ne: true },
-  }).select("_id").lean();
+  }).select("_id").session(session ?? null).lean();
   if (linkedStatement) return "This transaction is linked to a credit statement payment.";
   if (hasRepaymentTag(tags)) return "This transaction is linked to a loan repayment.";
   return null;
@@ -183,8 +239,73 @@ export async function invalidateStatsCacheMany(userId: string, dates: Date[]) {
   }
 }
 
+type ResolvedAmount = {
+  amount: number;
+  baseCurrency: string;
+  stored: {
+    originalAmount?: number;
+    originalCurrency?: string;
+    originalExponent?: number;
+    rate?: number;
+    rateDate?: Date;
+    rateSource?: "provider" | "client";
+  };
+};
+
+// Works out the base-currency `amount` and the foreign-spend fields to store.
+// Plain base-currency requests pass through untouched.
+async function resolveAmount(
+  state: BaseState,
+  input: { amount?: number; currency?: string; originalAmount?: number; originalCurrency?: string; rate?: number }
+): Promise<ResolvedAmount> {
+  const baseCurrency = state.base;
+  // A base with other than two decimals (set before this rule existed) cannot
+  // be written to: the app and parts of the server read base money as hundredths.
+  if (!isSupportedAsBase(baseCurrency)) {
+    throw new TransactionServiceError("UNSUPPORTED_BASE_CURRENCY", BASE_CURRENCY_ONLY_TWO_DECIMALS);
+  }
+  if (input.originalAmount === undefined || input.originalCurrency === undefined) {
+    if (input.amount === undefined) throw new Error("createTransaction needs amount or originalAmount");
+    if (input.currency !== undefined && input.currency !== baseCurrency) {
+      throw new TransactionServiceError(
+        "CURRENCY_MISMATCH",
+        `Amounts are in ${baseCurrency}. For ${input.currency}, send originalAmount and originalCurrency instead of amount.`
+      );
+    }
+    return { amount: input.amount, baseCurrency, stored: {} };
+  }
+  const { originalAmount, originalCurrency } = input;
+  if (originalCurrency === baseCurrency) {
+    // Same currency as the base: nothing to convert.
+    return { amount: originalAmount, baseCurrency, stored: {} };
+  }
+  try {
+    const resolved = await getRate(originalCurrency, baseCurrency, input.rate);
+    return {
+      amount: convertMinor(originalAmount, originalCurrency, baseCurrency, resolved.rate),
+      baseCurrency,
+      stored: {
+        originalAmount,
+        originalCurrency,
+        originalExponent: minorExponent(originalCurrency),
+        rate: resolved.rate,
+        ...(resolved.rateDate ? { rateDate: resolved.rateDate } : {}),
+        rateSource: resolved.source,
+      },
+    };
+  } catch (err) {
+    if (err instanceof RateUnavailableError) throw new TransactionServiceError("RATE_UNAVAILABLE", err.message);
+    if (err instanceof CurrencyError && err.code === "RATE_OUT_OF_BAND") {
+      throw new TransactionServiceError("RATE_OUT_OF_BAND", err.message);
+    }
+    if (err instanceof CurrencyError) throw new TransactionServiceError("CONVERSION_FAILED", err.message);
+    throw err;
+  }
+}
+
 export async function createTransaction(input: CreateTransactionInput): Promise<CreateTransactionResult> {
-  const { userId, actor, accountId, transferToId, provenance, ruleText, ...rest } = input;
+  const { userId, actor, accountId, transferToId, provenance, ruleText, skipBalance, ...restIn } = input;
+  const quiet = provenance?.source === "import";
   await connectDB();
 
   const account = await Account.findOne({ _id: accountId, user: userId, isArchived: { $ne: true } });
@@ -198,13 +319,28 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     }
   }
 
+  // Read the base, run every check and the conversion, and only then lock the
+  // base (right before anything is written): a rejected request must not pin
+  // an empty user's base currency. If the base changed between the read and
+  // the lock, redo the work against the base now in force.
+  const baseState = await getBaseState(userId);
+  let foreignFields = await resolveAmount(baseState, restIn);
+  const lockedBase = await lockBaseCurrency(userId, baseState);
+  if (lockedBase !== baseState.base) {
+    foreignFields = await resolveAmount({ base: lockedBase, locked: true }, restIn);
+  }
+  // `currency` is the base currency's code and `amount` is paise of it; the
+  // schema guarantees an amount exists once resolveAmount has run.
+  const { currency: _ignoredCurrency, originalAmount: _a, originalCurrency: _c, rate: _r, ...restBase } = restIn;
+  const rest = { ...restBase, amount: foreignFields.amount, currency: foreignFields.baseCurrency };
   const startDate = new Date(rest.date);
 
   // Categorise rules (src/lib/rule-service.ts) fill in what the person left
   // at the default: category still "other", a merchant name that came from a
-  // bank message. Plain transactions only; splits, series and transfers are
+  // bank message. Plain transactions only, and never an import (the preview
+  // shows the file's own category and description, so they are written as shown); splits, series and transfers are
   // always exactly what was asked for.
-  if (!rest.splits && !rest.isRecurring && rest.type !== "transfer") {
+  if (!rest.splits && !rest.isRecurring && rest.type !== "transfer" && !quiet) {
     const overrides = await ruleOverridesForTransaction(userId, {
       category: rest.category,
       description: rest.description,
@@ -219,7 +355,8 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     if (overrides) {
       if (overrides.category) rest.category = overrides.category;
       if (overrides.description) rest.description = overrides.description;
-      if (overrides.tags) rest.tags = overrides.tags;
+      // A rule can only add plain tags, never the link tags the server owns.
+      if (overrides.tags) rest.tags = normaliseTags(overrides.tags).filter((t) => !isReservedTag(t)).slice(0, MAX_TAGS);
     }
   }
 
@@ -228,23 +365,26 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   // !rest.isRecurring, and splits summing to rest.amount when this is set)
   if (rest.splits) {
     const splitGroupId = new Types.ObjectId();
-    const accountBefore = account.toObject();
-    // Atomic $inc (not read-modify-write + save) so concurrent captures on
-    // the same account can't overwrite each other's balance change.
-    const accountAfter = await Account.findOneAndUpdate(
-      { _id: account._id, user: userId },
-      { $inc: { balance: -rest.amount } },
-      { new: true }
-    );
-    await appendLedgerBlock({
-      userId,
-      scope: "account",
-      entityId: account._id.toString(),
-      action: "update",
-      before: accountBefore,
-      after: accountAfter,
-      actor,
-    });
+    // An import of history (skipBalance) leaves the balance alone, as for a single row.
+    if (!skipBalance) {
+      const accountBefore = account.toObject();
+      // Atomic $inc (not read-modify-write + save) so concurrent captures on
+      // the same account can't overwrite each other's balance change.
+      const accountAfter = await Account.findOneAndUpdate(
+        { _id: account._id, user: userId },
+        { $inc: { balance: -rest.amount } },
+        { new: true }
+      );
+      await appendLedgerBlock({
+        userId,
+        scope: "account",
+        entityId: account._id.toString(),
+        action: "update",
+        before: accountBefore,
+        after: accountAfter,
+        actor,
+      });
+    }
 
     const { splits, category: _unusedCategory, ...sharedRest } = rest;
     const docs = splits.map((s) => ({
@@ -269,13 +409,16 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
       });
     }
     await invalidateStatsCache(userId, startDate);
-    for (const s of splits) {
-      void checkBudgetAlert(userId, s.category, s.amount, startDate);
+    // An import is history: no alerts and no round-up, as for a single row.
+    if (!quiet) {
+      for (const s of splits) {
+        void checkBudgetAlert(userId, s.category, s.amount, startDate);
+      }
+      void checkSpendLimitAlert(userId);
+      void applyRoundUp(userId, rest.amount, actor).catch((err) =>
+        logger.error({ err, userId }, "applyRoundUp failed")
+      );
     }
-    void checkSpendLimitAlert(userId);
-    void applyRoundUp(userId, rest.amount, actor).catch((err) =>
-      logger.error({ err, userId }, "applyRoundUp failed")
-    );
 
     logger.info({ userId, splitGroupId: splitGroupId.toString(), count: docs.length }, "Split transaction created");
     return { kind: "split", transaction: inserted[0], splitGroupId: splitGroupId.toString(), count: docs.length };
@@ -331,22 +474,24 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   }
 
   // ── Single transaction (non-recurring or recurring count = 1) ───────────
-  const accountBefore = account.toObject();
-  const balanceDelta = rest.type === "income" ? rest.amount : -rest.amount;
-  const accountAfter = await Account.findOneAndUpdate(
-    { _id: account._id, user: userId },
-    { $inc: { balance: balanceDelta } },
-    { new: true }
-  );
-  await appendLedgerBlock({
-    userId,
-    scope: "account",
-    entityId: account._id.toString(),
-    action: "update",
-    before: accountBefore,
-    after: accountAfter,
-    actor,
-  });
+  if (!skipBalance) {
+    const accountBefore = account.toObject();
+    const balanceDelta = rest.type === "income" ? rest.amount : -rest.amount;
+    const accountAfter = await Account.findOneAndUpdate(
+      { _id: account._id, user: userId },
+      { $inc: { balance: balanceDelta } },
+      { new: true }
+    );
+    await appendLedgerBlock({
+      userId,
+      scope: "account",
+      entityId: account._id.toString(),
+      action: "update",
+      before: accountBefore,
+      after: accountAfter,
+      actor,
+    });
+  }
 
   if (rest.type === "transfer" && transferToId) {
     const transferAccountBefore = await Account.findOne({ _id: transferToId, user: userId });
@@ -370,6 +515,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
 
   const transaction = await Transaction.create({
     ...rest,
+    ...foreignFields.stored,
     ...(provenance ?? {}),
     account: accountId,
     user: userId,
@@ -388,7 +534,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   });
   await invalidateStatsCache(userId, startDate);
 
-  if (rest.type === "expense") {
+  if (rest.type === "expense" && !quiet) {
     // schema refine guarantees category is set for any non-split expense
     void checkBudgetAlert(userId, rest.category as string, rest.amount, startDate);
     void checkSpendLimitAlert(userId);
@@ -425,6 +571,8 @@ export async function updateTransaction(input: UpdateTransactionInput) {
   }
 
   const update: Record<string, unknown> = { ...rest };
+  // The server's own link tags stay on the row whatever the caller sends.
+  if (rest.tags) update.tags = mergeUserTags(existing.tags, rest.tags);
   if (rest.date) update.date = new Date(rest.date);
 
   const transaction = await Transaction.findOneAndUpdate(
@@ -551,6 +699,9 @@ export async function deleteTransaction(userId: string, transactionId: string, a
     actor,
   });
   await invalidateStatsCacheSingle(userId, new Date(txn.date));
+  // A receipt is private and has no meaning without its transaction. Done last: a failure here is
+  // logged and swept later (reads already hide receipts of a deleted row), never undoes the delete.
+  await deleteReceiptsOfTransaction(userId, transactionId);
 
   return deleted;
 }

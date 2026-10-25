@@ -5,6 +5,8 @@ import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { z } from "zod";
 import { isValidTimeZone } from "@/lib/spend-limit-time";
+import { isSupportedCurrency } from "@/lib/currency";
+import { BaseCurrencyError, setBaseCurrency } from "@/lib/base-currency";
 
 const schema = z.object({
   theme: z.enum(["light", "dark", "system"]).optional(),
@@ -13,7 +15,7 @@ const schema = z.object({
   pushNotifications: z.boolean().optional(),
   emailNotifications: z.boolean().optional(),
   weekStartsOn: z.number().min(0).max(6).optional(),
-  currency: z.string().optional(),
+  currency: z.string().refine(isSupportedCurrency, "Unsupported currency").optional(),
   timezone: z
     .string()
     .refine(isValidTimeZone, "Unknown time zone")
@@ -45,15 +47,28 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: "Validation failed", details: parsed.error.flatten() }, { status: 400 });
     }
 
+    // The base currency is fixed once there are transactions (see base-currency.ts).
+    await connectDB();
+    if (parsed.data.currency !== undefined) {
+      try {
+        await setBaseCurrency(user.id, parsed.data.currency);
+      } catch (err) {
+        if (err instanceof BaseCurrencyError) {
+          return NextResponse.json({ error: err.message, code: err.code }, { status: 400 });
+        }
+        throw err;
+      }
+    }
+
     const updates: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(parsed.data)) {
+      if (k === "currency") continue;
       updates[`preferences.${k}`] = v;
     }
 
-    await connectDB();
     const updated = await User.findByIdAndUpdate(
       user.id,
-      { $set: updates },
+      Object.keys(updates).length ? { $set: updates } : {},
       { new: true }
     ).select("preferences").lean();
 

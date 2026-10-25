@@ -4,7 +4,7 @@ Status: Accepted
 Date: 2026-09 (n8n work)
 
 ## Context
-n8n and the phone app retry requests after timeouts. A retry must not create a second transaction. The codebase uses no mongoose sessions or distributed locks (`src/lib/integrations/idempotency.ts` comments), and Vercel instances share no memory.
+n8n and the phone app retry requests after timeouts. A retry must not create a second transaction. Most of the codebase does not use mongoose sessions or distributed locks (`src/lib/integrations/idempotency.ts` comments; the one exception is the split-purchase edit, which runs in a transaction, see `src/lib/split-service.ts`), and Vercel instances share no memory.
 
 ## Decision
 - Mutating integration calls require an `Idempotency-Key` header, scoped per user and endpoint.

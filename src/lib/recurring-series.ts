@@ -1,3 +1,4 @@
+import { deleteReceiptsOfTransactions } from "@/lib/receipt-service";
 import { Types } from "mongoose";
 import connectDB from "@/lib/mongodb";
 import Transaction from "@/models/Transaction";
@@ -139,6 +140,8 @@ export async function cancelRecurringSeries(userId: string, recurringId: string,
     { _id: { $in: toDelete.map((t) => t._id) } },
     { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: userId } }
   );
+  // Private images go once the rows are deleted (a failure is logged and swept later).
+  await deleteReceiptsOfTransactions(userId, toDelete.map((t) => t._id));
   // Stop the background top-up job from regenerating this series if it was open-ended.
   await Transaction.updateMany(
     { user: userId, recurringId: new Types.ObjectId(recurringId) },

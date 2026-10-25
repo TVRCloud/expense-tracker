@@ -25,12 +25,14 @@ export async function GET(req: NextRequest) {
           limitAmount: (b.limitAmount / 100).toFixed(2),
           effectiveLimit: (b.effectiveLimit / 100).toFixed(2),
           spent: (b.spent / 100).toFixed(2),
-          remaining: ((b.effectiveLimit - b.spent) / 100).toFixed(2),
+          // a number, so a shortfall (negative) stays numeric in csv.ts
+          remaining: (b.effectiveLimit - b.spent) / 100,
           currency: b.currency,
           alertAt: b.alertAt,
           rollover: b.rollover ?? false,
         })),
-        ["category", "month", "year", "limitAmount", "effectiveLimit", "spent", "remaining", "currency", "alertAt", "rollover"]
+        ["category", "month", "year", "limitAmount", "effectiveLimit", "spent", "remaining", "currency", "alertAt", "rollover"],
+        { numericColumns: ["month", "year", "limitAmount", "effectiveLimit", "spent", "remaining", "alertAt"] }
       );
       return csvResponse(csv, `budgets-${year}-${String(month).padStart(2, "0")}.csv`);
     }

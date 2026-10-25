@@ -7,6 +7,7 @@ import User from "@/models/User";
 import ManualAsset from "@/models/ManualAsset";
 import NetWorthSnapshot from "@/models/NetWorthSnapshot";
 import { DEFAULT_TIME_ZONE, isValidTimeZone } from "@/lib/spend-limit-time";
+import { lockBaseCurrency } from "@/lib/base-currency";
 
 // Net worth: what the user owns minus what they owe, now and over time.
 // Shared by the browser routes (/api/net-worth) and the integration routes
@@ -302,6 +303,7 @@ export async function listManualAssets(userId: string): Promise<ManualAssetItem[
 
 export async function createManualAsset(userId: string, input: z.infer<typeof manualAssetCreateSchema>): Promise<ManualAssetItem> {
   await connectDB();
+  await lockBaseCurrency(userId);
   const doc = await ManualAsset.create({ user: userId, ...input });
   return toAssetItem(doc.toObject() as AssetDoc);
 }

@@ -8,6 +8,7 @@ import User from "@/models/User";
 import type { AuthUser } from "@/lib/auth-guard";
 import { decryptField, encryptField } from "@/lib/crypto";
 import { createTransaction, TransactionServiceError } from "@/lib/transaction-service";
+import { getBaseCurrency } from "@/lib/base-currency";
 import { suggestRefundSafely } from "@/lib/refund-service";
 import { findCashAccount } from "@/lib/account-service";
 import { TRANSFER_CATEGORY } from "@/lib/transfer-service";
@@ -117,6 +118,7 @@ const QUEUE_COPY: Record<string, string> = {
   no_matching_loan: "An EMI payment message didn't match any of your loans.",
   possible_duplicate: "A payment looks like one you already have. Check whether it's the same one.",
   source_conflict: "An SMS disagrees with a transaction you already confirmed.",
+  rate_unavailable: "A bank message is in rupees and no exchange rate to your currency is available right now. Confirm it to enter the amount yourself.",
 };
 
 async function queue(capture: CaptureDoc, reason: string, extra: Record<string, unknown> = {}): Promise<IngestResult> {
@@ -232,7 +234,11 @@ async function createFromCapture(
   const captureId = capture._id.toString();
   // An ATM withdrawal moves money from the bank to the user's cash account: a
   // transfer, not spending. Without a cash account it stays an ordinary expense.
-  const cash = parse.atm && parse.type === "expense" ? await findCashAccount(user.id) : null;
+  // Bank messages are in rupees. With another base currency the amount goes in
+  // as an INR original and is converted (a transfer to cash cannot be, so an
+  // ATM withdrawal is then an ordinary expense); with INR as base nothing changes.
+  const inrBase = (await getBaseCurrency(user.id)) === "INR";
+  const cash = inrBase && parse.atm && parse.type === "expense" ? await findCashAccount(user.id) : null;
   const toCash = cash && cash._id.toString() !== accountId ? cash._id.toString() : null;
   try {
     const { transaction } = await createTransaction({
@@ -241,8 +247,9 @@ async function createFromCapture(
       accountId,
       ...(toCash ? { transferToId: toCash } : {}),
       type: toCash ? "transfer" : parse.type,
-      amount: parse.amountMinor,
-      currency: parse.currency,
+      ...(inrBase
+        ? { amount: parse.amountMinor, currency: parse.currency }
+        : { originalAmount: parse.amountMinor, originalCurrency: "INR" }),
       category: toCash ? TRANSFER_CATEGORY : "other",
       description: toCash ? "ATM withdrawal" : descriptionOf(parse),
       note: `Auto-captured from ${capture.channel === "notification" ? "an app notification" : capture.channel === "n8n" ? "n8n" : "SMS"}`,
@@ -277,6 +284,10 @@ async function createFromCapture(
     if (err instanceof TransactionServiceError && err.code === "ACCOUNT_NOT_FOUND") {
       return queue(capture, "no_matching_account");
     }
+    // No rate to the user's currency: never book a wrong amount, let them confirm it.
+    if (err instanceof TransactionServiceError && (err.code === "RATE_UNAVAILABLE" || err.code === "CONVERSION_FAILED")) {
+      return queue(capture, "rate_unavailable");
+    }
     throw err;
   }
 }
@@ -305,9 +316,10 @@ async function markSupporting(capture: CaptureDoc, primary: CaptureDoc, transact
 }
 
 /** Values a higher-priority capture would set on a matched transaction. */
-function overrideChanges(parse: MoneyParse, accountId: string | null) {
+function overrideChanges(parse: MoneyParse, accountId: string | null, overwriteAmount: boolean) {
   return {
-    amount: parse.amountMinor,
+    // The parse is in rupees: it never overwrites an amount booked in another currency.
+    ...(overwriteAmount ? { amount: parse.amountMinor } : {}),
     type: parse.type,
     ...(accountId ? { accountId } : {}),
     ...(parse.date ? { date: parse.date.toISOString() } : {}),
@@ -387,6 +399,8 @@ async function handleMatch(
         account: Types.ObjectId;
         isDeleted?: boolean;
         reviewStatus?: string | null;
+        originalAmount?: number;
+        originalCurrency?: string;
       }>()
     : null;
 
@@ -403,8 +417,21 @@ async function handleMatch(
   // same event, not a conflict, and a transfer is never rewritten by a capture.
   if (txn.type === "transfer" && parse.atm) return markSupporting(capture, other, txnId);
 
+  // The message is in rupees. What it is compared with, and whether it may
+  // overwrite the booked amount:
+  //  - INR base, plain row (no original): the row's amount, compared and
+  //    overwritten exactly as before multi-currency existed;
+  //  - INR base, foreign-original row (a USD spend): not compared and never
+  //    overwritten. Its amount is our conversion, not the bank's figure, so a
+  //    comparison would raise false conflicts;
+  //  - another base, row booked from an INR original: the INR original is
+  //    compared, nothing is overwritten (the stored amount is a conversion);
+  //  - another base, any other row: not compared.
+  const inrBase = (await getBaseCurrency(user.id)) === "INR";
+  const comparableAmount = txn.originalCurrency === "INR" ? txn.originalAmount : inrBase && !txn.originalCurrency ? txn.amount : undefined;
+  const overwriteAmount = inrBase && !txn.originalCurrency;
   const valuesDiffer =
-    txn.amount !== parse.amountMinor ||
+    (comparableAmount !== undefined && comparableAmount !== parse.amountMinor) ||
     txn.type !== parse.type ||
     Boolean(accountId && accountId !== txn.account.toString());
 
@@ -422,7 +449,7 @@ async function handleMatch(
       await correctTransaction({
         userId: user.id,
         transactionId: txnId,
-        changes: overrideChanges(parse, accountId),
+        changes: overrideChanges(parse, accountId, overwriteAmount),
         reason: "sms_override",
         via: "system",
         actor: user,

@@ -3,7 +3,9 @@ import connectDB from "@/lib/mongodb";
 import Account from "@/models/Account";
 import type { AuthUser } from "@/lib/auth-guard";
 import { appendLedgerBlock } from "@/lib/ledger";
+import { isSupportedCurrency } from "@/lib/currency";
 import { accountCreateSchema, creditMetaSchema } from "@/features/accounts/schemas/account.schema";
+import { lockBaseCurrency } from "@/lib/base-currency";
 
 export { accountCreateSchema };
 
@@ -23,6 +25,8 @@ export type CreateAccountInput = z.infer<typeof accountCreateSchema> & { userId:
 export async function createAccount(input: CreateAccountInput) {
   const { userId, actor, ...rest } = input;
   await connectDB();
+  // An opening balance and a credit limit are base-unit amounts; an empty account is not.
+  if (rest.balance !== 0 || (rest.creditMeta?.creditLimit ?? 0) > 0) await lockBaseCurrency(userId);
   const account = await Account.create({ ...rest, user: userId });
   await appendLedgerBlock({
     userId,
@@ -38,6 +42,8 @@ export async function createAccount(input: CreateAccountInput) {
 // No `balance` here on purpose: a direct balance edit would desync the ledger.
 export const accountUpdateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
+  // The account's own currency, a label: balances stay in the base currency.
+  currency: z.string().refine(isSupportedCurrency, "Unsupported currency").optional(),
   color: z.string().optional(),
   icon: z.string().optional(),
   isArchived: z.boolean().optional(),
@@ -59,6 +65,13 @@ export async function updateAccount(input: UpdateAccountInput) {
   const filter = { _id: accountId, user: userId };
   const before = await Account.findOne(filter).lean();
   if (!before) throw new AccountServiceError("ACCOUNT_NOT_FOUND", "Account not found");
+  // A low-cash line or a credit limit is a base-unit amount. The lock comes
+  // after the account lookup; the only write it can precede that then fails is
+  // the update below losing the account to a concurrent archive or delete, a
+  // window of one query, and the base stays locked in that case.
+  if (typeof changes.lowBalanceAt === "number" || (changes.creditMeta?.creditLimit ?? 0) > 0) {
+    await lockBaseCurrency(userId);
+  }
   const account = await Account.findOneAndUpdate(filter, { $set: changes }, { new: true }).lean();
   if (!account) throw new AccountServiceError("ACCOUNT_NOT_FOUND", "Account not found");
 

@@ -117,6 +117,7 @@ export function AddTransactionForm() {
   const [date, setDate] = useState<Date>(new Date());
   const [repeatEnabled, setRepeatEnabled] = useState(false);
   const [splitEnabled, setSplitEnabled] = useState(false);
+  const [tagsText, setTagsText] = useState("");
   const [splitLines, setSplitLines] = useState<SplitLine[]>(emptySplitLines);
   const [freqKey, setFreqKey] = useState<FreqKey>("monthly");
   const [endMode, setEndMode] = useState<EndMode>("never");
@@ -218,7 +219,7 @@ export function AddTransactionForm() {
       description: values.description || undefined,
       note: values.note || undefined,
       date: date.toISOString(),
-      tags: [],
+      tags: tagsText.split(",").map((t) => t.trim()).filter(Boolean),
       isRecurring: repeatEnabled,
       recurrenceFrequency: repeatEnabled ? freqOption.frequency : undefined,
       recurrenceInterval: repeatEnabled ? freqOption.interval : undefined,
@@ -486,6 +487,18 @@ export function AddTransactionForm() {
               rows={2}
               className="flex-1 min-h-0 resize-none border-0 bg-transparent p-0 text-[15px] shadow-none focus-visible:ring-0"
               style={{ color: "var(--ink)" }}
+            />
+          </div>
+          <div className="flex items-center gap-3 px-4 py-3">
+            <Label htmlFor="add-transaction-form-tags" className={rowLabel} style={{ color: "var(--ink)" }}>
+              Tags
+            </Label>
+            <Input
+              id="add-transaction-form-tags"
+              value={tagsText}
+              onChange={(e) => setTagsText(e.target.value)}
+              placeholder="trip, work, gift"
+              className={rowInput}
             />
           </div>
         </div>

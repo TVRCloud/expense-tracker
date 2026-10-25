@@ -9,6 +9,7 @@ import Budget from "@/models/Budget";
 import Goal from "@/models/Goal";
 import Loan from "@/models/Loan";
 import Repayment from "@/models/Repayment";
+import Receipt from "@/models/Receipt";
 
 export async function GET() {
   try {
@@ -17,7 +18,7 @@ export async function GET() {
 
     await connectDB();
 
-    const [profile, accounts, transactions, budgets, goals, loans, repayments] = await Promise.all([
+    const [profile, accounts, transactions, budgets, goals, loans, repayments, receipts] = await Promise.all([
       User.findById(user.id).select("-password -passwordResetToken -passwordResetExpires").lean(),
       Account.find({ user: user.id }).lean(),
       Transaction.find({ user: user.id, isDeleted: { $ne: true } }).lean(),
@@ -25,6 +26,8 @@ export async function GET() {
       Goal.find({ user: user.id, isDeleted: { $ne: true } }).lean(),
       Loan.find({ user: user.id, isDeleted: { $ne: true } }).lean(),
       Repayment.find({ user: user.id, isDeleted: { $ne: true } }).lean(),
+      // Metadata only: the images are encrypted with the server key and are not exported.
+      Receipt.find({ user: user.id }).select("transaction contentType size createdAt").sort({ createdAt: 1 }).lean<{ _id: { toString(): string }; transaction: { toString(): string }; contentType: string; size: number; createdAt: Date }[]>(),
     ]);
 
     const exportData = {
@@ -36,6 +39,13 @@ export async function GET() {
       goals,
       loans,
       repayments,
+      receipts: receipts.map((r) => ({
+        id: r._id.toString(),
+        transactionId: r.transaction.toString(),
+        contentType: r.contentType,
+        size: r.size,
+        createdAt: r.createdAt,
+      })),
     };
 
     return new Response(JSON.stringify(exportData, null, 2), {

@@ -6,6 +6,7 @@ import { withIdempotency } from "@/lib/integrations/idempotency";
 import { BillServiceError, markBillPaid } from "@/lib/bills";
 import { TransactionServiceError } from "@/lib/transaction-service";
 import { LoanServiceError } from "@/lib/loan-service";
+import { MAX_MINOR_AMOUNT } from "@/lib/currency";
 
 type Params = Promise<{ id: string }>;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_.:-]{1,200}$/;
@@ -15,7 +16,7 @@ const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_.:-]{1,200}$/;
 // the transaction). Recurring payments are marked paid in full.
 const paySchema = z
   .object({
-    amount: z.number().int().positive().optional(),
+    amount: z.number().int().positive().max(MAX_MINOR_AMOUNT).optional(),
     accountId: z.string().refine((v) => Types.ObjectId.isValid(v), "Invalid account").optional(),
   })
   .strict();

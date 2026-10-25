@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_MINOR_AMOUNT } from "@/lib/currency";
 
 // Single source of truth for goal-create validation — imported by both the
 // client form (GoalsClient.tsx, via react-hook-form) and the server service
@@ -8,8 +9,8 @@ import { z } from "zod";
 // client bundle.
 export const goalCreateSchema = z.object({
   name: z.string().min(1, "Name your goal").max(100),
-  targetAmount: z.number().int().positive("Enter a target greater than 0"),
-  savedAmount: z.number().int().min(0).default(0),
+  targetAmount: z.number().int().positive("Enter a target greater than 0").max(MAX_MINOR_AMOUNT),
+  savedAmount: z.number().int().min(0).max(MAX_MINOR_AMOUNT).default(0),
   targetDate: z.string().optional(),
   icon: z.string().optional(),
 });
