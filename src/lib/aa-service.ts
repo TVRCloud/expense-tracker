@@ -216,6 +216,9 @@ async function loadConsent(userId: string, id: string): Promise<ConsentDoc> {
   return c;
 }
 
+/** The opaque id the provider is given for a person: a hash, never the email. Also the lookup key in the logs. */
+const providerUserRef = (userId: string) => createHash("sha256").update(`aa-user:${userId}`).digest("hex").slice(0, 32);
+
 /** Status of the feature and the user's consents, newest first. Works when the provider is off. */
 export async function getAaStatus(userId: string): Promise<{ configured: boolean; provider: string | null; consents: AaConsentView[] }> {
   await connectDB();
@@ -235,12 +238,12 @@ export async function startConsent(userId: string): Promise<{ consent: AaConsent
   let created: AaCreatedConsent;
   try {
     // An opaque, stable id for the person: never the email or name.
-    const userRef = createHash("sha256").update(`aa-user:${userId}`).digest("hex").slice(0, 32);
+    const userRef = providerUserRef(userId);
     created = checked(createdConsentSchema, await withTimeout((signal) => provider.createConsent({ userRef, durationDays: CONSENT_DAYS, signal })));
   } catch (err) {
     // A timeout aborts our side only: the provider may still have created the consent. The correlation id is the
     // person's opaque id (a hash, never the email), so a support lookup at the provider can find a stray consent.
-    logger.error({ err: codeOf(err), provider: provider.name, correlationId: createHash("sha256").update(`aa-user:${userId}`).digest("hex").slice(0, 32) }, "aa: could not start a consent");
+    logger.error({ err: codeOf(err), provider: provider.name, correlationId: providerUserRef(userId) }, "aa: could not start a consent");
     throw new AaServiceError("PROVIDER_ERROR", "The bank linking provider could not be reached. Try again later.");
   }
   const doc = await AaConsent.create({
@@ -675,8 +678,9 @@ export async function syncAllConsents(now = new Date()): Promise<{ checked: numb
  * - A consent already withdrawn is done, unless the withdrawal was never confirmed (`revoke_not_confirmed`): that
  *   one is tried again. A provider that no longer knows the consent counts as withdrawn.
  * - A consent whose provider is not registered here (AA_PROVIDER unset, or the sandbox refused in production)
- *   cannot be withdrawn from this server at all. Its record is deleted anyway, so the person is not stuck, and the
- *   hash of its handle is logged so it can be withdrawn by hand.
+ *   cannot be withdrawn from this server at all. Its record is deleted anyway, so the person is not stuck, and its
+ *   id, provider and the correlation id (the opaque person id the provider was given) are logged so it can be
+ *   found and withdrawn by hand. The grant may stay live there.
  * - A consent whose registered provider failed to withdraw it is kept and counted in `remaining`: the grant is not
  *   lost with its handle, and the caller refuses the deletion until it can be withdrawn.
  */
@@ -692,7 +696,7 @@ export async function deleteAaDataForUser(userId: string): Promise<{ remaining: 
     }
     const provider = providerByName(c.provider);
     if (!provider) {
-      logger.warn({ consentId: c._id.toString(), provider: c.provider }, "aa: consent deleted without a provider to withdraw it; the grant may still be live at the provider");
+      logger.warn({ consentId: c._id.toString(), provider: c.provider, correlationId: providerUserRef(userId) }, "aa: consent deleted without a provider to withdraw it; the grant may still be live at the provider");
       done.push(c._id);
       continue;
     }

@@ -1104,8 +1104,13 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
       const { deleteAaDataForUser } = await import("@/lib/aa-service");
       const { AaConsent } = await models();
       await AaConsent.updateOne({ user: a }, { $set: { provider: "retired" } });
+      const warn = vi.spyOn((await import("@/lib/logger")).default, "warn");
       expect(await deleteAaDataForUser(a)).toEqual({ remaining: 0 });
       expect(await AaConsent.countDocuments({ user: a })).toBe(0);
+      const call = warn.mock.calls.find((c) => /may still be live/.test(String(c[1])));
+      warn.mockRestore();
+      expect(call?.[0]).toMatchObject({ provider: "retired", correlationId: expect.stringMatching(/^[0-9a-f]{32}$/) });
+      expect(JSON.stringify(call?.[0])).not.toContain(a);
     });
 
     it("account deletion: a registered provider that fails to withdraw keeps the record and is counted", async () => {
