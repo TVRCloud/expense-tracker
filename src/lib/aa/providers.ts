@@ -31,6 +31,11 @@ export function aaConfigured(): boolean {
   return getAaProvider() !== null;
 }
 
+/** The names of the providers this server can use right now (registered and allowed). */
+export function registeredProviderNames(): string[] {
+  return Object.keys(PROVIDERS).filter(allowed);
+}
+
 /** The provider a stored consent was made with, if it is still registered and allowed. */
 export function providerByName(name: string): AaProvider | null {
   if (!Object.prototype.hasOwnProperty.call(PROVIDERS, name) || !allowed(name)) return null;

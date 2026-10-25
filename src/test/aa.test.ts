@@ -1104,6 +1104,95 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
         expect(await Transaction.countDocuments({ user: a })).toBe(0);
       });
 
+      /** n consents flagged ownerDeleted, with their handles. */
+      async function flagged(n: number) {
+        const { AaConsent } = await models();
+        const out: Array<{ id: string; handle: string }> = [];
+        for (let i = 0; i < n; i += 1) {
+          const made = (await (await create(KEY_A, { "idempotency-key": `fl-${i}` })).json()).data.consent as Json;
+          out.push({ id: made.id, handle: await handleOf(made.id) });
+        }
+        await AaConsent.updateMany({ user: a }, { $set: { ownerDeleted: true } });
+        return out;
+      }
+
+      it("rows that keep failing do not starve a retryable one behind them, and each attempt stamps lastRetryAt", async () => {
+        process.env.AA_PROVIDER = "sandbox";
+        const { AaConsent } = await models();
+        const { retryOwnerDeletedConsents } = await import("@/lib/aa-service");
+        const provider = (await import("@/lib/aa/providers")).getAaProvider()!;
+        const [c1, c2, c3] = await flagged(3);
+        const failing = new Set([c1.handle, c2.handle]);
+        const spy = vi.spyOn(provider, "revoke").mockImplementation((async (h: string) => {
+          if (failing.has(h)) throw new Error("down");
+        }) as never);
+        try {
+          expect(await retryOwnerDeletedConsents(2)).toEqual({ withdrawn: 0, kept: 2 });
+          const stamped = await AaConsent.find({ lastRetryAt: { $ne: null } }).lean<Json[]>();
+          expect(stamped.map((r) => String(r._id)).sort()).toEqual([c1.id, c2.id].sort());
+          // The never-tried one goes first now, even though two failing rows are older in the queue.
+          expect(await retryOwnerDeletedConsents(2)).toMatchObject({ withdrawn: 1 });
+          expect(await AaConsent.countDocuments({ _id: c3.id })).toBe(0);
+          expect(await AaConsent.countDocuments({ _id: { $in: [c1.id, c2.id] } })).toBe(2);
+        } finally {
+          spy.mockRestore();
+        }
+      });
+
+      it("a row whose provider is not registered is skipped without using the limit or being touched", async () => {
+        process.env.AA_PROVIDER = "sandbox";
+        const { AaConsent } = await models();
+        const { retryOwnerDeletedConsents } = await import("@/lib/aa-service");
+        const [c1, c2] = await flagged(2);
+        await AaConsent.updateOne({ _id: c1.id }, { $set: { provider: "retired" } });
+        expect(await retryOwnerDeletedConsents(1)).toEqual({ withdrawn: 1, kept: 0 });
+        expect(await AaConsent.countDocuments({ _id: c2.id })).toBe(0);
+        const left = await AaConsent.findById(c1.id).lean<Json>();
+        expect(left?.lastRetryAt).toBeUndefined();
+      });
+
+      it("the retry stops at the sweep's time budget", async () => {
+        process.env.AA_PROVIDER = "sandbox";
+        const { AaConsent } = await models();
+        const { retryOwnerDeletedConsents, SWEEP_LIMITS } = await import("@/lib/aa-service");
+        await flagged(2);
+        const saved = SWEEP_LIMITS.budgetMs;
+        SWEEP_LIMITS.budgetMs = -1;
+        try {
+          expect(await retryOwnerDeletedConsents()).toEqual({ withdrawn: 0, kept: 0, partial: true });
+        } finally {
+          SWEEP_LIMITS.budgetMs = saved;
+        }
+        expect(await AaConsent.countDocuments({ ownerDeleted: true })).toBe(2);
+      });
+
+      it("a consent that turns up for an account already deleted is handed to the sweep, not left live", async () => {
+        const { consentId } = await linked();
+        const { AaConsent } = await models();
+        const User = (await import("@/models/User")).default as mongoose.Model<Json>;
+        const { syncAllConsents } = await import("@/lib/aa-service");
+        const { sandboxControl } = await import("@/lib/aa/sandbox");
+        const handle = await handleOf(consentId);
+        await User.updateOne({ _id: a }, { $set: { isActive: false, deletedAt: new Date() } });
+        await syncAllConsents();
+        expect(await AaConsent.countDocuments({ _id: consentId, ownerDeleted: true })).toBe(1);
+        await syncAllConsents();
+        expect(await AaConsent.countDocuments({ _id: consentId })).toBe(0);
+        expect(sandboxControl.isRevoked(handle)).toBe(true);
+      });
+
+      it("an admin-deactivated person's links are only paused, not handed to the sweep", async () => {
+        const { consentId } = await linked();
+        const { AaConsent } = await models();
+        const User = (await import("@/models/User")).default as mongoose.Model<Json>;
+        const { syncAllConsents } = await import("@/lib/aa-service");
+        await User.updateOne({ _id: a }, { $set: { isActive: false } });
+        await syncAllConsents();
+        const c = await AaConsent.findById(consentId).lean<Json>();
+        expect(c?.ownerDeleted).toBeUndefined();
+        expect(c?.status).toBe("active");
+      });
+
       it("a provider that no longer knows the consent counts as withdrawn", async () => {
         const { consentId } = await linked();
         const { AaConsent } = await models();

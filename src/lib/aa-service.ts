@@ -10,7 +10,7 @@ import User from "@/models/User";
 import { decryptField, encryptField } from "@/lib/crypto";
 import { CAPTURE_KEY_ENV, ingestAaTransaction } from "@/lib/capture/ingest";
 import { matchAccountForMessage } from "@/lib/capture/account-match";
-import { aaConfigured, getAaProvider, providerByName } from "@/lib/aa/providers";
+import { aaConfigured, getAaProvider, providerByName, registeredProviderNames } from "@/lib/aa/providers";
 import {
   AaProviderError,
   consentStateSchema,
@@ -492,7 +492,14 @@ export async function syncConsent(c: ConsentDoc, now = new Date()): Promise<AaSy
     }
 
     const owner = await User.findOne({ _id: c.user, isActive: { $ne: false } }).select("name email role").lean<{ _id: Types.ObjectId; name: string; email: string; role: string }>();
-    if (!owner) return { ...result, error: "user_unavailable" };
+    if (!owner) {
+      // Nothing is read for a person who is gone or deactivated. If they DELETED the account, the grant is handed to
+      // the sweep that withdraws it, so a consent created just as the account was deleted is not left live (an admin
+      // deactivation only pauses reading: they may come back).
+      const gone = await User.findOne({ _id: c.user, deletedAt: { $ne: null } }).select("_id").lean();
+      if (gone) await AaConsent.updateOne({ _id: c._id }, { $set: { ownerDeleted: true } });
+      return { ...result, error: "user_unavailable" };
+    }
     const actor = { id: owner._id.toString(), name: owner.name, email: owner.email, role: owner.role };
 
     // A mapped account that has been archived since is not fed: its payments would have nowhere to go.
@@ -764,24 +771,36 @@ export async function purgeAaRecordsOfDeletedUser(userId: string): Promise<numbe
 /**
  * Cron and timer: tries again to withdraw the consents of deleted accounts, and deletes each record only after the
  * provider confirms (or no longer knows the consent). A failure keeps it for the next run.
+ * - Rows whose provider is not registered here are left out by the query itself, so they never use up the limit.
+ * - The oldest attempt goes first (never tried first) and every attempt stamps `lastRetryAt`, so rows that keep
+ *   failing move to the back instead of starving the rest.
+ * - It stops when the sweep's time budget is used up (`partial: true`); the rest wait for the next run.
  */
-export async function retryOwnerDeletedConsents(limit = 50): Promise<{ withdrawn: number; kept: number }> {
+export async function retryOwnerDeletedConsents(limit = 50): Promise<{ withdrawn: number; kept: number; partial?: true }> {
   await connectDB();
-  const left = await AaConsent.find({ ownerDeleted: true }).limit(limit).lean<ConsentDoc[]>();
+  const startedAt = Date.now();
+  const left = await AaConsent.find({ ownerDeleted: true, provider: { $in: registeredProviderNames() } })
+    .sort({ lastRetryAt: 1, _id: 1 })
+    .limit(limit)
+    .lean<ConsentDoc[]>();
   let withdrawn = 0;
   let kept = 0;
+  let partial = false;
   for (const c of left) {
-    const provider = providerByName(c.provider);
-    if (!provider) {
-      kept += 1; // Not registered right now (maybe only this deploy): keep it for when it is.
-      continue;
+    if (Date.now() - startedAt > SWEEP_LIMITS.budgetMs) {
+      partial = true;
+      break;
     }
+    const provider = providerByName(c.provider);
+    if (!provider) continue;
+    // Stamped before the attempt: a failure (or a crash) leaves the row at the back of the queue.
+    await AaConsent.updateOne({ _id: c._id, ownerDeleted: true }, { $set: { lastRetryAt: new Date() } });
     try {
       await withTimeout((signal) => provider.revoke(handleOf(c), { signal }));
     } catch (err) {
       if (!(err instanceof AaProviderError && err.code === "CONSENT_NOT_FOUND")) {
         kept += 1;
-        logger.error({ err: codeOf(err), consentId: c._id.toString() }, "aa: could not withdraw the consent of a deleted account yet");
+        logger.error({ err: codeOf(err), consentId: c._id.toString(), provider: c.provider }, "aa: could not withdraw the consent of a deleted account yet");
         continue;
       }
     }
@@ -789,5 +808,5 @@ export async function retryOwnerDeletedConsents(limit = 50): Promise<{ withdrawn
     await AaAccountClaim.deleteMany({ consent: c._id });
     withdrawn += 1;
   }
-  return { withdrawn, kept };
+  return { withdrawn, kept, ...(partial ? { partial: true as const } : {}) };
 }

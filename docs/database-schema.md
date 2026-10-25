@@ -505,6 +505,7 @@ Bank links through an Account Aggregator ([account-aggregator.md](account-aggreg
 | `lastSyncAt` | Date | |
 | `lastError` | String | a short code (`provider_error`, `revoked_at_provider`, `not_found_at_provider`, `revoke_not_confirmed`, `provider_unavailable`), never a provider message |
 | `revokedAt` | Date | |
+| `lastRetryAt` | Date | last sweep attempt to withdraw an `ownerDeleted` consent (oldest first; failures move to the back) |
 | `ownerDeleted` | Boolean | the person deleted their account while this grant was not withdrawn: kept (encrypted handle) for the cron sweep to withdraw and then delete; never listed, synced or reachable by a user route |
 
 Indexes: `{user, status, createdAt}`, `{status, lastSyncAt}`, `{handleHash}`
