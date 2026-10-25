@@ -1348,6 +1348,18 @@ describe("encrypted backup and restore", () => {
         expect(await Account.countDocuments({ user: jpy })).toBe(0);
       });
 
+      it("a file with only envelope plans is refused into a legacy base, dry run included, and writes nothing", async () => {
+        const { default: EnvelopePlan } = await import("@/models/EnvelopePlan");
+        const jpy = await newUser("jpy-key-for-backup-test-3", "JPY");
+        const file = await craftFile({ baseCurrency: "JPY" }, { envelopePlans: [{ id: oidHex(), month: "2026-03", income: 5, envelopes: [{ category: "Food", assigned: 5 }] }] });
+        for (const dryRun of [true, false]) {
+          const res = await restore({ passphrase: PASS, backup: file, dryRun }, { key: "jpy-key-for-backup-test-3", idem: dryRun ? null : "jpy-env-1" });
+          expect(res.status).toBe(400);
+          expect((await res.json()).error.code).toBe("BASE_CURRENCY_ONLY_TWO_DECIMALS");
+        }
+        expect(await EnvelopePlan.countDocuments({ user: jpy })).toBe(0);
+      });
+
       it("a restore that writes nothing is still allowed into a legacy base", async () => {
         await newUser("jpy-key-for-backup-test-2", "JPY");
         const file = await craftFile({ baseCurrency: "JPY", tax: { deductibleCategories: ["health"] } }, {});

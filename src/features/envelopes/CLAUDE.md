@@ -11,6 +11,7 @@ Purpose: optional zero-based budgeting. Each month the person says what income t
 ## Rules and gotchas
 - Amounts are minor units of the base currency (`currency`, `exponent` in the answer), shown with `formatMinor`; typed text is turned into minor units with that exponent and anything not a number from 0 up to 1e13 is put back as it was.
 - Off by default: with the mode off the page shows a single "Turn on envelopes" card and the API answers an empty plan.
+- The move dialog sends an Idempotency-Key per attempt (new one after a refusal) and ignores a second submit while pending, so a double click moves once.
 - Over-assigning is shown in red, never blocked. An envelope is the exact category string, like a budget.
 - Realtime: the `envelopes` resource, and `transactions` and `budgets` events, invalidate `["envelopes"]`.
 

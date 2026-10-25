@@ -281,7 +281,8 @@ export async function assignEnvelopes(userId: string, input: EnvelopeAssignInput
   const remove = [...new Set(input.remove ?? [])];
   const assignKeys = assign.map((a) => a.category);
 
-  // The cap, checked here for a clean error before the base is locked, and again inside the update.
+  // The cap, checked here before the base is locked so a rejected write locks nothing, and again inside the
+  // update (only a request racing this one can fail there).
   const current = await EnvelopePlan.findOne({ user: userId, month: input.month }, { "envelopes.category": 1 }).lean<PlanDoc>();
   const after = new Set((current?.envelopes ?? []).map((e) => e.category).filter((c) => !remove.includes(c)));
   for (const k of assignKeys) after.add(k);
@@ -367,6 +368,11 @@ export async function moveBetweenEnvelopes(userId: string, input: EnvelopeMoveIn
     const names = new Set((plan?.envelopes ?? []).map((e) => e.category));
     if (!names.has(from) || !names.has(to)) throw new EnvelopeError("ENVELOPE_NOT_FOUND", "Both envelopes must be in this month's plan");
     const src = plan?.envelopes?.find((e) => e.category === from);
+    const dest = plan?.envelopes?.find((e) => e.category === to);
+    // The source had enough, so it was the receiver that would pass the maximum.
+    if (dest && src && src.assigned >= amount + floor && dest.assigned > MAX_MINOR_AMOUNT - amount) {
+      throw new EnvelopeError("INSUFFICIENT", `${to} would pass the largest amount an envelope can hold`);
+    }
     throw new EnvelopeError(
       "INSUFFICIENT",
       input.allowOverdraw || floor === 0
@@ -384,6 +390,11 @@ export async function copyEnvelopePlan(userId: string, input: EnvelopeCopyInput)
   const src = await EnvelopePlan.findOne({ user: userId, month: source }).lean<PlanDoc>();
   if (!src?.envelopes?.length) throw new EnvelopeError("NOTHING_TO_COPY", `There is no plan for ${source} to copy`);
 
+  // Refuse a month that already has envelopes before locking the base, so a rejected copy locks nothing.
+  // (A request that fills the month between this check and the update can still lock it: rare, and harmless.)
+  if (await EnvelopePlan.exists({ user: userId, month: input.month, "envelopes.0": { $exists: true } })) {
+    throw new EnvelopeError("PLAN_NOT_EMPTY", `${input.month} already has envelopes`);
+  }
   await lockBaseCurrency(userId, state);
   await ensurePlan(userId, input.month);
   const res = await EnvelopePlan.updateOne(

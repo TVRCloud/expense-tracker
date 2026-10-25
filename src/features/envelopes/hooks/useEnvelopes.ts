@@ -49,10 +49,12 @@ export function useAssignEnvelopes() {
   );
 }
 
+// `key` identifies one attempt: a double submit or a retry of the same attempt moves money once.
 export function useMoveEnvelopeMoney() {
-  return useEnvelopeMutation((body: { month: string; from: string; to: string; amount: number; allowOverdraw?: boolean }) =>
-    apiClient.post("/envelopes/move", body)
-  );
+  return useEnvelopeMutation((body: { month: string; from: string; to: string; amount: number; allowOverdraw?: boolean; key: string }) => {
+    const { key, ...rest } = body;
+    return apiClient.post("/envelopes/move", rest, { headers: { "Idempotency-Key": key } });
+  });
 }
 
 export function useCopyEnvelopePlan() {

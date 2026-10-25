@@ -6,7 +6,8 @@ import { Schema, model, models } from "mongoose";
 // the exact category string like a Budget is. Amounts are paise of the base
 // currency. Totals (assigned, unassigned) and `spent`/`left` are derived on
 // read, never stored. Written only through single-document atomic updates, so
-// the plan never needs a multi-document transaction.
+// the plan never needs a multi-document transaction. A move cannot take more
+// than the source has assigned, nor below what it had spent when the move ran.
 const EnvelopeSchema = new Schema(
   {
     category: { type: String, required: true },

@@ -82,10 +82,13 @@ function MoveDialog({ plan, from, onClose }: { plan: EnvelopePlan; from: Envelop
   const [to, setTo] = useState("");
   const [text, setText] = useState("");
   const [overdraw, setOverdraw] = useState(false);
+  // One key per attempt, replaced after a refusal so the next try is a new request.
+  const [key, setKey] = useState(() => crypto.randomUUID());
   useEffect(() => {
     setTo("");
     setText("");
     setOverdraw(false);
+    setKey(crypto.randomUUID());
   }, [from?.category]);
   if (!from) return null;
   const others = plan.envelopes.filter((e) => e.category !== from.category);
@@ -93,10 +96,16 @@ function MoveDialog({ plan, from, onClose }: { plan: EnvelopePlan; from: Envelop
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!from || !to || !minor || minor < 1) return;
+    if (!from || !to || !minor || minor < 1 || move.isPending) return;
     move.mutate(
-      { month: plan.month, from: from.category, to, amount: minor, allowOverdraw: overdraw || undefined },
-      { onSuccess: onClose, onError: (err) => toast.error(err.message) }
+      { month: plan.month, from: from.category, to, amount: minor, allowOverdraw: overdraw || undefined, key },
+      {
+        onSuccess: onClose,
+        onError: (err) => {
+          setKey(crypto.randomUUID());
+          toast.error(err.message);
+        },
+      }
     );
   }
 

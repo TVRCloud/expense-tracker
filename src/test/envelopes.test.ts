@@ -235,6 +235,14 @@ describe("envelope mode", () => {
       expect(tooBig.res.status).toBe(400);
     });
 
+    it("a write refused for too many envelopes does not lock the base currency", async () => {
+      const { default: User } = await import("@/models/User");
+      await put(plan(0, Array.from({ length: 60 }, (_, i) => [`E${i}`, 0])));
+      const r = await put({ month: MONTH, income: 5, assign: [{ category: "One more", assigned: 5 }] });
+      expect(r.res.status).toBe(400);
+      expect((await User.findById(a).lean<{ baseLocked?: boolean }>())!.baseLocked).toBeFalsy();
+    });
+
     it("validates the body", async () => {
       for (const body of [
         { month: "2026-13", income: 1 },
@@ -333,6 +341,10 @@ describe("envelope mode", () => {
       await put({ month: MONTH, assign: [{ category: "Big", assigned: 1e13 }] });
       const r = await move({ month: MONTH, from: "Food", to: "Big", amount: 1 });
       expect(r.res.status).toBe(400);
+      expect(r.json.error.details.errorCode).toBe("INSUFFICIENT");
+      // the message names the receiver, not the source that had enough
+      expect(r.json.error.message).toMatch(/Big would pass the largest amount/);
+      expect(r.json.error.message).not.toMatch(/Food has/);
       expect(row((await get()).json, "Food").assigned).toBe(40000);
     });
 
@@ -400,6 +412,16 @@ describe("envelope mode", () => {
       expect(none.res.status).toBe(404);
       expect(none.json.error.details.errorCode).toBe("NOTHING_TO_COPY");
       expect((await copy({ month: MONTH, from: MONTH })).res.status).toBe(400);
+    });
+
+    it("a rejected copy does not lock the base currency", async () => {
+      const { default: User } = await import("@/models/User");
+      await put(plan(0, [["Food", 0]], PREV)); // no money yet, so nothing locked
+      await put(plan(0, [["Rent", 0]]));
+      expect((await copy({ month: MONTH })).res.status).toBe(409);
+      expect((await User.findById(a).lean<{ baseLocked?: boolean }>())!.baseLocked).toBeFalsy();
+      // and a copy that works does lock it
+      expect((await copy({ month: "2026-11", from: MONTH })).res.status).toBe(200);
     });
 
     it("handles January: the month before is December of the year before", async () => {
@@ -502,6 +524,41 @@ describe("envelope mode", () => {
       await put(plan(1000, [["Food", 1000]]));
       const { resourcesChangedSince } = await import("@/lib/realtime/changed-since");
       expect(await resourcesChangedSince(a, since)).toContain("envelopes");
+    });
+
+    it("a browser move sent twice with one Idempotency-Key moves money once, and a replayed refusal stays refused", async () => {
+      sessionUser.current = { id: a, name: "A", email: "a@x.com", role: "user" };
+      await enable();
+      await put(plan(10000, [["Food", 1000], ["Fun", 0]]));
+      const moves = await import("@/app/api/envelopes/move/route");
+      const send = (key: string | null, amount: number) =>
+        moves.POST(
+          new NextRequest("http://localhost/api/envelopes/move", {
+            method: "POST",
+            headers: { "content-type": "application/json", ...(key ? { "idempotency-key": key } : {}) },
+            body: JSON.stringify({ month: MONTH, from: "Food", to: "Fun", amount, allowOverdraw: true }),
+          })
+        );
+      const both = await Promise.all([send("dbl-1", 400), send("dbl-1", 400)]);
+      const statuses = both.map((r) => r.status);
+      expect(statuses).toContain(200);
+      expect(statuses.every((c) => c === 200 || c === 409)).toBe(true); // the other is replayed, or still in progress
+      await send("dbl-1", 400); // a later retry replays
+      expect(row((await get()).json, "Fun").assigned).toBe(400);
+
+      // same key, other body is refused; no key still works as before
+      const clash = await send("dbl-1", 500);
+      expect(clash.status).toBe(409);
+      expect(((await clash.json()) as Json).code).toBe("IDEMPOTENCY_CONFLICT");
+      expect((await send(null, 100)).status).toBe(200);
+      expect(row((await get()).json, "Fun").assigned).toBe(500);
+
+      // a refusal is stored with the key: replay gives the same 400, a new key runs again
+      expect((await send("big-1", 5000)).status).toBe(400);
+      await put({ month: MONTH, assign: [{ category: "Food", assigned: 9000 }] });
+      expect((await send("big-1", 5000)).status).toBe(400);
+      expect((await send("big-2", 5000)).status).toBe(200);
+      expect((await send("bad key!", 1)).status).toBe(400);
     });
 
     it("the browser routes give the same plan to a signed-in user and map errors to statuses", async () => {

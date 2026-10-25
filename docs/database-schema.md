@@ -269,7 +269,7 @@ Index `{user, isDeleted, dueDate}`.
 
 ## envelope_plans
 
-Envelope mode (zero-based budgeting): one document per user and month. Totals, `spent` and `left` are computed on read, never stored. Written only by single-document atomic updates (pipeline updates with the cap in the filter), so a move cannot overdraw and two requests at once cannot spend the same money.
+Envelope mode (zero-based budgeting): one document per user and month. Totals, `spent` and `left` are computed on read, never stored. Written only by single-document atomic updates (pipeline updates with the cap in the filter), so a move cannot take more than the source has assigned (or below what it had spent at the moment of the move, unless overspending is allowed), and two requests at once cannot spend the same money.
 
 | Field | Type | Notes |
 |-------|------|-------|
