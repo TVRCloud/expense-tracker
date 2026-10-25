@@ -94,6 +94,7 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `refundStatus` | String | `suggested\|confirmed\|rejected`, null otherwise. Only `confirmed` nets the pair out of stats and budgets |
 | `refundPriorCategory` | String | The category before the expense's was carried over; restored when a confirmed refund is unlinked |
 | `reviewedAt` / `reviewedBy` | Date / ObjectId | |
+| `addedBy` | ObjectId | ref: User, the household editor who added the row to a shared account (unset otherwise) |
 | `deductible` | Boolean | Tax helper override on an expense: `true` or `false` wins over the user's deductible categories, unset follows them |
 | `balanceApplied` | Boolean | `false` on a row written without moving the account balance (CSV import with adjust balance off, bank link entry older than the link): delete, void and correct never move the balance for it. Absent on every other row |
 | `balanceApplied` | Boolean | `false` on a row written without moving the account balance (CSV import with adjust balance off, bank link entry older than the link): delete, void and correct never move the balance for it. Absent on every other row; kept in backups |
@@ -268,6 +269,27 @@ Money set aside for a cost on a due date. Progress (`remaining`, `percent`, `mon
 
 Index `{user, isDeleted, dueDate}`.
 
+## holdings
+
+An investment the person holds (stock, mutual fund, gold, fixed deposit, PPF, other). Kept apart from the ledger: no transaction is posted for it. It only feeds net worth. A fixed deposit's value is worked out on read from its terms (`src/lib/holding-math.ts`), never stored.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user` | ObjectId | |
+| `name` | String | 1 to 60 |
+| `kind` | String | `stock`, `mutual_fund`, `gold`, `fixed_deposit`, `ppf`, `other` |
+| `note` | String | up to 200 |
+| `unitsMicro` | Number | units in millionths (an integer), at most 1e15 |
+| `investedAmount` | Number | minor units of the base currency; a fixed deposit's principal |
+| `currentValue` | Number | the latest manual value (minor units); for a fixed deposit only the value at creation |
+| `valueUpdatedAt` | Date | |
+| `history` | `[{value, at}]` | the last 100 manual values, oldest first |
+| `sip` | `{amount, dayOfMonth, startDay, active}` | `startDay` is a `YYYY-MM-DD` day, not an instant |
+| `fd` | `{principal, rateBps, startDay, maturityDay}` | simple interest on actual days over 365 |
+| `isArchived` / `archivedAt` | Boolean / Date | soft delete |
+
+Index `{user, isArchived, createdAt}`. At most 500 live holdings per user. A holding counts as money data, so the first one locks the base currency.
+
 ## notifications
 
 | Field | Type | Notes |
@@ -398,6 +420,27 @@ One live CSV import per user and account.
 | `user` / `account` | String | unique together: the lock |
 | `expiresAt` | Date | TTL, 2 minutes, frees a lock if the run was killed |
 
+## shares
+
+Household sharing (`src/lib/share-service.ts`, [household.md](household.md)): an owner shares accounts, and optionally budgets, with one other person.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `owner` | ObjectId | ref: User, the person whose accounts are shared |
+| `member` | ObjectId | ref: User, set when the invite is accepted |
+| `memberEmail` | String | lower-case address the invite is for |
+| `accountIds` | ObjectId[] | the owner's accounts that are shared (max 20) |
+| `includeBudgets` | Boolean | the owner's budgets are readable too |
+| `role` | String | `viewer\|editor` |
+| `status` | String | `pending\|active\|revoked\|declined` (an unaccepted invite past `inviteExpiresAt` is ended on the owner's next call) |
+| `inviteTokenHash` | String | sha256 of the one-time invite code; removed when the invite is accepted, declined, revoked or expires |
+| `inviteExpiresAt` | Date | 7 days after the invite (or after a new code) |
+| `acceptedAt` / `endedAt` | Date | |
+| `endedBy` | String | `owner\|member\|account_deleted` |
+| `cleanupAt` | Date | TTL: ended shares are removed 90 days after they end |
+
+Indexes: unique `{owner, memberEmail}` where status is `pending` or `active` (one live share per owner and address), `{member, status}`, `{memberEmail, status}`, `{owner, status}`, `{accountIds, status}`, TTL `{cleanupAt}`. Shares are not part of a backup.
+
 ## exchange_rates
 
 One cached rate table per base currency (open.er-api.com), refreshed after 24 hours by `src/lib/exchange-rate-service.ts`; rows are kept so an outage can fall back to the last table for up to 30 days.
@@ -457,4 +500,4 @@ One row per account of the user that a live bank link feeds: the atomic "one fee
 
 ## Backup files
 
-No collection. A backup is built from the user's rows (accounts, transactions, budgets, goals, loans, repayments, rules, sinking funds, manual assets, subscription decisions, spend limit) and returned to the caller as an encrypted file; a restore inserts rows with the caller as `user`. Format and rules: [backup.md](backup.md).
+No collection. A backup is built from the user's rows (accounts, transactions, budgets, goals, loans, repayments, rules, sinking funds, manual assets, holdings, subscription decisions, spend limit) and returned to the caller as an encrypted file; a restore inserts rows with the caller as `user`. Format and rules: [backup.md](backup.md).

@@ -20,6 +20,7 @@ export type RealtimeResource =
   | "subscriptions"
   | "sinkingFunds"
   | "netWorth"
+  | "holdings"
   | "aa";
 
 // Allow-list: MongoDB collection name -> resource name sent to clients. Every
@@ -41,6 +42,7 @@ export const RESOURCES: Readonly<Record<string, RealtimeResource>> = {
   sinking_funds: "sinkingFunds",
   manual_assets: "netWorth",
   aa_consents: "aa",
+  holdings: "holdings",
 };
 
 export const RESOURCE_NAMES: readonly RealtimeResource[] = Object.values(RESOURCES);

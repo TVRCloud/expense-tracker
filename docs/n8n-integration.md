@@ -103,6 +103,10 @@ Authorization: Bearer <YOUR_API_KEY>
 | GET | `/api/integrations/net-worth` | What the user owns minus what they owe, the rows behind it, a daily trend and the change (`range`); see below |
 | GET, POST | `/api/integrations/net-worth/assets` | List and add manual assets (property, vehicle, gold, ...); POST needs `Idempotency-Key` |
 | PATCH, DELETE | `/api/integrations/net-worth/assets/[id]` | Edit or archive one (needs `Idempotency-Key`) |
+| GET, POST | `/api/integrations/holdings` | List holdings (value, gain, `totals`, `byKind`, `upcomingSips`) and add one (needs `Idempotency-Key`); see api-contracts.md |
+| GET, PATCH, DELETE | `/api/integrations/holdings/[id]` | Read (with value history), edit, archive one (writes need `Idempotency-Key`) |
+| POST | `/api/integrations/holdings/[id]/value` | `{value}` (minor units) or `{price}` (decimal string, times the units held); needs `Idempotency-Key` |
+| GET | `/api/integrations/holdings/sips` | Due dates of active SIPs in the next 60 days |
 | GET | `/api/integrations/refunds` | Credits that look like the money back for an earlier expense, each with the expense it probably refunds |
 | POST | `/api/integrations/refunds/[id]/confirm` | Link the credit to its expense, optional `{originalId}` (needs `Idempotency-Key`) |
 | POST | `/api/integrations/refunds/[id]/reject` | Not a refund: drop the suggestion, or unlink a confirmed one (needs `Idempotency-Key`) |

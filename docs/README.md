@@ -64,7 +64,7 @@ Reconcile (`/reconcile`) and Landing (`/`) have no page spec; see [reconcile.md]
 3. [database-schema.md](database-schema.md) and [authentication.md](authentication.md).
 4. The page spec and feature `CLAUDE.md` for the area you will change.
 5. [reconcile.md](reconcile.md) and [n8n-integration.md](n8n-integration.md) if you touch bank messages or the app API.
-6. [backup.md](backup.md) for the backup file format and its threat model, [realtime.md](realtime.md), [notifications.md](notifications.md), [pwa.md](pwa.md) as needed.
+6. [backup.md](backup.md) for the backup file format and its threat model, [household.md](household.md) for sharing accounts and its threat model, [realtime.md](realtime.md), [notifications.md](notifications.md), [pwa.md](pwa.md) as needed.
 7. [contributing.md](contributing.md) before you open a PR; skim [adr/README.md](adr/README.md) for past decisions.
 
 Note: some older docs lag the code; [feature-map.md](feature-map.md#known-doc-drift) lists the known gaps.

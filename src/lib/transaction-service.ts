@@ -145,6 +145,9 @@ export type TransactionProvenance = {
   // It leaves budget and spend limit alerts and the round-up alone (callers
   // also pass skipBalance), but categorise rules still apply.
   historical?: boolean;
+  // Household editor who added the row to a shared account (single rows only). The owner's round-up
+  // into a goal is skipped for such a row; budget and spend limit alerts still run.
+  addedBy?: string;
 };
 
 export type CreateTransactionInput = z.infer<typeof transactionCreateSchema> & {
@@ -421,9 +424,11 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
         void checkBudgetAlert(userId, s.category, s.amount, startDate);
       }
       void checkSpendLimitAlert(userId);
-      void applyRoundUp(userId, rest.amount, actor).catch((err) =>
-        logger.error({ err, userId }, "applyRoundUp failed")
-      );
+      if (!provenance?.addedBy) {
+        void applyRoundUp(userId, rest.amount, actor).catch((err) =>
+          logger.error({ err, userId }, "applyRoundUp failed")
+        );
+      }
     }
 
     logger.info({ userId, splitGroupId: splitGroupId.toString(), count: docs.length }, "Split transaction created");
@@ -564,9 +569,12 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     // schema refine guarantees category is set for any non-split expense
     void checkBudgetAlert(userId, rest.category as string, rest.amount, startDate);
     void checkSpendLimitAlert(userId);
-    void applyRoundUp(userId, rest.amount, actor).catch((err) =>
-      logger.error({ err, userId }, "applyRoundUp failed")
-    );
+    // A row a household editor added is not the owner's own spending: no round-up into their goal.
+    if (!provenance?.addedBy) {
+      void applyRoundUp(userId, rest.amount, actor).catch((err) =>
+        logger.error({ err, userId }, "applyRoundUp failed")
+      );
+    }
   }
 
   logger.info({ userId, transactionId: transaction._id.toString() }, "Transaction created");
