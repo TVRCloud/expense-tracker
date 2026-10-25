@@ -26,7 +26,8 @@ The old socket.io setup (custom `server.ts`) is gone from the runtime path; Verc
 | `spendLimits` | `spend_limits` | Daily and weekly spend limit settings |
 | `subscriptions` | `subscription_decisions` | Confirm and dismiss choices on detected subscriptions |
 | `sinkingFunds` | `sinking_funds` | Sinking funds, including saved amount changes |
-| `netWorth` | `manual_assets` | Manual assets counted in net worth (other changes reach net worth through `transactions`, `accounts`, `loans`, `repayments`) |
+| `netWorth` | `manual_assets` | Manual assets counted in net worth (other changes reach net worth through `transactions`, `accounts`, `loans`, `repayments`, `holdings`) |
+| `holdings` | `holdings` | Investments: holdings, their manual values, SIPs and fixed deposits |
 
 Adding a resource: add it to `RESOURCES` (`src/lib/realtime/changes.ts`), to `MODELS` (`changed-since.ts`) and to `INVALIDATION_MAP` (`invalidation.ts`); the model needs a required `user` ObjectId. Installed apps accept any resource name and ignore the ones they do not know (`RealtimeDispatcher` in the app repo), so a new name is safe to ship before the app learns it.
 
@@ -47,7 +48,7 @@ Requires a replica set / Atlas (change streams).
 Auth `Authorization: Bearer <key>`, same as other integration routes; 401 `UNAUTHORIZED` / 429 `RATE_LIMITED` use the integration error envelope. Same stream, contract is fixed:
 
 - `event: ready` `data: {"now":<epoch ms>}`
-- `event: data-changed` `data: {"resource":"transactions|accounts|budgets|goals|loans|notifications|captures|repayments|statements|spendLimits|subscriptions|sinkingFunds|netWorth"}`
+- `event: data-changed` `data: {"resource":"transactions|accounts|budgets|goals|loans|notifications|captures|repayments|statements|spendLimits|subscriptions|sinkingFunds|netWorth|holdings"}`
 - `event: ping` `data: {}` every 20s
 
 ### `GET /api/integrations/changes?since=<epoch ms>` (polling fallback)
@@ -75,6 +76,7 @@ Auth `Authorization: Bearer <key>`, same as other integration routes; 401 `UNAUT
 | `spendLimits` | spend-limit, budgets |
 | `subscriptions` | subscriptions |
 | `netWorth` | net-worth |
+| `holdings` | holdings, net-worth |
 
 - Mutations call the same `invalidateForResource()` so the acting tab is correct before the event arrives.
 

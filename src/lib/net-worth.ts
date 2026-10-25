@@ -5,6 +5,8 @@ import Account from "@/models/Account";
 import Loan from "@/models/Loan";
 import User from "@/models/User";
 import ManualAsset from "@/models/ManualAsset";
+import Holding from "@/models/Holding";
+import { fdValue } from "@/lib/holding-math";
 import NetWorthSnapshot from "@/models/NetWorthSnapshot";
 import { DEFAULT_TIME_ZONE, isValidTimeZone } from "@/lib/spend-limit-time";
 import { lockBaseCurrency } from "@/lib/base-currency";
@@ -16,7 +18,10 @@ import { lockBaseCurrency } from "@/lib/base-currency";
 //
 // Owned:  accounts with a positive balance (bank, savings, cash, wallet,
 //         investment), a card with a credit balance, money lent that is not
-//         yet paid back, and the manual assets the user keeps.
+//         yet paid back, the manual assets the user keeps, and the holdings
+//         (stocks, funds, gold, fixed deposits) at today's value. A holding
+//         is a position, an `investment` account is a balance: the server does
+//         not match them, so the same money must not be entered as both.
 // Owed:   a credit card balance below zero, any other account below zero (an
 //         overdraft), and money borrowed that is not yet paid back.
 // Settled loans and archived or deleted accounts count for nothing.
@@ -30,6 +35,8 @@ export class NetWorthServiceError extends Error {
 export const MANUAL_ASSET_KINDS = ["property", "vehicle", "gold", "investment", "other"] as const;
 
 const MAX_CENTS = 1_000_000_000_000_00; // 1e14 cents, far past any real figure
+// More than a person can keep (src/lib/holding-service.ts MAX_HOLDINGS), so the read is bounded.
+const HOLDINGS_READ_LIMIT = 1000;
 
 export const manualAssetCreateSchema = z.object({
   name: z.string().trim().min(1).max(60),
@@ -89,6 +96,7 @@ const ASSET_LABELS: Record<string, string> = {
   cardCredit: "Card credit balances",
   loansGiven: "Money lent",
   manual: "Other assets",
+  holdings: "Holdings",
 };
 const LIABILITY_LABELS: Record<string, string> = {
   cards: "Credit cards",
@@ -110,9 +118,9 @@ function ordered(map: Map<string, BreakdownRow>, labels: Record<string, string>)
 }
 
 /** What the user owns and owes right now, with the rows that add up to it. */
-export async function computeNetWorth(userId: string): Promise<NetWorthNow> {
+export async function computeNetWorth(userId: string, now: Date = new Date()): Promise<NetWorthNow> {
   await connectDB();
-  const [accounts, loans, manual] = await Promise.all([
+  const [accounts, loans, manual, holdings, timeZone] = await Promise.all([
     Account.find({ user: userId, isArchived: { $ne: true }, deletedAt: null })
       .select("type balance")
       .lean<Array<{ type: string; balance: number }>>(),
@@ -120,7 +128,13 @@ export async function computeNetWorth(userId: string): Promise<NetWorthNow> {
       .select("direction remainingAmount")
       .lean<Array<{ direction: "given" | "received"; remainingAmount: number }>>(),
     ManualAsset.find({ user: userId, isArchived: false }).select("value").lean<Array<{ value: number }>>(),
+    Holding.find({ user: userId, isArchived: { $ne: true } })
+      .select("currentValue fd")
+      .limit(HOLDINGS_READ_LIMIT)
+      .lean<Array<{ currentValue: number; fd?: { principal: number; rateBps: number; startDay: string; maturityDay: string } | null }>>(),
+    userTimeZone(userId),
   ]);
+  const todayKey = localDayKey(now, timeZone);
 
   const assets = new Map<string, BreakdownRow>();
   const liabilities = new Map<string, BreakdownRow>();
@@ -142,6 +156,7 @@ export async function computeNetWorth(userId: string): Promise<NetWorthNow> {
     else addTo(liabilities, "loansReceived", LIABILITY_LABELS, remaining);
   }
   for (const m of manual) addTo(assets, "manual", ASSET_LABELS, m.value ?? 0);
+  for (const h of holdings) addTo(assets, "holdings", ASSET_LABELS, h.fd ? fdValue(h.fd, todayKey).value : (h.currentValue ?? 0));
 
   const assetRows = ordered(assets, ASSET_LABELS);
   const liabilityRows = ordered(liabilities, LIABILITY_LABELS);
@@ -161,7 +176,7 @@ export function localDayKey(now: Date, timeZone: string | undefined | null): str
   return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
 }
 
-async function userTimeZone(userId: string) {
+export async function userTimeZone(userId: string) {
   const user = await User.findById(userId).select("preferences.timezone").lean<{ preferences?: { timezone?: string } } | null>();
   return user?.preferences?.timezone;
 }
@@ -173,7 +188,7 @@ async function userTimeZone(userId: string) {
  */
 export async function recordSnapshot(userId: string, now = new Date(), current?: NetWorthNow): Promise<NetWorthPoint> {
   await connectDB();
-  const nw = current ?? (await computeNetWorth(userId));
+  const nw = current ?? (await computeNetWorth(userId, now));
   const day = localDayKey(now, await userTimeZone(userId));
   const write = () =>
     NetWorthSnapshot.updateOne(
@@ -199,7 +214,7 @@ function shiftDay(day: string, days: number) {
 
 /** Net worth now, the trend for `range`, and how much it moved over that range. */
 export async function getNetWorth(userId: string, range: NetWorthRange = "90d", now = new Date()): Promise<NetWorthReport> {
-  const current = await computeNetWorth(userId);
+  const current = await computeNetWorth(userId, now);
   const today = await recordSnapshot(userId, now, current);
 
   const filter: Record<string, unknown> = { user: userId };
@@ -255,7 +270,7 @@ export async function recordSnapshotsForAllUsers(now = new Date()): Promise<{ ch
       checked += 1;
       try {
         const id = String(u._id);
-        const nw = await computeNetWorth(id);
+        const nw = await computeNetWorth(id, now);
         if (nw.assets === 0 && nw.liabilities === 0 && !(await NetWorthSnapshot.exists({ user: id }))) continue;
         await recordSnapshot(id, now, nw);
         recorded += 1;
