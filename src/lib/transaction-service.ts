@@ -141,6 +141,8 @@ export type TransactionProvenance = {
   sourceCapture?: string;
   captures?: string[];
   reviewStatus?: "unreviewed" | "confirmed" | null;
+  // Household editor who added the row to a shared account (single rows only).
+  addedBy?: string;
 };
 
 export type CreateTransactionInput = z.infer<typeof transactionCreateSchema> & {

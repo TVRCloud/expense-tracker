@@ -94,6 +94,7 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `refundStatus` | String | `suggested\|confirmed\|rejected`, null otherwise. Only `confirmed` nets the pair out of stats and budgets |
 | `refundPriorCategory` | String | The category before the expense's was carried over; restored when a confirmed refund is unlinked |
 | `reviewedAt` / `reviewedBy` | Date / ObjectId | |
+| `addedBy` | ObjectId | ref: User, the household editor who added the row to a shared account (unset otherwise) |
 | `deductible` | Boolean | Tax helper override on an expense: `true` or `false` wins over the user's deductible categories, unset follows them |
 | `isDeleted` | Boolean | soft delete |
 | `deletedAt` | Date | |
@@ -394,6 +395,27 @@ One live CSV import per user and account.
 |-------|------|-------|
 | `user` / `account` | String | unique together: the lock |
 | `expiresAt` | Date | TTL, 2 minutes, frees a lock if the run was killed |
+
+## shares
+
+Household sharing (`src/lib/share-service.ts`, [household.md](household.md)): an owner shares accounts, and optionally budgets, with one other person.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `owner` | ObjectId | ref: User, the person whose accounts are shared |
+| `member` | ObjectId | ref: User, set when the invite is accepted |
+| `memberEmail` | String | lower-case address the invite is for |
+| `accountIds` | ObjectId[] | the owner's accounts that are shared (max 20) |
+| `includeBudgets` | Boolean | the owner's budgets are readable too |
+| `role` | String | `viewer\|editor` |
+| `status` | String | `pending\|active\|revoked\|declined` (an unaccepted invite past `inviteExpiresAt` is ended on the owner's next call) |
+| `inviteTokenHash` | String | sha256 of the one-time invite code; removed when the invite is accepted, declined, revoked or expires |
+| `inviteExpiresAt` | Date | 7 days after the invite (or after a new code) |
+| `acceptedAt` / `endedAt` | Date | |
+| `endedBy` | String | `owner\|member\|account_deleted` |
+| `cleanupAt` | Date | TTL: ended shares are removed 90 days after they end |
+
+Indexes: unique `{owner, memberEmail}` where status is `pending` or `active` (one live share per owner and address), `{member, status}`, `{memberEmail, status}`, `{owner, status}`, `{accountIds, status}`, TTL `{cleanupAt}`. Shares are not part of a backup.
 
 ## exchange_rates
 

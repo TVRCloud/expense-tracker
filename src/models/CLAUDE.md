@@ -7,6 +7,7 @@ Purpose: Mongoose schemas, one file per collection. Field tables: [docs/database
 - Budget, SpendLimit (one doc per user: daily and weekly limit, plus `limitHistory` of the amounts over time), SubscriptionDecision (confirm or dismiss choice per detected subscription), ManualAsset (property, gold and so on counted in net worth; archived, not deleted), NetWorthSnapshot (one row per user per local day for the net worth trend), Goal, SinkingFund (money set aside for a cost on a due date), Loan, Repayment, Rule (categorise rules; hard-deleted), Notification, PushSubscription: feature data.
 - CapturedMessage, IdempotencyRecord: bank message inbox; integration idempotency.
 - Receipt (a receipt photo on a transaction, encrypted, hard-deleted with it), ExchangeRate (one cached rate table per base currency, kept for outages), ImportLock (one live CSV import per user and account): Phase 6 data.
+- Share (household sharing: owner, member, shared account ids, role, status, hashed invite code; ended shares removed by TTL 90 days after they end): Phase 7.
 - LedgerBlock, LedgerBackfill, LogSecurity, LogUnlockSession, SecurityRateLimit: ledger chain, logs unlock, rate limits.
 - Shared TypeScript shapes live in src/types/models.ts.
 
@@ -19,7 +20,7 @@ Purpose: Mongoose schemas, one file per collection. Field tables: [docs/database
 - Soft delete via `isDeleted` (transactions, budgets, goals, loans) or `isArchived` (accounts). Realtime relies on this: hard deletes are not broadcast.
 - Realtime filters on a top-level `user` field; a watched model without it will not stream.
 - `CapturedMessage`: unique {user, contentHash}, no TTL, text encrypted. `TransactionCorrection`: insert-only.
-- TTLs: Notification 90 days, Session 90 days, IdempotencyRecord, LogUnlockSession, SecurityRateLimit and ImportLock at `expiresAt` (ImportLock is set 2 minutes ahead, so a killed import frees its lock). Receipt and ExchangeRate have no TTL: receipts are deleted with their transaction (or swept), rate tables are kept as the outage fallback.
+- TTLs: Notification 90 days, Session 90 days, IdempotencyRecord, LogUnlockSession, SecurityRateLimit and ImportLock at `expiresAt`, Share at `cleanupAt` (90 days after a share ends; live shares have none) (ImportLock is set 2 minutes ahead, so a killed import frees its lock). Receipt and ExchangeRate have no TTL: receipts are deleted with their transaction (or swept), rate tables are kept as the outage fallback.
 - docs/database-schema.md calls the Session collection `userSessions`; the code says `userSession`.
 
 ## Tests
