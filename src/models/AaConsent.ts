@@ -48,8 +48,8 @@ const AaConsentSchema = new Schema(
     revokedAt: { type: Date },
     // The person deleted their account while this grant could not be withdrawn. Kept (with its encrypted handle) only
     // so the cron sweep can withdraw it at the provider and then delete it. Never listed, synced or reachable by a user route.
-    ownerDeleted: { type: Boolean },
-    // Last time the sweep tried to withdraw an ownerDeleted consent: the oldest try goes first, so rows that keep failing
+    withdrawPending: { type: Boolean },
+    // Last time the sweep tried to withdraw an withdrawPending consent: the oldest try goes first, so rows that keep failing
     // cannot starve the rest.
     lastRetryAt: { type: Date },
   },
@@ -59,6 +59,6 @@ const AaConsentSchema = new Schema(
 AaConsentSchema.index({ user: 1, status: 1, createdAt: -1 });
 AaConsentSchema.index({ status: 1, lastSyncAt: 1 });
 AaConsentSchema.index({ handleHash: 1 });
-AaConsentSchema.index({ ownerDeleted: 1, lastRetryAt: 1 }, { sparse: true });
+AaConsentSchema.index({ withdrawPending: 1, lastRetryAt: 1 }, { sparse: true });
 
 export default models.AaConsent || model("AaConsent", AaConsentSchema, "aa_consents");

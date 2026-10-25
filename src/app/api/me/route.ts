@@ -8,7 +8,7 @@ import { z } from "zod";
 import { forgetUserSessions } from "@/lib/perf/session-cache";
 import { forgetUserKeys } from "@/lib/integrations/auth";
 import { deleteAllReceiptsOfUser } from "@/lib/receipt-service";
-import { deleteAaDataForUser, purgeAaRecordsOfDeletedUser } from "@/lib/aa-service";
+import { deleteAaDataForUser, markAllConsentsWithdrawPending, purgeAaRecordsOfDeletedUser } from "@/lib/aa-service";
 import { revokeAllSharesOfUser } from "@/lib/share-service";
 
 const updateSchema = z.object({
@@ -113,7 +113,11 @@ export async function DELETE() {
       .then(async (r) => {
         if (r.remaining > 0) await purgeAaRecordsOfDeletedUser(user.id);
       })
-      .catch((err) => logger.error({ err: err instanceof Error ? err.name : "unknown", userId: user.id }, "final bank link purge failed"));
+      .catch(async (err) => {
+        logger.error({ err: err instanceof Error ? err.name : "unknown", userId: user.id }, "final bank link purge failed");
+        // Hand whatever is left to the sweep (hidden, retried) rather than leave it active with no one reading it.
+        await markAllConsentsWithdrawPending(user.id).catch(() => undefined);
+      });
 
     return NextResponse.json({ data: { message: "Account deleted" } });
   } catch (err) {

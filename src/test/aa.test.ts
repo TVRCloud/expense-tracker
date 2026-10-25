@@ -1066,7 +1066,7 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
         errSpy.mockRestore();
         const rows = await AaConsent.find({ user: a }).lean<Json[]>();
         expect(rows.map((r) => String(r._id))).toEqual([live.consentId]);
-        expect(rows[0].ownerDeleted).toBe(true);
+        expect(rows[0].withdrawPending).toBe(true);
         expect(rows[0].consentHandle?.ciphertext).toBeTruthy();
         for (const c of calls) {
           expect(JSON.stringify(c[0])).not.toContain(a);
@@ -1091,7 +1091,7 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
         const fetchSpy = vi.spyOn(provider, "fetchTransactions");
         const fail = vi.spyOn(provider, "revoke").mockRejectedValueOnce(new Error("down") as never);
         await syncAllConsents();
-        expect(await AaConsent.countDocuments({ _id: consentId, ownerDeleted: true })).toBe(1);
+        expect(await AaConsent.countDocuments({ _id: consentId, withdrawPending: true })).toBe(1);
         expect(sandboxControl.isRevoked(handle)).toBe(false);
         fail.mockRestore();
 
@@ -1104,7 +1104,7 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
         expect(await Transaction.countDocuments({ user: a })).toBe(0);
       });
 
-      /** n consents flagged ownerDeleted, with their handles. */
+      /** n consents flagged withdrawPending, with their handles. */
       async function flagged(n: number) {
         const { AaConsent } = await models();
         const out: Array<{ id: string; handle: string }> = [];
@@ -1112,14 +1112,14 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
           const made = (await (await create(KEY_A, { "idempotency-key": `fl-${i}` })).json()).data.consent as Json;
           out.push({ id: made.id, handle: await handleOf(made.id) });
         }
-        await AaConsent.updateMany({ user: a }, { $set: { ownerDeleted: true } });
+        await AaConsent.updateMany({ user: a }, { $set: { withdrawPending: true } });
         return out;
       }
 
       it("rows that keep failing do not starve a retryable one behind them, and each attempt stamps lastRetryAt", async () => {
         process.env.AA_PROVIDER = "sandbox";
         const { AaConsent } = await models();
-        const { retryOwnerDeletedConsents } = await import("@/lib/aa-service");
+        const { retryPendingWithdrawals } = await import("@/lib/aa-service");
         const provider = (await import("@/lib/aa/providers")).getAaProvider()!;
         const [c1, c2, c3] = await flagged(3);
         const failing = new Set([c1.handle, c2.handle]);
@@ -1127,11 +1127,11 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
           if (failing.has(h)) throw new Error("down");
         }) as never);
         try {
-          expect(await retryOwnerDeletedConsents(2)).toEqual({ withdrawn: 0, kept: 2 });
+          expect(await retryPendingWithdrawals(2)).toEqual({ withdrawn: 0, kept: 2 });
           const stamped = await AaConsent.find({ lastRetryAt: { $ne: null } }).lean<Json[]>();
           expect(stamped.map((r) => String(r._id)).sort()).toEqual([c1.id, c2.id].sort());
           // The never-tried one goes first now, even though two failing rows are older in the queue.
-          expect(await retryOwnerDeletedConsents(2)).toMatchObject({ withdrawn: 1 });
+          expect(await retryPendingWithdrawals(2)).toMatchObject({ withdrawn: 1 });
           expect(await AaConsent.countDocuments({ _id: c3.id })).toBe(0);
           expect(await AaConsent.countDocuments({ _id: { $in: [c1.id, c2.id] } })).toBe(2);
         } finally {
@@ -1142,10 +1142,10 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
       it("a row whose provider is not registered is skipped without using the limit or being touched", async () => {
         process.env.AA_PROVIDER = "sandbox";
         const { AaConsent } = await models();
-        const { retryOwnerDeletedConsents } = await import("@/lib/aa-service");
+        const { retryPendingWithdrawals } = await import("@/lib/aa-service");
         const [c1, c2] = await flagged(2);
         await AaConsent.updateOne({ _id: c1.id }, { $set: { provider: "retired" } });
-        expect(await retryOwnerDeletedConsents(1)).toEqual({ withdrawn: 1, kept: 0 });
+        expect(await retryPendingWithdrawals(1)).toEqual({ withdrawn: 1, kept: 0 });
         expect(await AaConsent.countDocuments({ _id: c2.id })).toBe(0);
         const left = await AaConsent.findById(c1.id).lean<Json>();
         expect(left?.lastRetryAt).toBeUndefined();
@@ -1154,16 +1154,16 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
       it("the retry stops at the sweep's time budget", async () => {
         process.env.AA_PROVIDER = "sandbox";
         const { AaConsent } = await models();
-        const { retryOwnerDeletedConsents, SWEEP_LIMITS } = await import("@/lib/aa-service");
+        const { retryPendingWithdrawals, SWEEP_LIMITS } = await import("@/lib/aa-service");
         await flagged(2);
         const saved = SWEEP_LIMITS.budgetMs;
         SWEEP_LIMITS.budgetMs = -1;
         try {
-          expect(await retryOwnerDeletedConsents()).toEqual({ withdrawn: 0, kept: 0, partial: true });
+          expect(await retryPendingWithdrawals()).toEqual({ withdrawn: 0, kept: 0, partial: true });
         } finally {
           SWEEP_LIMITS.budgetMs = saved;
         }
-        expect(await AaConsent.countDocuments({ ownerDeleted: true })).toBe(2);
+        expect(await AaConsent.countDocuments({ withdrawPending: true })).toBe(2);
       });
 
       it("a consent that turns up for an account already deleted is handed to the sweep, not left live", async () => {
@@ -1175,7 +1175,7 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
         const handle = await handleOf(consentId);
         await User.updateOne({ _id: a }, { $set: { isActive: false, deletedAt: new Date() } });
         await syncAllConsents();
-        expect(await AaConsent.countDocuments({ _id: consentId, ownerDeleted: true })).toBe(1);
+        expect(await AaConsent.countDocuments({ _id: consentId, withdrawPending: true })).toBe(1);
         await syncAllConsents();
         expect(await AaConsent.countDocuments({ _id: consentId })).toBe(0);
         expect(sandboxControl.isRevoked(handle)).toBe(true);
@@ -1191,8 +1191,69 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
         await User.updateOne({ _id: a }, { $set: { isActive: true, deletedAt: new Date() } });
         await syncAllConsents();
         const c = await AaConsent.findById(consentId).lean<Json>();
-        expect(c?.ownerDeleted).toBe(true);
+        expect(c?.withdrawPending).toBe(true);
         expect(c?.status).toBe("active");
+      });
+
+      it("hidden consents do not count toward the five-link cap", async () => {
+        process.env.AA_PROVIDER = "sandbox";
+        const { AaConsent } = await models();
+        await flagged(5);
+        expect((await create(KEY_A, { "idempotency-key": "after-flagged" })).status).toBe(201);
+        expect(await AaConsent.countDocuments({ user: a, withdrawPending: { $ne: true } })).toBe(1);
+      });
+
+      it("a hidden consent and its retry stamp do not wake the aa resource", async () => {
+        process.env.AA_PROVIDER = "sandbox";
+        const { resourcesChangedSince } = await import("@/lib/realtime/changed-since");
+        const since = new Date(Date.now() - 1000);
+        await flagged(1);
+        expect(await resourcesChangedSince(a, since)).not.toContain("aa");
+        await create(KEY_A, { "idempotency-key": "visible" });
+        expect(await resourcesChangedSince(a, since)).toContain("aa");
+      });
+
+      it("a person deleted while the provider answers gets nothing written, and the grant goes to the sweep", async () => {
+        const { consentId } = await linked();
+        const { AaConsent, Transaction } = await models();
+        const User = (await import("@/models/User")).default as mongoose.Model<Json>;
+        const { syncNow } = await import("@/lib/aa-service");
+        const provider = (await import("@/lib/aa/providers")).getAaProvider()!;
+        const real = provider.fetchTransactions.bind(provider);
+        const spy = vi.spyOn(provider, "fetchTransactions").mockImplementationOnce((async (...args: Parameters<typeof real>) => {
+          await User.updateOne({ _id: a }, { $set: { isActive: false, deletedAt: new Date() } });
+          return real(...args);
+        }) as never);
+        try {
+          const out = await syncNow(a, consentId, new Date());
+          expect(out.error).toBe("user_unavailable");
+        } finally {
+          spy.mockRestore();
+        }
+        expect(await Transaction.countDocuments({ user: a })).toBe(0);
+        expect((await AaConsent.findById(consentId).lean<Json>())?.withdrawPending).toBe(true);
+      });
+
+      it("if deletion fails half way every link of the person is handed to the sweep", async () => {
+        await linked();
+        const { AaConsent } = await models();
+        const { markAllConsentsWithdrawPending } = await import("@/lib/aa-service");
+        await markAllConsentsWithdrawPending(a);
+        expect(await AaConsent.countDocuments({ user: a, withdrawPending: true })).toBe(1);
+      });
+
+      it("overlapping sweeps revoke a waiting consent only once", async () => {
+        process.env.AA_PROVIDER = "sandbox";
+        const { syncAllConsents } = await import("@/lib/aa-service");
+        const provider = (await import("@/lib/aa/providers")).getAaProvider()!;
+        await flagged(1);
+        const spy = vi.spyOn(provider, "revoke");
+        try {
+          await Promise.all([syncAllConsents(), syncAllConsents()]);
+          expect(spy).toHaveBeenCalledTimes(1);
+        } finally {
+          spy.mockRestore();
+        }
       });
 
       it("an admin-deactivated person's links are only paused, not handed to the sweep", async () => {
@@ -1203,19 +1264,19 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
         await User.updateOne({ _id: a }, { $set: { isActive: false } });
         expect(await syncAllConsents()).toMatchObject({ checked: 1 });
         const c = await AaConsent.findById(consentId).lean<Json>();
-        expect(c?.ownerDeleted).toBeUndefined();
+        expect(c?.withdrawPending).toBeUndefined();
         expect(c?.status).toBe("active");
       });
 
       it("a provider that no longer knows the consent counts as withdrawn", async () => {
         const { consentId } = await linked();
         const { AaConsent } = await models();
-        const { purgeAaRecordsOfDeletedUser, retryOwnerDeletedConsents } = await import("@/lib/aa-service");
+        const { purgeAaRecordsOfDeletedUser, retryPendingWithdrawals } = await import("@/lib/aa-service");
         const { AaProviderError } = await import("@/lib/aa/provider");
         const provider = (await import("@/lib/aa/providers")).getAaProvider()!;
         await purgeAaRecordsOfDeletedUser(a);
         const spy = vi.spyOn(provider, "revoke").mockRejectedValueOnce(new AaProviderError("CONSENT_NOT_FOUND") as never);
-        expect(await retryOwnerDeletedConsents()).toEqual({ withdrawn: 1, kept: 0 });
+        expect(await retryPendingWithdrawals()).toEqual({ withdrawn: 1, kept: 0 });
         spy.mockRestore();
         expect(await AaConsent.countDocuments({ _id: consentId })).toBe(0);
       });

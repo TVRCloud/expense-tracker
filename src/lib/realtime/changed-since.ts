@@ -39,6 +39,12 @@ const MODELS: Record<RealtimeResource, Model<any>> = { // eslint-disable-line @t
   holdings: Holding,
 };
 
+// Rows a person must not see (and whose bookkeeping writes must not wake the app): bank link consents waiting to be
+// withdrawn at the provider.
+const EXTRA_FILTER: Partial<Record<RealtimeResource, Record<string, unknown>>> = {
+  aa: { withdrawPending: { $ne: true } },
+};
+
 /** Parses `?since=` (epoch ms). Anything missing/non-numeric/<=0 is null. */
 export function parseSince(raw: string | null): Date | null {
   if (!raw || !/^\d{1,16}$/.test(raw)) return null;
@@ -58,7 +64,7 @@ export async function resourcesChangedSince(userId: string, since: Date): Promis
   await connectDB();
   const flags = await Promise.all(
     RESOURCE_NAMES.map(async (name) => {
-      const hit = await MODELS[name].exists({ user: userId, updatedAt: { $gt: since } });
+      const hit = await MODELS[name].exists({ user: userId, updatedAt: { $gt: since }, ...(EXTRA_FILTER[name] ?? {}) });
       return hit ? name : null;
     })
   );
