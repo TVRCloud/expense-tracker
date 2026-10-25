@@ -199,7 +199,12 @@ export async function startConsent(userId: string): Promise<{ consent: AaConsent
   const liveIds = await AaConsent.find({ user: userId, status: { $in: LIVE } }).sort({ _id: 1 }).select("_id").lean<{ _id: Types.ObjectId }[]>();
   if (liveIds.length > MAX_LIVE_CONSENTS) {
     const keep = liveIds.slice(0, MAX_LIVE_CONSENTS).map((l) => l._id);
-    await AaConsent.deleteMany({ user: userId, status: "pending", _id: { $nin: keep } });
+    const excess = await AaConsent.find({ user: userId, status: "pending", _id: { $nin: keep } }).lean<ConsentDoc[]>();
+    for (const x of excess) {
+      // Withdraw at the provider first: a handle we stop tracking must not stay a live grant there.
+      await providerByName(x.provider)?.revoke(handleOf(x)).catch(() => undefined);
+    }
+    await AaConsent.deleteMany({ user: userId, status: "pending", _id: { $in: excess.map((x) => x._id) } });
   }
   if (!(await AaConsent.exists({ _id: doc._id, user: userId }))) {
     await provider.revoke(created.handle).catch(() => undefined);
@@ -300,10 +305,18 @@ export async function mapLinkedAccount(userId: string, id: string, linkedId: str
       throw new AaServiceError("INVALID_STATE", "That account is already fed by another linked account");
     }
   }
-  await AaConsent.updateOne(
-    { _id: c._id, user: userId, "linkedAccounts._id": linked._id },
+  if (accountId && linked.mappedAccount?.toString() === accountId) return consentView(c);
+  // The clash check above read a snapshot: the write itself refuses an account another element now holds.
+  const res = await AaConsent.updateOne(
+    {
+      _id: c._id,
+      user: userId,
+      "linkedAccounts._id": linked._id,
+      ...(accountId ? { "linkedAccounts.mappedAccount": { $ne: new Types.ObjectId(accountId) } } : {}),
+    },
     { $set: { "linkedAccounts.$.mappedAccount": accountId ? new Types.ObjectId(accountId) : null } }
   );
+  if (!res.matchedCount && accountId) throw new AaServiceError("INVALID_STATE", "That account is already fed by another linked account");
   return consentView(await loadConsent(userId, id));
 }
 
@@ -445,6 +458,11 @@ export async function syncConsent(c: ConsentDoc, now = new Date()): Promise<AaSy
               continue;
             }
             const t = parsed.data;
+            // Only this linked account's entries: a provider answering with another account's rows must not land here.
+            if (t.accountRef !== l.providerRef) {
+              result.skippedInvalid += 1;
+              continue;
+            }
             // Skipped entries move the resume point too: a long run of them must not stall the link.
             if (!newest || t.at.getTime() > newest.getTime()) newest = t.at;
             if (t.currency !== "INR") {

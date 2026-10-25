@@ -851,6 +851,22 @@ export async function ingestAaTransaction(input: AaIngestInput): Promise<IngestR
       { new: true }
     ).lean<CaptureDoc>();
     if (!claimed) return { httpStatus: 200, body: { status: "duplicate", captureId: existing._id.toString() } };
+    // The crash may have come after the transaction was written but before the capture was updated: finish that
+    // instead of booking the payment again (the row is tied to this capture by sourceCapture, or by captures for
+    // a manual row the entry had claimed).
+    const written = await Transaction.findOne({
+      user: input.user.id,
+      $or: [{ sourceCapture: claimed._id }, { captures: claimed._id }],
+    })
+      .select("_id")
+      .lean<{ _id: Types.ObjectId }>();
+    if (written) {
+      await CapturedMessage.updateOne(
+        { _id: claimed._id, outcome: "processing" },
+        { $set: { outcome: "duplicate", role: "supporting", status: "resolved", resolvedAt: new Date(), transaction: written._id } }
+      );
+      return { httpStatus: 200, body: { status: "duplicate", captureId: claimed._id.toString(), transactionId: written._id.toString() } };
+    }
     capture = claimed;
   }
   return decideAa(input, capture, parse);

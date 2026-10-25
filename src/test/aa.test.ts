@@ -713,6 +713,36 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
       expect((await CapturedMessage.findOne({ user: a, channel: "aa" }).lean<Json>())?.outcome).toBe("created");
     });
 
+    it("a crash after the transaction was written does not book the payment twice on recovery", async () => {
+      const { bank } = await linked();
+      const { Transaction, CapturedMessage } = await models();
+      const { ingestAaTransaction } = await import("@/lib/capture/ingest");
+      const input = {
+        user: actor(), provider: "sandbox", providerTxnId: "crash-2", accountId: String(bank._id), bankName: "HDFC Bank", last4: "1234",
+        type: "expense" as const, amountMinor: 4400, at: new Date(), narration: "CRASH2", historical: false,
+      };
+      await ingestAaTransaction(input);
+      await CapturedMessage.collection.updateOne(
+        { user: new mongoose.Types.ObjectId(a), channel: "aa" },
+        { $set: { outcome: "processing", status: "pending", updatedAt: new Date(Date.now() - 10 * 60 * 1000) }, $unset: { transaction: "" } }
+      );
+      expect((await ingestAaTransaction(input)).body.status).toBe("duplicate");
+      expect(await Transaction.countDocuments({ user: a })).toBe(1);
+      expect((await CapturedMessage.findOne({ user: a, channel: "aa" }).lean<Json>())?.outcome).toBe("duplicate");
+    });
+
+    it("skips entries a provider returns for another linked account", async () => {
+      const { consentId, consent } = await linked();
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      const ref = await providerRef(consentId, consent.linkedAccounts.find((l: Json) => l.bankName === "HDFC Bank").id);
+      sandboxControl.setTransactions(await handleOf(consentId), ref, [
+        ...feed(ref, [{ id: "mine-1" }]),
+        ...feed("some-other-account", [{ id: "theirs-1" }]),
+      ] as never);
+      const sync = (await (await syncRoute(consentId)).json()).data.sync as Json;
+      expect(sync).toMatchObject({ created: 1, skippedInvalid: 1 });
+    });
+
     it("a long run of skipped entries does not stall the link", async () => {
       const { consentId, consent } = await linked();
       const { sandboxControl } = await import("@/lib/aa/sandbox");
