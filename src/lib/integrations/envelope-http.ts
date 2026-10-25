@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import type { z } from "zod";
 import type { AuthUser } from "@/lib/auth-guard";
-import { ENVELOPE_ERROR_STATUS, EnvelopeError, type EnvelopeErrorCode } from "@/lib/envelope-service";
+import { ENVELOPE_ERROR_STATUS, EnvelopeError, EnvelopeWriteUncertain, type EnvelopeErrorCode } from "@/lib/envelope-service";
 import { integrationError, integrationOk, type IntegrationErrorCode } from "@/lib/integrations/response";
 import { withIdempotency } from "@/lib/integrations/idempotency";
 import { canonicalJson, conflictMessageCheckFirst, idempotencyKeyOf, readJsonBody } from "@/lib/integrations/write-helpers";
@@ -40,23 +40,33 @@ export async function envelopeWrite<S extends z.ZodType>(opts: {
   const parsed = schema.safeParse(read.body);
   if (!parsed.success) return integrationError("VALIDATION_ERROR", invalidMessage, requestId, { details: parsed.error.flatten() });
 
-  const outcome = await withIdempotency({
-    userId: user.id,
-    endpoint,
-    key,
-    // the plan body has a list of objects, which the fingerprint would otherwise lose
-    body: { request: canonicalJson(parsed.data) },
-    execute: async (): Promise<{ status: number; body: Record<string, unknown> }> => {
-      try {
-        return { status: 200, body: (await run(parsed.data)) as Record<string, unknown> };
-      } catch (err) {
-        if (err instanceof EnvelopeError) {
-          return { status: ENVELOPE_ERROR_STATUS[err.code], body: { errorCode: err.code, message: err.message } };
+  let outcome;
+  try {
+    outcome = await withIdempotency({
+      userId: user.id,
+      endpoint,
+      key,
+      // the plan body has a list of objects, which the fingerprint would otherwise lose
+      body: { request: canonicalJson(parsed.data) },
+      // the write call failed without saying whether it was applied: keep the key pending
+      keepPendingOn: (err) => err instanceof EnvelopeWriteUncertain,
+      execute: async (): Promise<{ status: number; body: Record<string, unknown> }> => {
+        try {
+          return { status: 200, body: (await run(parsed.data)) as Record<string, unknown> };
+        } catch (err) {
+          if (err instanceof EnvelopeError) {
+            return { status: ENVELOPE_ERROR_STATUS[err.code], body: { errorCode: err.code, message: err.message } };
+          }
+          throw err;
         }
-        throw err;
-      }
-    },
-  });
+      },
+    });
+  } catch (err) {
+    if (err instanceof EnvelopeWriteUncertain) {
+      return integrationError("IDEMPOTENCY_CONFLICT", conflictMessageCheckFirst("in_progress"), requestId, { details: { errorCode: "WRITE_UNCERTAIN" } });
+    }
+    throw err;
+  }
   if (outcome.kind === "conflict") return integrationError("IDEMPOTENCY_CONFLICT", conflictMessageCheckFirst(outcome.reason), requestId);
   const body = outcome.body as { errorCode?: EnvelopeErrorCode; message?: string } & Record<string, unknown>;
   if (outcome.status !== 200 && body.errorCode && body.errorCode in INTEGRATION_CODE) {

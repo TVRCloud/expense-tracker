@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { z } from "zod";
 import { requireAuth, type AuthUser } from "@/lib/auth-guard";
-import { ENVELOPE_ERROR_STATUS, EnvelopeError } from "@/lib/envelope-service";
+import { ENVELOPE_ERROR_STATUS, EnvelopeError, EnvelopeWriteUncertain } from "@/lib/envelope-service";
 import { withIdempotency } from "@/lib/integrations/idempotency";
 import { canonicalJson, conflictMessageCheckFirst, idempotencyKeyOf } from "@/lib/integrations/write-helpers";
 import logger from "@/lib/logger";
@@ -41,12 +41,14 @@ export async function browserEnvelopeWrite<S extends z.ZodType>(
       endpoint: `envelopes:${label}`,
       key,
       body: { request: canonicalJson(parsed.data) },
+      keepPendingOn: (e) => e instanceof EnvelopeWriteUncertain,
       // What is guaranteed: a write that committed never reports an error because the plan could not be read
       // back (the service answers a `partial` view), so a retry under its key replays the stored answer. If the
-      // process dies after the commit and before the answer is stored, the key stays pending (no
-      // pendingTtlSeconds on purpose, so it cannot expire and run the write again) and a retry answers 409 until
-      // the idempotency TTL; the person checks the plan and uses a new key. A failure before the commit deletes
-      // the pending record, so a retry runs normally.
+      // write call itself fails without saying whether it was applied (EnvelopeWriteUncertain, kept pending by
+      // keepPendingOn), or the process dies after the commit and before the answer is stored, the key stays
+      // pending (no pendingTtlSeconds on purpose, so it cannot expire and run the write again) and every retry
+      // answers 409 until the idempotency TTL; the person checks the plan and starts over with a new key. Only a
+      // failure proven to happen before the write deletes the pending record, so a retry runs normally.
       execute: async (): Promise<{ status: number; body: Record<string, unknown> }> => {
         try {
           return { status: 200, body: { data: await run(parsed.data, user) } };
@@ -62,6 +64,11 @@ export async function browserEnvelopeWrite<S extends z.ZodType>(
     }
     return NextResponse.json(outcome.body, { status: outcome.status });
   } catch (err) {
+    if (err instanceof EnvelopeWriteUncertain && req.headers.get("idempotency-key") !== null) {
+      // The key is kept pending (see withIdempotency), so a retry under it is refused rather than run twice.
+      logger.error({ err: err.cause, label }, "envelope write outcome unknown");
+      return NextResponse.json({ error: conflictMessageCheckFirst("in_progress"), code: "IDEMPOTENCY_CONFLICT" }, { status: 409 });
+    }
     if (err instanceof EnvelopeError) {
       return NextResponse.json({ error: err.message, code: err.code }, { status: ENVELOPE_ERROR_STATUS[err.code] });
     }

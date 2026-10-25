@@ -78,7 +78,28 @@ export type EnvelopeCopyInput = z.infer<typeof envelopeCopySchema>;
 
 export const envelopeSettingsSchema = z.object({ enabled: z.boolean() }).strict();
 
-// ── errors ─────────────────────────────────────────────────────────────────
+// ── errors ─────
+
+/**
+ * The write call itself failed in a way that does not say whether it was applied (a
+ * timeout, a dropped acknowledgement). The routes keep the Idempotency-Key pending and
+ * answer 409 with "check the plan"; without a key it is a plain 500.
+ */
+export class EnvelopeWriteUncertain extends Error {
+  constructor(public cause: unknown) {
+    super("The change may or may not have been saved");
+    this.name = "EnvelopeWriteUncertain";
+  }
+}
+
+/** Runs the one write of a request; an error from it is uncertain, whatever it was. */
+async function uncertainOnError<T>(write: () => PromiseLike<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (err) {
+    throw new EnvelopeWriteUncertain(err);
+  }
+}
 
 export type EnvelopeErrorCode =
   | "ENVELOPES_DISABLED"
@@ -170,8 +191,12 @@ export interface EnvelopeView {
   previousMonth: string;
   /** The previous month has a plan that could be copied into an empty month. */
   hasPrevious: boolean;
-  /** Only on a write's answer when the write succeeded but reading the plan back failed: income, envelopes and the rest are empty, fetch the plan again. */
-  partial?: true;
+  /**
+   * true only on a write's answer when the write succeeded but reading the plan back failed: income,
+   * envelopes and the rest are empty and `currency` is blank, so render nothing from it and fetch the
+   * plan again. false on every other answer.
+   */
+  partial: boolean;
 }
 
 export function previousMonthOf(month: string): string {
@@ -210,6 +235,7 @@ export async function getEnvelopePlan(userId: string, month?: string): Promise<E
     moves: [],
     previousMonth: previousMonthOf(key),
     hasPrevious: false,
+    partial: false,
   };
   if (!settings.enabled) return empty;
 
@@ -360,11 +386,13 @@ export async function assignEnvelopes(userId: string, input: EnvelopeAssignInput
   const set: Record<string, unknown> = { envelopes: merged, updatedAt: "$$NOW" };
   if (input.income !== undefined) set.income = { $literal: input.income };
 
-  const updated = await EnvelopePlan.findOneAndUpdate(
-    { user: userId, month: input.month, $expr: { $lte: [{ $size: resultKeys }, MAX_ENVELOPES] } },
-    [{ $set: set }],
-    { returnDocument: "after", updatePipeline: true }
-  ).lean<PlanDoc>();
+  const updated = await uncertainOnError(() =>
+    EnvelopePlan.findOneAndUpdate(
+      { user: userId, month: input.month, $expr: { $lte: [{ $size: resultKeys }, MAX_ENVELOPES] } },
+      [{ $set: set }],
+      { returnDocument: "after", updatePipeline: true }
+    ).lean<PlanDoc>()
+  );
   if (!updated) throw new EnvelopeError("TOO_MANY", `At most ${MAX_ENVELOPES} envelopes in a month`);
   return viewAfterWrite(userId, input.month);
 }
@@ -379,7 +407,7 @@ export async function moveBetweenEnvelopes(userId: string, input: EnvelopeMoveIn
   // What the source has already spent: unless overdraw is allowed, assigned must stay above it.
   const floor = input.allowOverdraw ? 0 : ((await spentByCategory(userId, [from], year, monthNo)).get(from) ?? 0);
   const now = new Date();
-  const res = await EnvelopePlan.updateOne(
+  const res = await uncertainOnError(() => EnvelopePlan.updateOne(
     {
       user: userId,
       month,
@@ -394,7 +422,7 @@ export async function moveBetweenEnvelopes(userId: string, input: EnvelopeMoveIn
       $push: { moves: { $each: [{ from, to, amount, at: now }], $slice: -MAX_MOVES } },
     },
     { arrayFilters: [{ "f.category": from }, { "t.category": to }] }
-  );
+  ));
   if (res.matchedCount === 0) {
     const plan = await EnvelopePlan.findOne({ user: userId, month }, { envelopes: 1 }).lean<PlanDoc>();
     const names = new Set((plan?.envelopes ?? []).map((e) => e.category));
@@ -429,9 +457,12 @@ export async function copyEnvelopePlan(userId: string, input: EnvelopeCopyInput)
   }
   await lockBaseCurrency(userId, state);
   await ensurePlan(userId, input.month);
-  const res = await EnvelopePlan.updateOne(
-    { user: userId, month: input.month, "envelopes.0": { $exists: false } },
-    { $set: { income: src.income ?? 0, envelopes: src.envelopes.map((e) => ({ category: e.category, assigned: e.assigned })), updatedAt: new Date() } }
+  const copied = src.envelopes.map((e) => ({ category: e.category, assigned: e.assigned }));
+  const res = await uncertainOnError(() =>
+    EnvelopePlan.updateOne(
+      { user: userId, month: input.month, "envelopes.0": { $exists: false } },
+      { $set: { income: src.income ?? 0, envelopes: copied, updatedAt: new Date() } }
+    )
   );
   if (res.matchedCount === 0) throw new EnvelopeError("PLAN_NOT_EMPTY", `${input.month} already has envelopes`);
   return viewAfterWrite(userId, input.month);

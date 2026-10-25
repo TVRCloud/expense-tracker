@@ -1,7 +1,8 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import apiClient from "@/lib/api-client";
+import apiClient, { isDefiniteRefusal } from "@/lib/api-client";
+import { moveKeys } from "../lib/move-key";
 
 export interface EnvelopeRow {
   category: string;
@@ -25,6 +26,8 @@ export interface EnvelopePlan {
   moves: { from: string; to: string; amount: number; at: string }[];
   previousMonth: string;
   hasPrevious: boolean;
+  /** true only on a write's answer whose plan could not be read back: render nothing from it, the hooks refetch. */
+  partial: boolean;
 }
 
 export function useEnvelopePlan(month: string | undefined) {
@@ -49,11 +52,22 @@ export function useAssignEnvelopes() {
   );
 }
 
-// `key` identifies one attempt: a double submit or a retry of the same attempt moves money once.
+// The Idempotency-Key comes from the move itself (lib/move-key.ts), so every send of the same move is one
+// request to the server. The mutation settles the key, not a per-call callback: it runs to the end even if the
+// page is left, which per-call callbacks do not.
 export function useMoveEnvelopeMoney() {
-  return useEnvelopeMutation((body: { month: string; from: string; to: string; amount: number; allowOverdraw?: boolean; key: string }) => {
-    const { key, ...rest } = body;
-    return apiClient.post("/envelopes/move", rest, { headers: { "Idempotency-Key": key } });
+  return useEnvelopeMutation(async (body: { month: string; from: string; to: string; amount: number; allowOverdraw?: boolean }) => {
+    const spec = { ...body, allowOverdraw: body.allowOverdraw === true };
+    const key = moveKeys.keyFor(spec);
+    try {
+      const res = await apiClient.post("/envelopes/move", body, { headers: { "Idempotency-Key": key } });
+      moveKeys.settle(spec);
+      return res;
+    } catch (err) {
+      // Only a definite refusal settles it; a timeout, a dropped connection, a 5xx or a conflict may have moved the money.
+      if (isDefiniteRefusal(err)) moveKeys.settle(spec);
+      throw err;
+    }
   });
 }
 

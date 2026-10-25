@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { ArrowRightLeft, ChevronLeft, ChevronRight, Copy, Mails, Plus, X } from "lucide-react";
 import { toast } from "sonner";
-import { isDefiniteRefusal } from "@/lib/api-client";
-import { createMoveKeys } from "../lib/move-key";
+import type { ApiRequestError } from "@/lib/api-client";
+import { moveKeys, type MoveSpec } from "../lib/move-key";
 import { formatMinor } from "@/lib/money-format";
 import { getCategoryColor } from "@/lib/category-colors";
 import { Button } from "@/components/ui/button";
@@ -79,44 +79,37 @@ function AllocationBar({ plan }: { plan: EnvelopePlan }) {
   );
 }
 
-function MoveDialog({ plan, from, onClose, keys }: { plan: EnvelopePlan; from: EnvelopeRow | null; onClose: () => void; keys: ReturnType<typeof createMoveKeys> }) {
+function MoveDialog({ plan, from, onClose }: { plan: EnvelopePlan; from: EnvelopeRow | null; onClose: () => void }) {
   const move = useMoveEnvelopeMoney();
   const [to, setTo] = useState("");
   const [text, setText] = useState("");
   const [overdraw, setOverdraw] = useState(false);
-  // See lib/move-key.ts: the key follows the move, not the edits, lives above this dialog (closing and reopening
-  // it finds the same key), and the form is locked while a request is out.
+  // The move that an earlier try left unanswered (a conflict on its key): the person checks the plan, then starts over.
+  const [stuck, setStuck] = useState<MoveSpec | null>(null);
+  // See lib/move-key.ts: the key follows the move (not the edits), is kept in a store above this dialog and settled by
+  // the mutation, and the form is locked while a request is out.
   useEffect(() => {
     setTo("");
     setText("");
     setOverdraw(false);
+    setStuck(null);
   }, [from?.category]);
   if (!from) return null;
   const others = plan.envelopes.filter((e) => e.category !== from.category);
   const minor = toMinor(text, plan.exponent);
-  const moveId = `${plan.month}|${from.category}`;
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!from || !to || !minor || minor < 1 || move.isPending) return;
+    const spec: MoveSpec = { month: plan.month, from: from.category, to, amount: minor, allowOverdraw: overdraw };
+    setStuck(null);
     move.mutate(
+      { month: spec.month, from: spec.from, to, amount: minor, allowOverdraw: overdraw || undefined },
       {
-        month: plan.month,
-        from: from.category,
-        to,
-        amount: minor,
-        allowOverdraw: overdraw || undefined,
-        key: keys.get(moveId).keyFor({ to, amount: minor, allowOverdraw: overdraw }),
-      },
-      {
-        onSuccess: () => {
-          keys.done(moveId);
-          onClose();
-        },
+        onSuccess: onClose,
         onError: (err) => {
-          // Keep the key unless the server refused outright: after a timeout, a dropped
-          // connection, a 5xx or an in-progress conflict the first try may have run.
-          if (isDefiniteRefusal(err)) keys.get(moveId).refused();
+          // A conflict on the key means an earlier try never reported back: it may have gone through.
+          if ((err as ApiRequestError).code === "IDEMPOTENCY_CONFLICT") setStuck(spec);
           toast.error(err.message);
         },
       }
@@ -146,6 +139,22 @@ function MoveDialog({ plan, from, onClose, keys }: { plan: EnvelopePlan; from: E
             <Switch checked={overdraw} onCheckedChange={setOverdraw} disabled={move.isPending} aria-label="Allow taking money that is already spent" />
             Allow taking money that is already spent
           </label>
+          {stuck && (
+            <div className="rounded-(--r-md) p-3 text-sm space-y-2" role="alert" style={{ background: "var(--card)", color: "var(--ink-2)", boxShadow: "var(--shadow-sm)" }}>
+              <p>An earlier try of this move did not report back, so it may already be in the plan. Check the plan, then start over if it is not there.</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  moveKeys.startOver(stuck);
+                  setStuck(null);
+                }}
+              >
+                Start over
+              </Button>
+            </div>
+          )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose} disabled={move.isPending}>Cancel</Button>
             <Button type="submit" disabled={move.isPending || !to || !minor}>Move</Button>
@@ -163,7 +172,6 @@ export function EnvelopesClient() {
   const copy = useCopyEnvelopePlan();
   const setMode = useSetEnvelopeMode();
   const [moving, setMoving] = useState<EnvelopeRow | null>(null);
-  const moveKeys = useRef(createMoveKeys());
   const [name, setName] = useState("");
   const [amount, setAmount] = useState("");
 
@@ -330,7 +338,7 @@ export function EnvelopesClient() {
         </Button>
       </div>
 
-      <MoveDialog plan={plan} from={moving} onClose={() => setMoving(null)} keys={moveKeys.current} />
+      <MoveDialog plan={plan} from={moving} onClose={() => setMoving(null)} />
     </div>
   );
 }

@@ -378,101 +378,196 @@ describe("envelope mode", () => {
     });
   });
 
-  describe("a write that committed but could not read the plan back", () => {
+  describe("a write whose answer or read-back goes wrong after it was applied", () => {
+    // Wraps the one write of a request. `readsFail`: every read of the user after the write fails (the plan cannot be
+    // read back). `throwAfter`: the write is applied, then the call throws (a dropped acknowledgement, a timeout).
+    async function hookWrite(method: "updateOne" | "findOneAndUpdate", opts: { readsFail?: boolean; throwAfter?: boolean }) {
+      const { default: EnvelopePlan } = await import("@/models/EnvelopePlan");
+      const { default: User } = await import("@/models/User");
+      const real = (EnvelopePlan[method] as (...a: unknown[]) => never).bind(EnvelopePlan) as (...a: unknown[]) => any; // eslint-disable-line @typescript-eslint/no-explicit-any
+      const realFind = User.findById.bind(User);
+      let armed = false;
+      const applied = () => {
+        armed = true;
+        if (opts.throwAfter) throw new Error("socket timeout");
+      };
+      const spies = [
+        method === "updateOne"
+          ? vi.spyOn(EnvelopePlan, "updateOne").mockImplementation(((...args: unknown[]) =>
+              real(...args).then((v: unknown) => {
+                // ensurePlan's upsert has only $setOnInsert; the real write has $set
+                if ((args[1] as { $set?: unknown })?.$set !== undefined) applied();
+                return v;
+              })) as never)
+          : vi.spyOn(EnvelopePlan, "findOneAndUpdate").mockImplementation(((...args: unknown[]) => ({
+              lean: async () => {
+                const v = await real(...args).lean();
+                applied();
+                return v;
+              },
+            })) as never),
+      ];
+      if (opts.readsFail) {
+        spies.push(
+          vi.spyOn(User, "findById").mockImplementation(((...args: Parameters<typeof realFind>) => {
+            if (armed) throw new Error("read failed");
+            return realFind(...args);
+          }) as never)
+        );
+      }
+      return () => spies.forEach((x) => x.mockRestore());
+    }
+    const webMove = async (key: string | null, amount = 300) => {
+      const moves = await import("@/app/api/envelopes/move/route");
+      return moves.POST(
+        new NextRequest("http://localhost/api/envelopes/move", {
+          method: "POST",
+          headers: { "content-type": "application/json", ...(key ? { "idempotency-key": key } : {}) },
+          body: JSON.stringify({ month: MONTH, from: "Food", to: "Fun", amount }),
+        })
+      );
+    };
+
     beforeEach(async () => {
       await enable();
       await put(plan(10000, [["Food", 1000], ["Fun", 0]]));
     });
 
-    it("a move answers 200 with a partial view, and a retry under the same key does not move again", async () => {
-      const { default: EnvelopePlan } = await import("@/models/EnvelopePlan");
-      const headers = idem("blip-move");
-      // User.findById is needed before the write, so only fail it after the write: keep the real one until armed
-      const { default: User } = await import("@/models/User");
-      const realFind = User.findById.bind(User);
-      const realUpdate = EnvelopePlan.updateOne.bind(EnvelopePlan);
-      let armed = false;
-      const spies = [
-        vi.spyOn(EnvelopePlan, "updateOne").mockImplementation(((...args: Parameters<typeof realUpdate>) =>
-          realUpdate(...args).then((v: unknown) => {
-            armed = true;
-            return v;
-          })) as never),
-        vi.spyOn(User, "findById").mockImplementation(((...args: Parameters<typeof realFind>) => {
-          if (armed) throw new Error("read failed");
-          return realFind(...args);
-        }) as never),
-      ];
-      const first = await move({ month: MONTH, from: "Food", to: "Fun", amount: 300 }, KEY_A, headers);
-      spies.forEach((x) => x.mockRestore());
-      expect(first.res.status).toBe(200);
-      expect(first.json.data.partial).toBe(true);
-      expect(first.json.data.envelopes).toEqual([]);
-      const retry = await move({ month: MONTH, from: "Food", to: "Fun", amount: 300 }, KEY_A, headers);
-      expect(retry.res.status).toBe(200);
-      expect(retry.json.data.partial).toBe(true); // the stored answer
-      const { json } = await get();
-      expect(row(json, "Fun").assigned).toBe(300);
-      expect(row(json, "Food").assigned).toBe(700);
-      expect(json.data.partial).toBeUndefined();
-      expect(json.data.moves).toHaveLength(1);
+    it("plain answers say partial is false", async () => {
+      expect((await get()).json.data.partial).toBe(false);
+      expect((await move({ month: MONTH, from: "Food", to: "Fun", amount: 100 })).json.data.partial).toBe(false);
     });
 
-    it("the same through the browser route", async () => {
-      sessionUser.current = { id: a, name: "A", email: "a@x.com", role: "user" };
-      const { default: EnvelopePlan } = await import("@/models/EnvelopePlan");
-      const { default: User } = await import("@/models/User");
-      const realFind = User.findById.bind(User);
-      const realUpdate = EnvelopePlan.updateOne.bind(EnvelopePlan);
-      let armed = false;
-      const spies = [
-        vi.spyOn(EnvelopePlan, "updateOne").mockImplementation(((...args: Parameters<typeof realUpdate>) =>
-          realUpdate(...args).then((v: unknown) => {
-            armed = true;
-            return v;
-          })) as never),
-        vi.spyOn(User, "findById").mockImplementation(((...args: Parameters<typeof realFind>) => {
-          if (armed) throw new Error("read failed");
-          return realFind(...args);
-        }) as never),
-      ];
-      const moves = await import("@/app/api/envelopes/move/route");
-      const send = () =>
-        moves.POST(
-          new NextRequest("http://localhost/api/envelopes/move", {
-            method: "POST",
-            headers: { "content-type": "application/json", "idempotency-key": "blip-browser" },
-            body: JSON.stringify({ month: MONTH, from: "Food", to: "Fun", amount: 200 }),
-          })
-        );
-      const first = await send();
-      spies.forEach((x) => x.mockRestore());
-      expect(first.status).toBe(200);
-      expect(((await send()).status)).toBe(200);
-      expect(row((await get()).json, "Fun").assigned).toBe(200);
+    describe("the plan cannot be read back", () => {
+      it("a move answers 200 with a partial view, and a retry under the same key does not move again", async () => {
+        const headers = idem("blip-move");
+        const restore = await hookWrite("updateOne", { readsFail: true });
+        const first = await move({ month: MONTH, from: "Food", to: "Fun", amount: 300 }, KEY_A, headers);
+        restore();
+        expect(first.res.status).toBe(200);
+        expect(first.json.data.partial).toBe(true);
+        expect(first.json.data.envelopes).toEqual([]);
+        const retry = await move({ month: MONTH, from: "Food", to: "Fun", amount: 300 }, KEY_A, headers);
+        expect(retry.res.status).toBe(200);
+        expect(retry.json.data.partial).toBe(true); // the stored answer
+        const { json } = await get();
+        expect(row(json, "Fun").assigned).toBe(300);
+        expect(row(json, "Food").assigned).toBe(700);
+        expect(json.data.partial).toBe(false);
+        expect(json.data.moves).toHaveLength(1);
+      });
+
+      it("the same through the browser route", async () => {
+        sessionUser.current = { id: a, name: "A", email: "a@x.com", role: "user" };
+        const restore = await hookWrite("updateOne", { readsFail: true });
+        const first = await webMove("blip-browser", 200);
+        restore();
+        expect(first.status).toBe(200);
+        expect((((await first.json()) as Json).data as Json).partial).toBe(true);
+        expect((await webMove("blip-browser", 200)).status).toBe(200);
+        expect(row((await get()).json, "Fun").assigned).toBe(200);
+      });
+
+      it("assign and copy answer success with a partial view too", async () => {
+        const restoreAssign = await hookWrite("findOneAndUpdate", { readsFail: true });
+        const assigned = await put({ month: MONTH, assign: [{ category: "Food", assigned: 900 }] });
+        restoreAssign();
+        expect(assigned.res.status).toBe(200);
+        expect(assigned.json.data.partial).toBe(true);
+
+        const restoreCopy = await hookWrite("updateOne", { readsFail: true });
+        const copied = await copy({ month: "2026-12", from: MONTH });
+        restoreCopy();
+        expect(copied.res.status).toBe(200);
+        expect(copied.json.data.partial).toBe(true);
+        expect(row((await get()).json, "Food").assigned).toBe(900);
+        expect(row((await get("2026-12")).json, "Food").assigned).toBe(900);
+      });
     });
 
-    it("assign and copy also answer success when only the read-back fails", async () => {
-      const { default: User } = await import("@/models/User");
-      // Both check the user twice before writing (mode, base) and read it again to build the answer: fail from the third read on.
-      for (const [name, run] of [
-        ["assign", () => put({ month: MONTH, assign: [{ category: "Food", assigned: 900 }] })],
-        ["copy", () => copy({ month: "2026-12", from: MONTH })],
-      ] as const) {
-        const realFind = User.findById.bind(User);
-        let calls = 0;
-        const spy = vi.spyOn(User, "findById").mockImplementation(((...args: Parameters<typeof realFind>) => {
-          calls += 1;
-          if (calls > 2) throw new Error("read failed");
-          return realFind(...args);
+    describe("the write call throws after the server applied it", () => {
+      it("a move keeps its key pending: the retry is refused with a check-the-plan 409 and the money moved once", async () => {
+        const { default: IdempotencyRecord } = await import("@/models/IdempotencyRecord");
+        const headers = idem("lost-ack");
+        const restore = await hookWrite("updateOne", { throwAfter: true });
+        const first = await move({ month: MONTH, from: "Food", to: "Fun", amount: 300 }, KEY_A, headers);
+        restore();
+        expect(first.res.status).toBe(409);
+        expect(first.json.error.code).toBe("IDEMPOTENCY_CONFLICT");
+        expect(first.json.error.details.errorCode).toBe("WRITE_UNCERTAIN");
+        expect(first.json.error.message).toMatch(/check the plan/);
+        expect(await IdempotencyRecord.countDocuments({ userId: a, key: "lost-ack", status: "pending" })).toBe(1);
+        expect(row((await get()).json, "Fun").assigned).toBe(300); // it was applied
+
+        const retry = await move({ month: MONTH, from: "Food", to: "Fun", amount: 300 }, KEY_A, headers);
+        expect(retry.res.status).toBe(409);
+        expect(retry.json.error.message).toMatch(/check the plan/);
+        expect(row((await get()).json, "Fun").assigned).toBe(300); // not again
+
+        // after checking the plan, a new key is a new request
+        expect((await move({ month: MONTH, from: "Food", to: "Fun", amount: 300 }, KEY_A, idem("fresh"))).res.status).toBe(200);
+        expect(row((await get()).json, "Fun").assigned).toBe(600);
+      });
+
+      it("the same through the browser route, and without a key it is a plain 500", async () => {
+        sessionUser.current = { id: a, name: "A", email: "a@x.com", role: "user" };
+        let restore = await hookWrite("updateOne", { throwAfter: true });
+        const first = await webMove("lost-ack-web");
+        restore();
+        expect(first.status).toBe(409);
+        const body = (await first.json()) as Json;
+        expect(body.code).toBe("IDEMPOTENCY_CONFLICT");
+        expect(body.error).toMatch(/check the plan/);
+        expect((await webMove("lost-ack-web")).status).toBe(409);
+        expect(row((await get()).json, "Fun").assigned).toBe(300);
+
+        restore = await hookWrite("updateOne", { throwAfter: true });
+        expect((await webMove(null, 100)).status).toBe(500);
+        restore();
+      });
+
+      it("assign and copy keep their keys pending as well", async () => {
+        const { default: IdempotencyRecord } = await import("@/models/IdempotencyRecord");
+        let restore = await hookWrite("findOneAndUpdate", { throwAfter: true });
+        const assigned = await put({ month: MONTH, assign: [{ category: "Food", assigned: 900 }] }, KEY_A, idem("lost-assign"));
+        restore();
+        expect(assigned.res.status).toBe(409);
+        expect(await IdempotencyRecord.countDocuments({ userId: a, key: "lost-assign", status: "pending" })).toBe(1);
+        expect((await put({ month: MONTH, assign: [{ category: "Food", assigned: 900 }] }, KEY_A, idem("lost-assign"))).res.status).toBe(409);
+
+        restore = await hookWrite("updateOne", { throwAfter: true });
+        const { POST } = await import("@/app/api/integrations/envelopes/copy/route");
+        const copied = await POST(req("envelopes/copy", "POST", { month: "2026-12", from: MONTH }, KEY_A, idem("lost-copy")), {});
+        restore();
+        expect(copied.status).toBe(409);
+        expect(await IdempotencyRecord.countDocuments({ userId: a, key: "lost-copy", status: "pending" })).toBe(1);
+      });
+
+      it("a failure proven to happen before the write drops the pending record, so a retry under the key runs", async () => {
+        const { default: IdempotencyRecord } = await import("@/models/IdempotencyRecord");
+        const { default: EnvelopePlan } = await import("@/models/EnvelopePlan");
+        const headers = idem("before-write");
+        const body = { month: "2026-12", assign: [{ category: "Food", assigned: 900 }] };
+        // the month's document is created before the real write (ensurePlan); make that step fail once
+        const spy = vi.spyOn(EnvelopePlan, "updateOne").mockImplementationOnce((() => {
+          throw new Error("connection refused");
         }) as never);
-        const r = await run();
+        const failed = await put(body, KEY_A, headers);
         spy.mockRestore();
-        expect(r.res.status, name).toBe(200);
-        expect(r.json.data.partial, name).toBe(true);
-      }
-      expect(row((await get()).json, "Food").assigned).toBe(900);
-      expect(row((await get("2026-12")).json, "Food").assigned).toBe(900);
+        expect(failed.res.status).toBe(500);
+        expect(await IdempotencyRecord.countDocuments({ userId: a, key: "before-write" })).toBe(0);
+        expect(await EnvelopePlan.countDocuments({ user: a, month: "2026-12" })).toBe(0);
+        const retry = await put(body, KEY_A, headers);
+        expect(retry.res.status).toBe(200);
+        expect(row(retry.json, "Food").assigned).toBe(900);
+      });
+
+      it("an envelope refusal is stored as the answer, not left pending", async () => {
+        const { default: IdempotencyRecord } = await import("@/models/IdempotencyRecord");
+        const refused = await move({ month: MONTH, from: "Food", to: "Nope", amount: 1 }, KEY_A, idem("refused-first"));
+        expect(refused.res.status).toBe(404);
+        expect(await IdempotencyRecord.countDocuments({ userId: a, key: "refused-first", status: "completed" })).toBe(1);
+      });
     });
   });
 
