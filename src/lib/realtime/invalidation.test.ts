@@ -32,6 +32,9 @@ describe("INVALIDATION_MAP", () => {
   it("anomaly alerts refresh the alerts list and the inbox", () => {
     expect(INVALIDATION_MAP.anomalies).toEqual([["anomalies"], ["notifications"]]);
   });
+  it("holdings refresh their list and net worth", () => {
+    expect(INVALIDATION_MAP.holdings).toEqual([["holdings"], ["net-worth"]]);
+  });
   it("spending refreshes the tax summary", () => {
     expect(INVALIDATION_MAP.transactions.map((k) => k[0])).toContain("tax");
   });

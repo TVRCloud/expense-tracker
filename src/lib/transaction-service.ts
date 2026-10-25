@@ -143,6 +143,9 @@ export type TransactionProvenance = {
   sourceCapture?: string;
   captures?: string[];
   reviewStatus?: "unreviewed" | "confirmed" | null;
+  // Household editor who added the row to a shared account (single rows only). The owner's round-up
+  // into a goal is skipped for such a row; budget and spend limit alerts still run.
+  addedBy?: string;
 };
 
 export type CreateTransactionInput = z.infer<typeof transactionCreateSchema> & {
@@ -424,9 +427,11 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
         runInBackground("anomalies", () => detectAnomalies(userId, line, { splitLine: true }));
       }
       void checkSpendLimitAlert(userId);
-      void applyRoundUp(userId, rest.amount, actor).catch((err) =>
-        logger.error({ err, userId }, "applyRoundUp failed")
-      );
+      if (!provenance?.addedBy) {
+        void applyRoundUp(userId, rest.amount, actor).catch((err) =>
+          logger.error({ err, userId }, "applyRoundUp failed")
+        );
+      }
     }
 
     logger.info({ userId, splitGroupId: splitGroupId.toString(), count: docs.length }, "Split transaction created");
@@ -547,9 +552,12 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     // schema refine guarantees category is set for any non-split expense
     void checkBudgetAlert(userId, rest.category as string, rest.amount, startDate);
     void checkSpendLimitAlert(userId);
-    void applyRoundUp(userId, rest.amount, actor).catch((err) =>
-      logger.error({ err, userId }, "applyRoundUp failed")
-    );
+    // A row a household editor added is not the owner's own spending: no round-up into their goal.
+    if (!provenance?.addedBy) {
+      void applyRoundUp(userId, rest.amount, actor).catch((err) =>
+        logger.error({ err, userId }, "applyRoundUp failed")
+      );
+    }
     // Unusual-spend alerts (src/lib/anomaly-service.ts). A scheduled bill is not a surprise; never throws.
     if (!rest.isRecurring) runInBackground("anomalies", () => detectAnomalies(userId, transaction));
   }

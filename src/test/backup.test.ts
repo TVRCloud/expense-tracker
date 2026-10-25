@@ -75,9 +75,9 @@ describe("encrypted backup and restore", () => {
   // A small but complete set of data for one user.
   async function seed(userId: string) {
     const M = async (name: string) => (await import(`@/models/${name}`)).default;
-    const [Account, Transaction, Budget, Goal, Loan, Repayment, Rule, SinkingFund, ManualAsset, SubscriptionDecision, SpendLimit] =
+    const [Account, Transaction, Budget, Goal, Loan, Repayment, Rule, SinkingFund, ManualAsset, SubscriptionDecision, SpendLimit, Holding] =
       await Promise.all(
-        ["Account", "Transaction", "Budget", "Goal", "Loan", "Repayment", "Rule", "SinkingFund", "ManualAsset", "SubscriptionDecision", "SpendLimit"].map(M)
+        ["Account", "Transaction", "Budget", "Goal", "Loan", "Repayment", "Rule", "SinkingFund", "ManualAsset", "SubscriptionDecision", "SpendLimit", "Holding"].map(M)
       );
     const bank = await Account.create({ user: userId, name: "HDFC", type: "bank", balance: 90000 });
     const card = await Account.create({
@@ -137,12 +137,22 @@ describe("encrypted backup and restore", () => {
     await SinkingFund.create({ user: userId, name: "Insurance", targetAmount: 120000, dueDate: new Date("2026-12-15T00:00:00Z") });
     await ManualAsset.create({ user: userId, name: "Flat", kind: "property", value: 5000000 });
     await SubscriptionDecision.create({ user: userId, key: "netflix|monthly", merchant: "Netflix", status: "confirmed" });
+    await Holding.create({
+      user: userId, name: "Nifty fund", kind: "mutual_fund", unitsMicro: 12_500_000, investedAmount: 100000, currentValue: 125000,
+      valueUpdatedAt: new Date("2026-03-01T00:00:00Z"), history: [{ value: 100000, at: new Date("2026-01-01T00:00:00Z") }, { value: 125000, at: new Date("2026-03-01T00:00:00Z") }],
+      sip: { amount: 5000, dayOfMonth: 31, startDay: "2026-01-31", active: true },
+    });
+    await Holding.create({
+      user: userId, name: "Bank FD", kind: "fixed_deposit", investedAmount: 10000000, currentValue: 10000000,
+      fd: { principal: 10000000, rateBps: 725, startDay: "2026-01-01", maturityDay: "2027-01-01" },
+    });
+    await Holding.create({ user: userId, name: "Sold", kind: "stock", investedAmount: 5, currentValue: 5, isArchived: true });
     await SpendLimit.create({ user: userId, dailyAmount: 50000, weeklyAmount: 200000, limitHistory: [{ from: new Date("2026-03-01T00:00:00Z"), dailyAmount: 50000 }] });
     return { bank: bank._id.toString(), card: card._id.toString() };
   }
 
   async function wipe(userId: string) {
-    const names = ["Account", "Transaction", "Budget", "Goal", "Loan", "Repayment", "Rule", "SinkingFund", "ManualAsset", "SubscriptionDecision", "SpendLimit"];
+    const names = ["Account", "Transaction", "Budget", "Goal", "Loan", "Repayment", "Rule", "SinkingFund", "ManualAsset", "SubscriptionDecision", "SpendLimit", "Holding"];
     for (const name of names) await (await import(`@/models/${name}`)).default.deleteMany({ user: userId });
   }
 
@@ -161,6 +171,7 @@ describe("encrypted backup and restore", () => {
       rules: 1,
       sinkingFunds: 1,
       manualAssets: 1,
+      holdings: 2,
       subscriptionDecisions: 1,
       spendLimit: 1,
     });
@@ -414,7 +425,7 @@ describe("encrypted backup and restore", () => {
     });
 
     it("refuses a newer payload version and a different app", async () => {
-      const newer = await craft({}, { version: 3 });
+      const newer = await craft({}, { version: 4 });
       const r = await restore({ passphrase: PASS, backup: newer });
       expect(r.status).toBe(400);
       expect((await r.json()).error.message).toContain("newer version");
@@ -1328,6 +1339,115 @@ describe("encrypted backup and restore", () => {
       const { data } = await (await exportBackup()).json();
       expect(data.omitted).toEqual({ transactions: 1 });
       expect(data.warnings.join(" ")).toContain("1 receipt is not included");
+    });
+
+    describe("holdings (investments)", () => {
+      it("are exported (not the archived ones) and round-trip with their SIP, deposit terms and history", async () => {
+        await seed(a);
+        const { default: Holding } = await import("@/models/Holding");
+        const before = await Holding.find({ user: a, isArchived: { $ne: true } }).sort({ name: 1 }).lean<Record<string, unknown>[]>();
+        const { data } = await (await exportBackup()).json();
+        expect(data.counts.holdings).toBe(2);
+        expect(data.omitted).toEqual({});
+        await wipe(a);
+        const res = await restore({ passphrase: PASS, backup: data.backup });
+        expect(res.status).toBe(200);
+        expect((await res.json()).data.counts.holdings).toEqual({ inBackup: 2, toCreate: 2, existing: 0 });
+        const after = await Holding.find({ user: a }).sort({ name: 1 }).lean<Record<string, unknown>[]>();
+        expect(after).toHaveLength(2); // the archived one was not in the file
+        const pick = (h: Record<string, unknown>) => [String(h._id), h.name, h.kind, h.unitsMicro, h.investedAmount, h.currentValue, h.sip, h.fd, h.history];
+        expect(after.map(pick)).toEqual(before.map(pick));
+      });
+
+      it("a holding the person removed (archived) is skipped, not brought back, and the report says so", async () => {
+        await seed(a);
+        const { default: Holding } = await import("@/models/Holding");
+        const { data } = await (await exportBackup()).json();
+        await Holding.updateOne({ user: a, name: "Bank FD" }, { $set: { isArchived: true } });
+        const res = await restore({ passphrase: PASS, backup: data.backup });
+        expect(res.status).toBe(200);
+        const report = (await res.json()).data;
+        expect(report.counts.holdings).toEqual({ inBackup: 2, toCreate: 0, existing: 2 });
+        // the other one is the seed's deleted account
+        expect(report.warnings.join(" ")).toContain("2 rows in the backup already exist in your trash");
+        expect(await Holding.countDocuments({ user: a, isArchived: { $ne: true } })).toBe(1);
+      });
+
+      it("restore into another person: fresh ids, theirs alone, and a re-run adds nothing", async () => {
+        await seed(a);
+        const { default: Holding } = await import("@/models/Holding");
+        const { data } = await (await exportBackup()).json();
+        expect((await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B })).status).toBe(200);
+        const mine = await Holding.find({ user: b }).lean();
+        expect(mine).toHaveLength(2);
+        const theirs = await Holding.find({ user: a, isArchived: { $ne: true } }).lean();
+        expect(mine.map((h) => String(h._id))).not.toEqual(expect.arrayContaining(theirs.map((h) => String(h._id))));
+        const again = await restore({ passphrase: PASS, backup: data.backup }, { key: KEY_B });
+        expect((await again.json()).data.counts.holdings).toEqual({ inBackup: 2, toCreate: 0, existing: 2 });
+        expect(await Holding.countDocuments({ user: b })).toBe(2);
+        expect(await Holding.countDocuments({ user: a })).toBe(3); // the owner's rows are untouched
+      });
+
+      it("a file from before holdings existed still restores, with no holdings", async () => {
+        const file = await craftFile({ version: 2, baseCurrency: "INR" }, { accounts: [{ id: oidHex(), name: "A", type: "bank", balance: 1 }] });
+        const res = await restore({ passphrase: PASS, backup: file });
+        expect(res.status).toBe(200);
+        expect((await res.json()).data.counts.holdings).toEqual({ inBackup: 0, toCreate: 0, existing: 0 });
+      });
+
+      it("checks a holding's own rules: kind, terms, dates and amounts", async () => {
+        const hold = (over: Record<string, unknown>) => ({
+          id: oidHex(), name: "H", kind: "stock", investedAmount: 100, currentValue: 120, ...over,
+        });
+        const fd = { principal: 1000, rateBps: 700, startDay: "2026-01-01", maturityDay: "2027-01-01" };
+        const status = async (h: Record<string, unknown>) => {
+          const { parsePayload, restoreBackup } = await import("@/lib/backup-service");
+          try {
+            const payload = parsePayload({
+              app: "expense-tracker", version: 3, createdAt: new Date().toISOString(), baseCurrency: "INR", data: { holdings: [h] },
+            });
+            await restoreBackup(a, payload, { dryRun: true });
+            return 200;
+          } catch {
+            return 400;
+          }
+        };
+        expect(await status(hold({}))).toBe(200);
+        expect(await status(hold({ kind: "fixed_deposit", fd }))).toBe(200);
+        expect(await status(hold({ sip: { amount: 5, dayOfMonth: 31, startDay: "2026-01-31" }, unitsMicro: 1_000_000 }))).toBe(200);
+        expect(await status(hold({ kind: "crypto" }))).toBe(400);
+        expect(await status(hold({ kind: "fixed_deposit" }))).toBe(400); // no terms
+        expect(await status(hold({ fd }))).toBe(400); // terms on a stock
+        expect(await status(hold({ kind: "fixed_deposit", fd, sip: { amount: 5, dayOfMonth: 5, startDay: "2026-01-05" } }))).toBe(400);
+        expect(await status(hold({ kind: "fixed_deposit", fd: { ...fd, maturityDay: "2026-01-01" } }))).toBe(400);
+        expect(await status(hold({ kind: "fixed_deposit", fd: { ...fd, maturityDay: "2026-02-30" } }))).toBe(400);
+        expect(await status(hold({ kind: "fixed_deposit", fd: { ...fd, maturityDay: "2075-12-20" } }))).toBe(200); // exactly 50 * 365 days
+        expect(await status(hold({ kind: "fixed_deposit", fd: { ...fd, maturityDay: "2075-12-21" } }))).toBe(400); // a day past
+        expect(await status(hold({ kind: "fixed_deposit", fd: { ...fd, principal: 1e12, rateBps: 10_000, maturityDay: "2075-12-20" } }))).toBe(400); // worth more than an amount at maturity
+        expect(await status(hold({ isArchived: true }))).toBe(400);
+        expect(await status(hold({ isArchived: false }))).toBe(200);
+        expect(await status(hold({ kind: "fixed_deposit", fd: { ...fd, startDay: "tomorrow" } }))).toBe(400);
+        expect(await status(hold({ kind: "fixed_deposit", fd: { ...fd, rateBps: 10_001 } }))).toBe(400);
+        expect(await status(hold({ investedAmount: 1e13 + 1 }))).toBe(400);
+        expect(await status(hold({ currentValue: -1 }))).toBe(400);
+        expect(await status(hold({ unitsMicro: 1e15 + 1 }))).toBe(400);
+        expect(await status(hold({ sip: { amount: 5, dayOfMonth: 0, startDay: "2026-01-05" } }))).toBe(400);
+        expect(await status(hold({ history: Array.from({ length: 101 }, () => ({ value: 1, at: new Date().toISOString() })) }))).toBe(400);
+        expect(await status(hold({ name: "" }))).toBe(400);
+      });
+
+      it("a restore that would take a person past 500 holdings is refused, and writes nothing", async () => {
+        const { default: Holding } = await import("@/models/Holding");
+        await Holding.insertMany(Array.from({ length: 499 }, (_, i) => ({ user: a, name: `H${i}`, kind: "other", investedAmount: 1, currentValue: 1 })));
+        const mk = () => ({ id: oidHex(), name: "New", kind: "other", investedAmount: 1, currentValue: 1 });
+        const file = await craftFile({ version: 3, baseCurrency: "INR" }, { holdings: [mk(), mk()] });
+        const dry = await restore({ passphrase: PASS, backup: file });
+        expect(dry.status).toBe(400);
+        expect(await Holding.countDocuments({ user: a })).toBe(499);
+        const one = await craftFile({ version: 3, baseCurrency: "INR" }, { holdings: [mk()] });
+        expect((await restore({ passphrase: PASS, backup: one })).status).toBe(200);
+        expect(await Holding.countDocuments({ user: a })).toBe(500);
+      });
     });
 
     describe("a base that is not two decimal", () => {

@@ -1155,8 +1155,8 @@ describe("home read paths", () => {
       { ...base, type: "expense", amount: 200, category: "food", date: day(5), description: "c" },
       // Future-dated: hidden.
       { ...base, type: "expense", amount: 999, category: "food", date: day(-3), description: "future" },
-      // Paid installment due long ago but paid yesterday: listed by paidAt.
-      { ...base, type: "expense", amount: 300, category: "emi", date: day(40), description: "emi-paid", recurringId: rid, installmentIndex: 1, installmentStatus: "paid", paidAt: day(0) },
+      // Paid installment due long ago but paid an hour ago (not noon today, which is still in the future before noon): listed by paidAt.
+      { ...base, type: "expense", amount: 300, category: "emi", date: day(40), description: "emi-paid", recurringId: rid, installmentIndex: 1, installmentStatus: "paid", paidAt: new Date(now.getTime() - 60 * 60 * 1000) },
       // Paid installment without paidAt: listed by its date.
       { ...base, type: "expense", amount: 310, category: "emi", date: day(2), description: "emi-nopaidat", recurringId: rid, installmentIndex: 2, installmentStatus: "paid" },
       // Unpaid installment: hidden.
