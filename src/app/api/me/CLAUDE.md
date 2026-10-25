@@ -15,7 +15,7 @@ Purpose: the signed-in user's profile, password, preferences, export and API key
 ## Rules and gotchas
 - Minting a key needs the password again, is rate limited, returns the raw key once with `Cache-Control: no-store`, and keys are never deleted (revoked and expired stay listed).
 - `DELETE /api/me`: reuses `isActive`, rewrites email to a tombstone, ends all sessions, withdraws and deletes the user's bank link consents first (`deleteAaDataForUser`); a consent that cannot be withdrawn keeps its record and the delete answers 409.
-- `PATCH /api/me/preferences` `currency` is the base currency: it must be a supported code and goes through `setBaseCurrency`, so it is refused (400, `code` `UNSUPPORTED_BASE_CURRENCY` for a currency without two decimals, `HAS_MONEY_DATA` once the user has transactions, balances, budgets, goals, loans, funds, assets or a spend limit). Saving the unchanged currency still works, and the other preference fields save as before.
+- `PATCH /api/me/preferences` `currency` is the base currency: it must be a supported code and goes through `setBaseCurrency`, so it is refused (400, `code` `UNSUPPORTED_BASE_CURRENCY` for a currency without two decimals, `HAS_MONEY_DATA` once the user has transactions, balances, budgets, goals, loans, funds, assets, holdings, envelope plans or a spend limit). Saving the unchanged currency still works, and the other preference fields save as before.
 - Password change and delete clear cached sessions (`forgetUserSessions`) so they apply at once.
 - Docs: [docs/n8n-integration.md](../../../../docs/n8n-integration.md).
 
