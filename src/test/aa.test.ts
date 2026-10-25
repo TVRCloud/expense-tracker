@@ -983,6 +983,87 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
       expect(await Transaction.countDocuments({ user: a })).toBe(0);
     });
 
+    it("a claim that keeps vanishing ends as not claimed after a few attempts", async () => {
+      const { consentId, consent } = await linked();
+      const { Account } = await models();
+      const other = await Account.create({ user: a, name: "Other", type: "bank", balance: 0 });
+      const Claim = (await import("@/models/AaAccountClaim")).default as mongoose.Model<Json>;
+      const create = vi.spyOn(Claim, "create").mockRejectedValue(Object.assign(new Error("dup"), { code: 11000 }) as never);
+      const find = vi.spyOn(Claim, "findOne").mockReturnValue({ lean: async () => null } as never);
+      try {
+        const axis = consent.linkedAccounts.find((l: Json) => l.bankName === "Axis Bank");
+        const res = await mapRoute(consentId, axis.id, String(other._id));
+        expect(res.status).toBe(409);
+        expect(create).toHaveBeenCalledTimes(5);
+      } finally {
+        create.mockRestore();
+        find.mockRestore();
+      }
+    });
+
+    it("an account archived between the read and the write rolls the create back (source and transfer destination)", async () => {
+      const { bank } = await linked();
+      const { Account, Transaction } = await models();
+      const cash = await Account.create({ user: a, name: "Cash", type: "cash", balance: 2000 });
+      const { createTransaction } = await import("@/lib/transaction-service");
+      const base = { userId: a, actor: actor(), date: new Date().toISOString(), tags: [], isRecurring: false };
+      const orig = Transaction.create.bind(Transaction);
+      const archiveThen = (accountId: unknown) =>
+        vi.spyOn(Transaction, "create").mockImplementationOnce((async (...args: unknown[]) => {
+          await Account.updateOne({ _id: accountId }, { $set: { isArchived: true } });
+          return (orig as (...a: unknown[]) => unknown)(...args);
+        }) as never);
+
+      // The source account is archived inside the window.
+      let spy = archiveThen(bank._id);
+      await expect(createTransaction({ ...base, accountId: String(bank._id), type: "expense", amount: 700, category: "food" } as never)).rejects.toMatchObject({ code: "ACCOUNT_NOT_FOUND" });
+      spy.mockRestore();
+      expect(await Transaction.countDocuments({ user: a })).toBe(0);
+      expect((await Account.findById(bank._id).lean<Json>())?.balance).toBe(100000);
+      await Account.updateOne({ _id: bank._id }, { $set: { isArchived: false } });
+
+      // The transfer destination is archived inside the window.
+      spy = archiveThen(cash._id);
+      await expect(
+        createTransaction({ ...base, accountId: String(bank._id), transferToId: String(cash._id), type: "transfer", amount: 900, category: "Transfer" } as never)
+      ).rejects.toMatchObject({ code: "TRANSFER_ACCOUNT_NOT_FOUND" });
+      spy.mockRestore();
+      expect(await Transaction.countDocuments({ user: a })).toBe(0);
+      expect((await Account.findById(bank._id).lean<Json>())?.balance).toBe(100000);
+      expect((await Account.findById(cash._id).lean<Json>())?.balance).toBe(2000);
+    });
+
+    it("a recurring series is still created when a ledger block fails after the commit", async () => {
+      const { bank } = await linked();
+      const { Transaction } = await models();
+      const { createTransaction } = await import("@/lib/transaction-service");
+      const LedgerBlock = (await import("@/models/LedgerBlock")).default as mongoose.Model<Json>;
+      const spy = vi.spyOn(LedgerBlock, "create").mockRejectedValue(new Error("ledger down") as never);
+      try {
+        const out = await createTransaction({
+          userId: a, actor: actor(), accountId: String(bank._id), type: "expense", amount: 300, category: "bills", date: new Date().toISOString(), tags: [],
+          isRecurring: true, recurrenceFrequency: "monthly", recurrenceCount: 3,
+        } as never);
+        expect(out.kind).toBe("series");
+      } finally {
+        spy.mockRestore();
+      }
+      expect(await Transaction.countDocuments({ user: a, isRecurring: true })).toBe(3);
+    });
+
+    it("purging a deleted user's leftover consents removes the records and logs the lookup key only", async () => {
+      await linked();
+      const { purgeAaRecordsOfDeletedUser } = await import("@/lib/aa-service");
+      const { AaConsent } = await models();
+      const errSpy = vi.spyOn((await import("@/lib/logger")).default, "error");
+      expect(await purgeAaRecordsOfDeletedUser(a)).toBe(1);
+      const call = errSpy.mock.calls.find((c) => /deleted account/.test(String(c[1])));
+      errSpy.mockRestore();
+      expect(await AaConsent.countDocuments({ user: a })).toBe(0);
+      expect(call?.[0]).toMatchObject({ provider: "sandbox", correlationId: expect.stringMatching(/^[0-9a-f]{32}$/) });
+      expect(JSON.stringify(call?.[0])).not.toContain(a);
+    });
+
     it("a failed split create leaves no rows and no balance move", async () => {
       const { bank } = await linked();
       const { Account, Transaction } = await models();

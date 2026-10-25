@@ -316,14 +316,14 @@ async function resolveAmount(
  * Ledger blocks for a create are written after its database transaction commits (the ledger is a per-person hash
  * chain whose appends retry on a sequence clash, which cannot be done inside a database transaction). By then the
  * row and the balance are committed, so a ledger failure must not turn the create into an error: the caller would
- * retry and book the payment twice. It is logged instead, and the chain can be repaired by the ledger backfill.
+ * retry and book the payment twice. It is logged instead; the gap is not repaired automatically.
  */
 async function appendLedgerAfterCommit(input: Parameters<typeof appendLedgerBlock>[0]) {
   try {
     await appendLedgerBlock(input);
   } catch (err) {
     logger.error(
-      { err: err instanceof Error ? err.name : "unknown", userId: input.userId, scope: input.scope, entityId: input.entityId, action: input.action },
+      { err: err instanceof Error ? err.name : "unknown", scope: input.scope, entityId: input.entityId },
       "ledger block not written after a committed create"
     );
   }
@@ -356,7 +356,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     throw new TransactionServiceError("ACCOUNT_NOT_FOUND", "Account not found");
   }
   if (transferToId) {
-    const transferAccount = await Account.findOne({ _id: transferToId, user: userId, isArchived: false });
+    const transferAccount = await Account.findOne({ _id: transferToId, user: userId, isArchived: { $ne: true } });
     if (!transferAccount) {
       throw new TransactionServiceError("TRANSFER_ACCOUNT_NOT_FOUND", "Transfer account not found");
     }
@@ -520,7 +520,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
 
     const inserted = await Transaction.insertMany(docs);
     for (const transaction of inserted) {
-      await appendLedgerBlock({
+      await appendLedgerAfterCommit({
         userId,
         scope: "transaction",
         entityId: transaction._id.toString(),

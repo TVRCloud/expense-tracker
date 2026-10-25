@@ -171,6 +171,7 @@ const codeOf = (err: unknown) => (err instanceof AaProviderError ? err.code : er
 // user + account) is the atomic guard: it is taken before a mapping is written and released when the mapping goes.
 
 const CLAIM_GRACE_MS = 60_000;
+const CLAIM_ATTEMPTS = 5;
 const isDuplicateKey = (err: unknown) => typeof err === "object" && err !== null && (err as { code?: number }).code === 11000;
 
 async function claimHolds(userId: string, claim: { consent: Types.ObjectId; linkedId: Types.ObjectId }, accountId: string): Promise<boolean> {
@@ -183,25 +184,29 @@ async function claimHolds(userId: string, claim: { consent: Types.ObjectId; link
   return Boolean(holder);
 }
 
-/** Takes the account for this linked account. False when another live link already feeds it. */
-/** "new" when this call took the claim, "existing" when this linked account already held it, false when another holds it. */
+/** "new" when this call took the claim, "existing" when this linked account already held it, false when another holds it (or it could not be settled). */
 async function claimAccount(userId: string, accountId: string, consentId: Types.ObjectId, linkedId: Types.ObjectId): Promise<"new" | "existing" | false> {
   const mine = { user: userId, account: new Types.ObjectId(accountId), consent: consentId, linkedId };
-  try {
-    await AaAccountClaim.create(mine);
-    return "new";
-  } catch (err) {
-    if (!isDuplicateKey(err)) throw err;
+  // A few attempts: the holder can vanish between the failed insert and the read (then insert again). Bounded, so
+  // a claim that keeps vanishing (or a read that keeps missing it) ends as "not claimed" instead of looping.
+  for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt += 1) {
+    try {
+      await AaAccountClaim.create(mine);
+      return "new";
+    } catch (err) {
+      if (!isDuplicateKey(err)) throw err;
+    }
+    const held = await AaAccountClaim.findOne({ user: userId, account: mine.account }).lean<{ _id: Types.ObjectId; consent: Types.ObjectId; linkedId: Types.ObjectId; updatedAt: Date } | null>();
+    if (!held) continue;
+    if (held.consent.equals(consentId) && held.linkedId.equals(linkedId)) return "existing";
+    // A claim is taken just before its mapping is written, so a young one counts even before the mapping shows.
+    if (Date.now() - new Date(held.updatedAt).getTime() < CLAIM_GRACE_MS) return false;
+    if (await claimHolds(userId, held, accountId)) return false;
+    // Stale (its consent ended or no longer maps here): take it over, but only if nobody else did first.
+    const taken = await AaAccountClaim.findOneAndUpdate({ _id: held._id, consent: held.consent, linkedId: held.linkedId }, { $set: { consent: consentId, linkedId } });
+    return taken ? "new" : false;
   }
-  const held = await AaAccountClaim.findOne({ user: userId, account: mine.account }).lean<{ _id: Types.ObjectId; consent: Types.ObjectId; linkedId: Types.ObjectId; updatedAt: Date } | null>();
-  if (!held) return claimAccount(userId, accountId, consentId, linkedId);
-  if (held.consent.equals(consentId) && held.linkedId.equals(linkedId)) return "existing";
-  // A claim is taken just before its mapping is written, so a young one counts even before the mapping shows.
-  if (Date.now() - new Date(held.updatedAt).getTime() < CLAIM_GRACE_MS) return false;
-  if (await claimHolds(userId, held, accountId)) return false;
-  // Stale (its consent ended or no longer maps here): take it over, but only if nobody else did first.
-  const taken = await AaAccountClaim.findOneAndUpdate({ _id: held._id, consent: held.consent, linkedId: held.linkedId }, { $set: { consent: consentId, linkedId } });
-  return taken ? "new" : false;
+  return false;
 }
 
 async function releaseClaim(userId: string, accountId: string | Types.ObjectId, consentId: Types.ObjectId, linkedId?: Types.ObjectId) {
@@ -716,4 +721,20 @@ export async function deleteAaDataForUser(userId: string): Promise<{ remaining: 
   await AaAccountClaim.deleteMany({ user: userId, consent: { $in: done } });
   if (remaining) logger.warn({ remaining }, "aa: consents kept because they could not be withdrawn");
   return { remaining };
+}
+
+/**
+ * After the account is deleted: whatever bank link records could not be withdrawn are removed, so encrypted handles
+ * do not sit under a deleted person. Each is logged (consent id, provider, correlation id) so the grant can be
+ * found and withdrawn at the provider by hand.
+ */
+export async function purgeAaRecordsOfDeletedUser(userId: string): Promise<number> {
+  await connectDB();
+  const left = await AaConsent.find({ user: userId }).select("_id provider").lean<{ _id: Types.ObjectId; provider: string }[]>();
+  for (const c of left) {
+    logger.error({ consentId: c._id.toString(), provider: c.provider, correlationId: providerUserRef(userId) }, "aa: consent removed with a deleted account without being withdrawn; it may still be live at the provider");
+  }
+  await AaConsent.deleteMany({ user: userId });
+  await AaAccountClaim.deleteMany({ user: userId });
+  return left.length;
 }

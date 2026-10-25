@@ -8,7 +8,7 @@ import { z } from "zod";
 import { forgetUserSessions } from "@/lib/perf/session-cache";
 import { forgetUserKeys } from "@/lib/integrations/auth";
 import { deleteAllReceiptsOfUser } from "@/lib/receipt-service";
-import { deleteAaDataForUser } from "@/lib/aa-service";
+import { deleteAaDataForUser, purgeAaRecordsOfDeletedUser } from "@/lib/aa-service";
 import { revokeAllSharesOfUser } from "@/lib/share-service";
 
 const updateSchema = z.object({
@@ -107,10 +107,11 @@ export async function DELETE() {
     } catch {
       await deleteAllReceiptsOfUser(user.id).catch((err) => logger.error({ err, userId: user.id }, "final receipt purge failed"));
     }
-    // Same for a bank link added by a request that was already running: it cannot stop the deletion now, so it is logged.
+    // Same for a bank link added by a request that was already running. The account is gone by now, so whatever
+    // still could not be withdrawn is logged (for withdrawing by hand) and its record removed.
     await deleteAaDataForUser(user.id)
-      .then((r) => {
-        if (r.remaining > 0) logger.error({ userId: user.id, remaining: r.remaining }, "bank links left after account deletion");
+      .then(async (r) => {
+        if (r.remaining > 0) await purgeAaRecordsOfDeletedUser(user.id);
       })
       .catch((err) => logger.error({ err: err instanceof Error ? err.name : "unknown", userId: user.id }, "final bank link purge failed"));
 
