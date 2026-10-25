@@ -516,7 +516,8 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
       });
     }
 
-    if (rest.type === "transfer" && transferToId) {
+    // A transfer written as history leaves both sides alone, as the source side does.
+    if (rest.type === "transfer" && transferToId && !skipBalance) {
       const transferAccountBefore = await Account.findOne({ _id: transferToId, user: userId });
       const transferAccount = await Account.findOneAndUpdate(
         { _id: transferToId, user: userId },

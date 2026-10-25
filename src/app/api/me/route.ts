@@ -69,10 +69,7 @@ export async function DELETE() {
     await connectDB();
     const existing = await User.findById(user.id).select("email").lean<{ email: string }>();
     if (!existing) return NextResponse.json({ error: "User not found" }, { status: 404 });
-    // Private receipt images go for good. First, while the account is still active: if this
-    // fails the request fails and nothing is locked, so it can simply be tried again.
-    await deleteAllReceiptsOfUser(user.id);
-    // Bank links: withdrawn at the provider (best effort) and the records removed, so nothing keeps reading the account.
+    // Bank links: withdrawn at the provider first, before anything is deleted for good (a link that cannot be withdrawn stops the deletion here), so nothing keeps reading the account.
     const aa = await deleteAaDataForUser(user.id);
     if (aa.remaining > 0) {
       return NextResponse.json(
@@ -80,6 +77,9 @@ export async function DELETE() {
         { status: 409 }
       );
     }
+    // Private receipt images go for good. First, while the account is still active: if this
+    // fails the request fails and nothing is locked, so it can simply be tried again.
+    await deleteAllReceiptsOfUser(user.id);
     // Tombstone the email so the same address can register a fresh account.
     await User.findByIdAndUpdate(user.id, {
       $set: {

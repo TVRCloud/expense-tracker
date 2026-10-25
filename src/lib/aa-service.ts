@@ -184,23 +184,24 @@ async function claimHolds(userId: string, claim: { consent: Types.ObjectId; link
 }
 
 /** Takes the account for this linked account. False when another live link already feeds it. */
-async function claimAccount(userId: string, accountId: string, consentId: Types.ObjectId, linkedId: Types.ObjectId): Promise<boolean> {
+/** "new" when this call took the claim, "existing" when this linked account already held it, false when another holds it. */
+async function claimAccount(userId: string, accountId: string, consentId: Types.ObjectId, linkedId: Types.ObjectId): Promise<"new" | "existing" | false> {
   const mine = { user: userId, account: new Types.ObjectId(accountId), consent: consentId, linkedId };
   try {
     await AaAccountClaim.create(mine);
-    return true;
+    return "new";
   } catch (err) {
     if (!isDuplicateKey(err)) throw err;
   }
   const held = await AaAccountClaim.findOne({ user: userId, account: mine.account }).lean<{ _id: Types.ObjectId; consent: Types.ObjectId; linkedId: Types.ObjectId; updatedAt: Date } | null>();
   if (!held) return claimAccount(userId, accountId, consentId, linkedId);
-  if (held.consent.equals(consentId) && held.linkedId.equals(linkedId)) return true;
+  if (held.consent.equals(consentId) && held.linkedId.equals(linkedId)) return "existing";
   // A claim is taken just before its mapping is written, so a young one counts even before the mapping shows.
   if (Date.now() - new Date(held.updatedAt).getTime() < CLAIM_GRACE_MS) return false;
   if (await claimHolds(userId, held, accountId)) return false;
   // Stale (its consent ended or no longer maps here): take it over, but only if nobody else did first.
   const taken = await AaAccountClaim.findOneAndUpdate({ _id: held._id, consent: held.consent, linkedId: held.linkedId }, { $set: { consent: consentId, linkedId } });
-  return Boolean(taken);
+  return taken ? "new" : false;
 }
 
 async function releaseClaim(userId: string, accountId: string | Types.ObjectId, consentId: Types.ObjectId, linkedId?: Types.ObjectId) {
@@ -356,13 +357,15 @@ export async function mapLinkedAccount(userId: string, id: string, linkedId: str
   if (!linked) throw new AaServiceError("NOT_FOUND", "Linked account not found");
   const previous = linked.mappedAccount ? linked.mappedAccount.toString() : null;
   if (accountId === previous) return consentView(c);
+  let claim: "new" | "existing" | false = false;
   if (accountId) {
     if (!Types.ObjectId.isValid(accountId)) throw new AaServiceError("VALIDATION", "Account is invalid");
     const mine = await Account.exists({ _id: accountId, user: userId, isArchived: { $ne: true } });
     if (!mine) throw new AaServiceError("NOT_FOUND", "Account not found");
     // One of your accounts is fed by one live bank link: two feeds into one would book each payment twice. The
     // claim is atomic, so requests at once (even on different consents) cannot both win.
-    if (!(await claimAccount(userId, accountId, c._id, linked._id))) {
+    claim = await claimAccount(userId, accountId, c._id, linked._id);
+    if (!claim) {
       throw new AaServiceError("INVALID_STATE", "That account is already fed by another linked account");
     }
   }
@@ -371,8 +374,8 @@ export async function mapLinkedAccount(userId: string, id: string, linkedId: str
     { $set: { "linkedAccounts.$.mappedAccount": accountId ? new Types.ObjectId(accountId) : null } }
   );
   if (!res.matchedCount) {
-    // The mapping changed under this request: undo the claim it took and let the caller retry.
-    if (accountId) await releaseClaim(userId, accountId, c._id, linked._id);
+    // The mapping changed under this request: undo the claim this call took (never one it only found) and let the caller retry.
+    if (accountId && claim === "new") await releaseClaim(userId, accountId, c._id, linked._id);
     throw new AaServiceError("INVALID_STATE", "This linked account was changed by another request. Try again.");
   }
   if (previous) await releaseClaim(userId, previous, c._id, linked._id);
@@ -519,8 +522,17 @@ export async function syncConsent(c: ConsentDoc, now = new Date()): Promise<AaSy
             result.fetched += 1;
             // Every entry moves the resume point, a skipped one too (as long as its date is plausible): a long run
             // of invalid or foreign rows must not stall the link by using up the budget at the same place.
-            const rawAt = raw && typeof raw === "object" ? (raw as { at?: unknown }).at : undefined;
-            if (rawAt instanceof Date && !Number.isNaN(rawAt.getTime()) && rawAt.getTime() <= now.getTime() + MAX_FUTURE_MS && (!newest || rawAt.getTime() > newest.getTime())) {
+            // Only entries of this linked account with a date in range count: another account's rows must not move it.
+            const rawObj = raw && typeof raw === "object" ? (raw as { at?: unknown; accountRef?: unknown }) : undefined;
+            const rawAt = rawObj?.at;
+            if (
+              rawObj?.accountRef === l.providerRef &&
+              rawAt instanceof Date &&
+              !Number.isNaN(rawAt.getTime()) &&
+              rawAt.getTime() <= now.getTime() + MAX_FUTURE_MS &&
+              rawAt.getTime() >= from.getTime() - MAX_FUTURE_MS &&
+              (!newest || rawAt.getTime() > newest.getTime())
+            ) {
               newest = rawAt;
             }
             const parsed = transactionSchema.safeParse(raw);

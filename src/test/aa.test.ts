@@ -913,6 +913,19 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
       expect(await balance()).toBe(100000);
     });
 
+    it("a transfer written as history leaves both accounts alone", async () => {
+      const { bank } = await linked();
+      const { Account } = await models();
+      const cash = await Account.create({ user: a, name: "Cash", type: "cash", balance: 2000 });
+      const { createTransaction } = await import("@/lib/transaction-service");
+      await createTransaction({
+        userId: a, actor: actor(), accountId: String(bank._id), transferToId: String(cash._id), type: "transfer", amount: 3000, category: "Transfer",
+        date: new Date().toISOString(), tags: [], isRecurring: false, skipBalance: true, provenance: { source: "aa", historical: true },
+      } as never);
+      expect((await Account.findById(bank._id).lean<Json>())?.balance).toBe(100000);
+      expect((await Account.findById(cash._id).lean<Json>())?.balance).toBe(2000);
+    });
+
     it("a failed create leaves the balance alone and a retry applies it once", async () => {
       const { bank } = await linked();
       const { Account, Transaction } = await models();
