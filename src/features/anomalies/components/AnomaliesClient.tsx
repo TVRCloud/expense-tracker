@@ -82,7 +82,7 @@ function AlertRow({ item, onMute }: { item: Anomaly; onMute: (category: string) 
               <Check /> This was me
             </Button>
             {item.transactionId && (
-              <Button size="sm" variant="outline" onClick={() => act("report", "Reported and tagged")}>
+              <Button size="sm" variant="outline" onClick={() => act("report", "Reported")}>
                 <Flag /> Report
               </Button>
             )}

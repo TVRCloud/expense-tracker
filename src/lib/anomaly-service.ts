@@ -7,6 +7,8 @@ import Notification from "@/models/Notification";
 import Transaction from "@/models/Transaction";
 import User from "@/models/User";
 import { sendPushToUser } from "@/lib/push";
+import { setUserTag } from "@/lib/transaction-service";
+import type { AuthUser } from "@/lib/auth-guard";
 import { getBaseCurrency } from "@/lib/base-currency";
 import { formatMinor } from "@/lib/money-format";
 import { activityDateAddFields } from "@/lib/transaction-activity";
@@ -51,7 +53,6 @@ const STATUS_FOR_ACTION: Record<ResolveAction, AnomalyStatus> = {
 
 /** The tag `report` puts on the expense. No colon, so it is an ordinary user tag the person can remove. */
 export const REPORTED_TAG = "anomaly-reported";
-const MAX_TAGS = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Scheduled rows (not paid yet) never count as spending; same rule as budgets and stats.
 const NOT_SCHEDULED = { $nor: [{ recurringId: { $exists: true }, installmentStatus: { $nin: ["paid"] } }] };
@@ -111,17 +112,25 @@ async function raise(userId: string, a: NewAnomaly): Promise<boolean> {
     if ((err as { code?: number }).code === 11000) return false;
     throw err;
   }
-  // Created before the push, so a retry after a crash cannot send it twice.
-  await Notification.create({
-    user: userId,
-    type: "system",
-    title: a.title,
-    body: a.body,
-    meta: { kind: "anomaly", anomalyKind: a.kind, anomalyId, transactionId: a.transaction ?? null },
-  });
-  void sendPushToUser(userId, { title: a.title, body: a.body, url: "/alerts" }).catch((err) =>
-    logger.error({ err }, "anomaly push failed")
-  );
+  // Created before the push, so a retry after a crash cannot send it twice. When it fails the alert is
+  // removed again: left behind, its dedupKey would make every retry stop at "already alerted" and the
+  // notification would never exist.
+  try {
+    await Notification.create({
+      user: userId,
+      type: "system",
+      title: a.title,
+      body: a.body,
+      meta: { kind: "anomaly", anomalyKind: a.kind, anomalyId, transactionId: a.transaction ?? null },
+    });
+  } catch (err) {
+    await Anomaly.deleteOne({ _id: anomalyId, user: userId }).catch((delErr) =>
+      logger.error({ err: delErr, userId, anomalyId }, "could not remove an alert whose notification failed")
+    );
+    throw err;
+  }
+  // Awaited (it never throws): this runs inside after() on Vercel, which may freeze once the task settles.
+  await sendPushToUser(userId, { title: a.title, body: a.body, url: "/alerts" });
   return true;
 }
 
@@ -170,7 +179,8 @@ async function checkDuplicate(userId: string, t: CheckedTransaction, currency: s
     ...NOT_SCHEDULED,
   })
     .select("amount date description")
-    .limit(5)
+    .sort({ date: -1 })
+    .limit(50)
     .lean<Array<{ _id: { toString(): string }; amount: number; date: Date; description?: string }>>();
   const other = duplicateOf(
     { id: t._id.toString(), amount: t.amount, date: t.date, description: t.description },
@@ -186,7 +196,8 @@ async function checkDuplicate(userId: string, t: CheckedTransaction, currency: s
     amount: t.amount,
     data: { otherTransaction: other.id, windowMinutes: DUPLICATE_CHARGE.windowMinutes },
     title: "Possible duplicate charge",
-    body: `${formatMinor(t.amount, currency)} was charged twice within ${DUPLICATE_CHARGE.windowMinutes} minutes${t.description ? ` (${t.description})` : ""}.`,
+    // No merchant text: the notification and the push show on a lock screen.
+    body: `${formatMinor(t.amount, currency)} on ${t.category} was charged twice within ${DUPLICATE_CHARGE.windowMinutes} minutes.`,
   });
 }
 
@@ -289,13 +300,18 @@ export async function detectAnomalies(
   }
 }
 
-/** Open alerts about a transaction go quiet once it is deleted or voided. Never throws. */
+/** Open alerts about a transaction (or the other half of a duplicate pair) go quiet once it is deleted or voided. Never throws. */
 export async function retireAnomaliesForTransactions(userId: string, transactionIds: string[]): Promise<void> {
   if (transactionIds.length === 0) return;
   try {
     await connectDB();
     await Anomaly.updateMany(
-      { user: userId, transaction: { $in: transactionIds }, status: "open" },
+      // An alert is also about the other row of a duplicate pair: with it gone there is no pair.
+      {
+        user: userId,
+        status: "open",
+        $or: [{ transaction: { $in: transactionIds } }, { "data.otherTransaction": { $in: transactionIds } }],
+      },
       { $set: { status: "dismissed", resolvedAt: new Date() } }
     );
   } catch (err) {
@@ -373,28 +389,41 @@ export async function listAnomalies(
 }
 
 /**
- * Answers an alert. "report" also tags the expense (when it has room for one more tag); nothing
- * else happens automatically. Returns null when the alert is not this user's.
+ * Answers an alert; the last answer wins. "report" tags the expense `anomaly-reported` and any other
+ * answer after a report takes the tag off again, both through setUserTag (ledgered, refused for a row
+ * linked to a loan repayment or statement payment, within the tag cap). The alert is answered even
+ * when the tag cannot be written; `tagged` says whether the expense carries the tag afterwards.
+ * Nothing else happens automatically. Returns null when the alert is not this user's.
  */
-export async function resolveAnomaly(userId: string, id: string, action: ResolveAction): Promise<AnomalyView | null> {
+export async function resolveAnomaly(
+  userId: string,
+  id: string,
+  action: ResolveAction,
+  actor: AuthUser
+): Promise<(AnomalyView & { tagged: boolean }) | null> {
   await connectDB();
-  const doc = await Anomaly.findOneAndUpdate(
+  const resolvedAt = new Date();
+  const status = STATUS_FOR_ACTION[action];
+  const before = await Anomaly.findOneAndUpdate(
     { _id: id, user: userId },
-    { $set: { status: STATUS_FOR_ACTION[action], resolvedAt: new Date() } },
-    { new: true }
+    { $set: { status, resolvedAt } },
+    { new: false }
   ).lean<AnomalyDoc>();
-  if (!doc) return null;
-  if (action === "report" && doc.transaction) {
-    await Transaction.updateOne(
-      {
-        _id: doc.transaction,
-        user: userId,
-        isDeleted: { $ne: true },
-        tags: { $ne: REPORTED_TAG },
-        [`tags.${MAX_TAGS - 1}`]: { $exists: false },
-      },
-      { $addToSet: { tags: REPORTED_TAG } }
-    );
+  if (!before) return null;
+  let tagged = false;
+  if (before.transaction && (action === "report" || before.status === "reported")) {
+    try {
+      const outcome = await setUserTag(
+        userId,
+        before.transaction.toString(),
+        REPORTED_TAG,
+        action === "report" ? "add" : "remove",
+        actor
+      );
+      tagged = action === "report" && (outcome === "changed" || outcome === "unchanged");
+    } catch (err) {
+      logger.error({ err, userId, anomalyId: id }, "tagging a reported expense failed");
+    }
   }
-  return view(doc, await getBaseCurrency(userId));
+  return { ...view({ ...before, status, resolvedAt }, await getBaseCurrency(userId)), tagged };
 }

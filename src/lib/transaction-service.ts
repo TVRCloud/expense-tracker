@@ -416,8 +416,13 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
       for (const s of splits) {
         void checkBudgetAlert(userId, s.category, s.amount, startDate);
       }
-      // One line of a split is not a purchase: only the category jump is checked, once per category.
-      for (const line of inserted) runInBackground("anomalies", () => detectAnomalies(userId, line, { splitLine: true }));
+      // One line of a split is not a purchase: only the category jump is checked, once per distinct category.
+      const seenCategories = new Set<string>();
+      for (const line of inserted) {
+        if (seenCategories.has(line.category)) continue;
+        seenCategories.add(line.category);
+        runInBackground("anomalies", () => detectAnomalies(userId, line, { splitLine: true }));
+      }
       void checkSpendLimitAlert(userId);
       void applyRoundUp(userId, rest.amount, actor).catch((err) =>
         logger.error({ err, userId }, "applyRoundUp failed")
@@ -603,6 +608,45 @@ export async function updateTransaction(input: UpdateTransactionInput) {
   if (rest.date) await invalidateStatsCacheSingle(userId, new Date(rest.date));
 
   return transaction;
+}
+
+export type UserTagOutcome = "changed" | "unchanged" | "blocked" | "full" | "not_found";
+
+/**
+ * Adds or removes ONE user tag on a live row, the way an edit would: refused for a row linked to a
+ * credit statement payment or a loan repayment ("blocked"), kept within the tag cap ("full"), and
+ * written to the ledger. Atomic ($addToSet and $pull with the cap in the filter), so it cannot undo a
+ * concurrent edit of the other tags. Used by anomaly alerts to tag a reported expense.
+ */
+export async function setUserTag(
+  userId: string,
+  transactionId: string,
+  tag: string,
+  mode: "add" | "remove",
+  actor: AuthUser
+): Promise<UserTagOutcome> {
+  await connectDB();
+  const before = await Transaction.findOne({ _id: transactionId, user: userId, isDeleted: { $ne: true } }).lean<{
+    date: Date;
+    tags?: unknown[];
+  }>();
+  if (!before) return "not_found";
+  if (await getLinkedTransactionBlocker(userId, transactionId, before.tags)) return "blocked";
+  const has = (before.tags ?? []).includes(tag);
+  if (mode === "add" && has) return "unchanged";
+  if (mode === "remove" && !has) return "unchanged";
+  if (mode === "add" && (before.tags ?? []).length >= MAX_TAGS) return "full";
+
+  const after = await Transaction.findOneAndUpdate(
+    mode === "add"
+      ? { _id: transactionId, user: userId, isDeleted: { $ne: true }, tags: { $ne: tag }, [`tags.${MAX_TAGS - 1}`]: { $exists: false } }
+      : { _id: transactionId, user: userId, isDeleted: { $ne: true }, tags: tag },
+    mode === "add" ? { $addToSet: { tags: tag } } : { $pull: { tags: tag } },
+    { new: true }
+  ).lean();
+  if (!after) return "unchanged"; // changed under us: nothing for this call to do
+  await appendLedgerBlock({ userId, scope: "transaction", entityId: transactionId, action: "update", before, after, actor });
+  return "changed";
 }
 
 // Shared with DELETE /api/transactions/[id] (browser) and the integration

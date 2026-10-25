@@ -16,7 +16,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Params }) {
     const body = await req.json().catch(() => null);
     const parsed = resolveAnomalySchema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "Send status as this_was_me, report or dismiss" }, { status: 400 });
-    const result = await resolveAnomaly(user.id, id, parsed.data.status);
+    const result = await resolveAnomaly(user.id, id, parsed.data.status, user);
     if (!result) return NextResponse.json({ error: "Alert not found" }, { status: 404 });
     return NextResponse.json({ data: result });
   } catch (err) {

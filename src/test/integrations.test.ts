@@ -10477,6 +10477,11 @@ describe("anomaly alerts", () => {
       expect(await detect(await (await import("@/models/Transaction")).default.findById(first!._id).then((x) => x!))).toBe(0);
       expect(await alerts()).toHaveLength(1);
       expect(a.data.windowMinutes).toBe(10);
+      // the notification (and so the lock-screen push) carries no merchant text
+      const { default: Notification } = await import("@/models/Notification");
+      const n = await Notification.findOne({ user: userId }).lean<{ body: string }>();
+      expect(n!.body).toContain("Shopping");
+      expect(n!.body).not.toContain("Cafe");
     });
     it("does not fire at 11 minutes, for another amount, account, description, or under the floor", async () => {
       await add(49900, "2026-10-14T06:00:00Z", { description: "Cafe" });
@@ -10625,6 +10630,25 @@ describe("anomaly alerts", () => {
       await vi.waitFor(() => expect(spy).toHaveBeenCalled(), { timeout: 5000 });
       spy.mockRestore();
     });
+    it("a notification that cannot be created leaves no alert behind, so a retry still alerts", async () => {
+      const { default: Notification } = await import("@/models/Notification");
+      await history(6, 50000);
+      const big = await add(150000, "2026-10-14T06:00:00Z");
+      const spy = vi.spyOn(Notification, "create").mockRejectedValueOnce(new Error("db down"));
+      expect(await detect(big)).toBe(0);
+      expect(await alerts()).toHaveLength(0);
+      spy.mockRestore();
+      expect(await detect(big)).toBe(1);
+      expect(await Notification.countDocuments({ user: userId })).toBe(1);
+    });
+    it("deleting one half of a duplicate pair retires the open alert on the other", async () => {
+      const { deleteTransaction } = await import("@/lib/transaction-service");
+      const first = await add(49900, "2026-10-14T06:00:00Z");
+      const second = await add(49900, "2026-10-14T06:05:00Z");
+      expect(await detect(second)).toBe(1);
+      await deleteTransaction(userId, first._id.toString(), { id: userId, name: "Anom", email: "a@x.com", role: "user" });
+      expect((await alerts())[0]!.status).toBe("dismissed");
+    });
     it("deleting or voiding the expense quietly retires its open alert", async () => {
       const { deleteTransaction } = await import("@/lib/transaction-service");
       await history(6, 50000);
@@ -10699,12 +10723,44 @@ describe("anomaly alerts", () => {
       await patch(id, { status: "report" }, "a3"); // reporting again adds no second tag
       expect((await Transaction.findById(big._id).lean<{ tags: string[] }>())!.tags).toEqual(["trip", "anomaly-reported"]);
     });
+    it("report writes a ledger block, a later answer takes the tag off, and a second report puts it back", async () => {
+      const { big, id } = await seedOpen();
+      const { default: Transaction } = await import("@/models/Transaction");
+      const { default: LedgerBlock } = await import("@/models/LedgerBlock");
+      const rep = await patch(id, { status: "report" }, "r1");
+      expect((await rep.json()).data).toMatchObject({ status: "reported", tagged: true });
+      const blocks = await LedgerBlock.find({ user: userId, scope: "transaction", entityId: big._id.toString(), action: "update" }).lean<Array<{ before: any; after: any }>>(); // eslint-disable-line @typescript-eslint/no-explicit-any
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0]!.before.tags).toEqual(["trip"]);
+      expect(blocks[0]!.after.tags).toEqual(["trip", "anomaly-reported"]);
+      // the tag follows the last answer
+      const dis = await patch(id, { status: "dismiss" }, "r2");
+      expect((await dis.json()).data).toMatchObject({ status: "dismissed", tagged: false });
+      expect((await Transaction.findById(big._id).lean<{ tags: string[] }>())!.tags).toEqual(["trip"]);
+      expect(await LedgerBlock.countDocuments({ user: userId, scope: "transaction", entityId: big._id.toString(), action: "update" })).toBe(2);
+      await patch(id, { status: "report" }, "r3");
+      expect((await Transaction.findById(big._id).lean<{ tags: string[] }>())!.tags).toEqual(["trip", "anomaly-reported"]);
+      // answering "this was me" after a report also clears it
+      await patch(id, { status: "this_was_me" }, "r4");
+      expect((await Transaction.findById(big._id).lean<{ tags: string[] }>())!.tags).toEqual(["trip"]);
+    });
+    it("a row linked to a loan repayment refuses the tag, but the alert still answers", async () => {
+      const { big, id } = await seedOpen();
+      const { default: Transaction } = await import("@/models/Transaction");
+      const { default: LedgerBlock } = await import("@/models/LedgerBlock");
+      await Transaction.updateOne({ _id: big._id }, { $set: { tags: ["trip", "repayment:abc"] } });
+      const rep = await patch(id, { status: "report" });
+      expect(rep.status).toBe(200);
+      expect((await rep.json()).data).toMatchObject({ status: "reported", tagged: false });
+      expect((await Transaction.findById(big._id).lean<{ tags: string[] }>())!.tags).toEqual(["trip", "repayment:abc"]);
+      expect(await LedgerBlock.countDocuments({ user: userId, scope: "transaction", entityId: big._id.toString(), action: "update" })).toBe(0);
+    });
     it("report on an expense with no room for a tag still reports", async () => {
       const { big, id } = await seedOpen();
       const { default: Transaction } = await import("@/models/Transaction");
       await Transaction.updateOne({ _id: big._id }, { $set: { tags: Array.from({ length: 10 }, (_v, i) => `t${i}`) } });
       const rep = await patch(id, { status: "report" });
-      expect((await rep.json()).data.status).toBe("reported");
+      expect((await rep.json()).data).toMatchObject({ status: "reported", tagged: false });
       expect((await Transaction.findById(big._id).lean<{ tags: string[] }>())!.tags).toHaveLength(10);
     });
     it("another person's alert is a 404, bad input is a 400, a missing key is a 400, a replay answers the same", async () => {

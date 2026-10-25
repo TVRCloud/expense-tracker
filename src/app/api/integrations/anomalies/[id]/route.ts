@@ -9,8 +9,9 @@ import { resolveAnomaly, resolveAnomalySchema } from "@/lib/anomaly-service";
 type Params = Promise<{ id: string }>;
 
 // PATCH /api/integrations/anomalies/:id — { status: "this_was_me" | "report" | "dismiss" }.
-// "report" also tags the expense `anomaly-reported` (when it has room for a tag);
-// nothing else happens automatically. 404 for another user's alert.
+// "report" also tags the expense `anomaly-reported` (not on a row linked to a loan repayment
+// or card payment, nor when it has no room for a tag; `tagged` says which), and a later answer
+// takes the tag off again. Nothing else happens automatically. 404 for another user's alert.
 export const PATCH = withIntegrationRoute("anomalies", async ({ req, user, requestId }, ctx: { params: Params }) => {
   const { id } = await ctx.params;
   if (!Types.ObjectId.isValid(id)) return integrationError("VALIDATION_ERROR", "Invalid alert id", requestId);
@@ -29,7 +30,7 @@ export const PATCH = withIntegrationRoute("anomalies", async ({ req, user, reque
     key: idempotencyKey,
     body: { id, ...parsed.data },
     execute: async () => {
-      const result = await resolveAnomaly(user.id, id, parsed.data.status);
+      const result = await resolveAnomaly(user.id, id, parsed.data.status, user);
       return result
         ? { status: 200, body: result as unknown as Record<string, unknown> }
         : { status: 404, body: { errorCode: "NOT_FOUND", message: "Alert not found" } };

@@ -4,9 +4,11 @@ import User from "@/models/User";
 import { categoryKey, normaliseCategories } from "@/lib/tax-settings";
 
 // Per-user anomaly alert settings on `preferences.anomalies`: a global switch
-// (on until the person turns it off) and the categories they muted. Names are
-// kept trimmed and lower-case and compared with `categoryKey`, the one way a
-// category name is compared across the app.
+// (on until the person turns it off) and the categories they muted. Muted names
+// are kept trimmed and lower-case and compared with `categoryKey`, so muting
+// "dining" also mutes "Dining". The rules themselves read spending by the
+// category exactly as it is stored (anomaly-service.ts), so "Dining" and
+// "dining" are separate histories there.
 
 export const MAX_MUTED_CATEGORIES = 50;
 export const MAX_CATEGORY_LENGTH = 40;

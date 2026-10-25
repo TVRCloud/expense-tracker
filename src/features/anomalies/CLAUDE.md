@@ -2,7 +2,7 @@
 Purpose: unusual-spend alerts on the web: the list with a way to answer each one (this was me, report, dismiss), a mute for the category, and the switch for the whole feature.
 
 ## Files
-- components/AnomaliesClient.tsx: `/alerts` page: the settings card (switch, muted category chips, a field to mute another), a Waiting / All tab, and one row per alert with a plain sentence built from the numbers the rule kept (`describe`), and the answer buttons. Report only shows for alerts about an expense.
+- components/AnomaliesClient.tsx: `/alerts` page: the settings card (switch, muted category chips, a field to mute another), a Waiting / All tab, and one row per alert with a plain sentence built from the numbers the rule kept (`describe`), and the answer buttons. Report only shows for alerts about an expense; it tags the expense `anomaly-reported` and any later answer removes the tag (the answer's `tagged` says whether it is on, and a loan or card payment row refuses it).
 - hooks/useAnomalies.ts: `useAnomalies(status)` (key `["anomalies", status]`), `useAnomalySettings()` (`["anomalies", "settings"]`), `useAnswerAnomaly()`, `useChangeAnomalySettings()` (sends `{enabled}`, `{add}` or `{remove}`, refetches on settle).
 
 ## Talks to
@@ -10,6 +10,7 @@ Purpose: unusual-spend alerts on the web: the list with a way to answer each one
 - Libs: src/lib/anomaly-rules.ts, anomaly-service.ts, anomaly-settings.ts. Model: Anomaly; settings on `User.preferences.anomalies`.
 
 ## Rules and gotchas
+- Alerts are on by default for every account; the switch is the first card on the page.
 - Alerts are created on the server when an expense is created, never from this page. The rules, thresholds and what is not checked are in [docs/api-contracts.md](../../../docs/api-contracts.md#anomaly-alerts).
 - Amounts are minor units of the base currency, shown with `formatMinor` and the alert's own `currency`.
 - Muting sends one name (`add`), not the whole list, so two changes cannot overwrite each other.
