@@ -594,7 +594,8 @@ export async function syncConsent(c: ConsentDoc, now = new Date()): Promise<AaSy
     for (const u of linkedUpdates) {
       await AaConsent.updateOne({ _id: c._id, "linkedAccounts._id": u.id }, { $set: { "linkedAccounts.$.syncedUntil": u.syncedUntil, "linkedAccounts.$.syncedPartial": u.partial } });
     }
-    await AaConsent.updateOne({ _id: c._id }, { $set: { lastSyncAt: now, lastError: result.error ?? null } });
+    // Only while still active: a revoke that landed during the run keeps its own marker (revoke_not_confirmed).
+    await AaConsent.updateOne({ _id: c._id, status: "active" }, { $set: { lastSyncAt: now, lastError: result.error ?? null } });
     return result;
   } finally {
     syncing.delete(key);

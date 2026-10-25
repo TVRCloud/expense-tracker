@@ -412,10 +412,12 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
         // Atomic $inc (not read-modify-write + save) so concurrent captures on
         // the same account can't overwrite each other's balance change.
         accountAfter = await Account.findOneAndUpdate(
-          { _id: account._id, user: userId },
+          { _id: account._id, user: userId, isArchived: { $ne: true } },
           { $inc: { balance: -rest.amount } },
           { new: true, session }
         );
+        // Archived since it was read: roll everything back rather than move a balance nobody can see.
+        if (!accountAfter) throw new TransactionServiceError("ACCOUNT_NOT_FOUND", "Account not found");
       }
       inserted = await Transaction.insertMany(docs, { session });
     });
@@ -539,7 +541,8 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     transaction = created;
     if (!skipBalance) {
       const balanceDelta = rest.type === "income" ? rest.amount : -rest.amount;
-      accountAfter = await Account.findOneAndUpdate({ _id: account._id, user: userId }, { $inc: { balance: balanceDelta } }, { new: true, session });
+      accountAfter = await Account.findOneAndUpdate({ _id: account._id, user: userId, isArchived: { $ne: true } }, { $inc: { balance: balanceDelta } }, { new: true, session });
+      if (!accountAfter) throw new TransactionServiceError("ACCOUNT_NOT_FOUND", "Account not found");
     }
     // A transfer written as history leaves both sides alone, as the source side does.
     if (rest.type === "transfer" && transferToId && !skipBalance) {
