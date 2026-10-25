@@ -27,7 +27,7 @@ Purpose: server business logic shared by browser routes, integration routes, ser
 - capture/ (ingest, parsers, source priority, account matching), reconcile/ (correct, inbox, http): [docs/reconcile.md](../../docs/reconcile.md).
 - capture/ingest.ts: an ATM withdrawal parse (`atm: true` from `parseCapture`) with a live cash account is created as a transfer to cash, not an expense; `handleMatch` never rewrites that transfer from a later message.
 - integrations/ (API-key auth, handler, idempotency, rate-limit, response, sms-parser), app-update.ts: [docs/n8n-integration.md](../../docs/n8n-integration.md).
-- realtime/ (changes, sse, invalidation, changed-since): resources: transactions, accounts, budgets, goals, loans, notifications, captures, repayments, statements, spendLimits, subscriptions, sinkingFunds, netWorth, envelopes, holdings, anomalies; a new one goes in `RESOURCES`, `MODELS` and `INVALIDATION_MAP`, see [docs/realtime.md](../../docs/realtime.md).
+- realtime/ (changes, sse, invalidation, changed-since): resources: transactions, accounts, budgets, goals, loans, notifications, captures, repayments, statements, spendLimits, subscriptions, sinkingFunds, netWorth, envelopes, holdings, anomalies, aa; a new one goes in `RESOURCES`, `MODELS` and `INVALIDATION_MAP`, see [docs/realtime.md](../../docs/realtime.md).
 - perf/: ttl-cache, session-cache, background (`runInBackground`).
 - Client or UI helpers: api-client.ts, query-client.ts, utils.ts (cents formatting), icons.tsx, category-colors.ts, route-titles.ts, csv.ts (`toCsv` writes real JS numbers, and plain decimals like `-5.00` in the columns the caller names in `numericColumns`, unquoted; every other string is text and is defanged when it starts `= + - @ ' tab CR`; `csvResponse` and the integrations export start the file with `CSV_BOM`, the UTF-8 byte order mark Excel needs; `parseCsv` strips it), regex.ts.
 
@@ -56,7 +56,7 @@ Purpose: server business logic shared by browser routes, integration routes, ser
 - integrations/sms-parser.ts (`parseBankSms`) has no importer in src, scripts or server.ts; ingest uses `parseCapture` from capture/parsers.
 
 ## Tests
-- `src/test/integrations.test.ts`, `src/lib/currency.test.ts`, `src/lib/realtime/*.test.ts`, `src/lib/subscription-detector.test.ts`, `src/lib/forecast-math.test.ts`, `src/lib/card-rewards.test.ts`, `src/lib/weekly-review.test.ts`, `src/lib/tax-year.test.ts`, `src/test/envelopes.test.ts`, `src/lib/money-format.test.ts`, `src/lib/anomaly-rules.test.ts`, `src/test/backup.test.ts`, `src/test/household.test.ts`.
+- `src/test/integrations.test.ts`, `src/test/aa.test.ts`, `src/lib/currency.test.ts`, `src/lib/realtime/*.test.ts`, `src/lib/subscription-detector.test.ts`, `src/lib/forecast-math.test.ts`, `src/lib/card-rewards.test.ts`, `src/lib/weekly-review.test.ts`, `src/lib/tax-year.test.ts`, `src/test/envelopes.test.ts`, `src/lib/money-format.test.ts`, `src/lib/anomaly-rules.test.ts`, `src/test/backup.test.ts`, `src/test/household.test.ts`.
 
 ## Last changed
 - e19229d feat(realtime): live updates for every screen and an app event channel
