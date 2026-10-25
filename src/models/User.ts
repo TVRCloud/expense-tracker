@@ -43,6 +43,11 @@ const UserSchema = new Schema(
       tax: {
         deductibleCategories: [{ type: String }],
       },
+      // Envelope mode (src/lib/envelope-service.ts): zero-based budgeting on top
+      // of budgets, off until the user turns it on.
+      envelopes: {
+        enabled: { type: Boolean, default: false },
+      },
       // Anomaly alerts (src/lib/anomaly-service.ts): on unless the person turns
       // them off; lower-case category names they muted.
       anomalies: {

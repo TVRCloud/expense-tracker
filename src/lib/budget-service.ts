@@ -71,6 +71,19 @@ async function spendByCategoryMonth(
   return out;
 }
 
+/**
+ * What was spent in each of these categories in one month, with the same
+ * rules and month boundaries as the budgets (split lines count under their own
+ * category, voided and deleted rows and unpaid instalments are left out,
+ * confirmed refunds come off). Envelope mode reads its `spent` from here.
+ */
+export async function spentByCategory(userId: string, categories: string[], year: number, month: number) {
+  await connectDB();
+  const unique = [...new Set(categories)];
+  const raw = await spendByCategoryMonth(new Types.ObjectId(userId), unique, [{ year, month }]);
+  return new Map(unique.map((c) => [c, raw.get(`${year}-${month}:${c}`) ?? 0]));
+}
+
 export async function listBudgetsWithSpend(userId: string, year: number, month: number) {
   await connectDB();
   const userObjectId = new Types.ObjectId(userId);
