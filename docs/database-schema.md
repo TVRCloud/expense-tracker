@@ -96,7 +96,6 @@ Indexes: `{user, isArchived, createdAt}`, `{user, type}`, `{user, smsLastFour}`,
 | `reviewedAt` / `reviewedBy` | Date / ObjectId | |
 | `addedBy` | ObjectId | ref: User, the household editor who added the row to a shared account (unset otherwise) |
 | `deductible` | Boolean | Tax helper override on an expense: `true` or `false` wins over the user's deductible categories, unset follows them |
-| `balanceApplied` | Boolean | `false` on a row written without moving the account balance (CSV import with adjust balance off, bank link entry older than the link): delete, void and correct never move the balance for it. Absent on every other row |
 | `balanceApplied` | Boolean | `false` on a row written without moving the account balance (CSV import with adjust balance off, bank link entry older than the link): delete, void and correct never move the balance for it. Absent on every other row; kept in backups |
 | `isDeleted` | Boolean | soft delete |
 | `deletedAt` | Date | |
@@ -475,7 +474,7 @@ Indexes: `{user, status, createdAt}`, `{status, lastSyncAt}`, `{handleHash}`
 
 ## aa_account_claims
 
-One row per account of the user that a live bank link feeds: the atomic "one feed per account" guard (unique `{user, account}`). Released when the mapping goes, the consent ends or the account is archived; a stale one can be taken over. Not in backups, no realtime resource. Fields: `user`, `account`, `consent`, `linkedId`.
+One row per account of the user that a live bank link feeds: the atomic "one feed per account" guard (unique `{user, account}`). Released when the mapping goes, the consent ends or the account is archived; a stale one can be taken over. Not in backups, no realtime resource. Fields: `user`, `account`, `consent` (the consent holding it), `linkedId` (the linked account inside that consent).
 
 ## credit_statements
 

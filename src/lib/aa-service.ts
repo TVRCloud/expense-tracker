@@ -386,7 +386,8 @@ export async function mapLinkedAccount(userId: string, id: string, linkedId: str
 export async function revokeConsent(userId: string, id: string): Promise<{ consent: AaConsentView; providerRevoked: boolean }> {
   requireProvider();
   const c = await loadConsent(userId, id);
-  if (c.status === "revoked") return { consent: consentView(c), providerRevoked: true };
+  // A revoke the provider never confirmed is tried again on the next call.
+  if (c.status === "revoked" && c.lastError !== "revoke_not_confirmed") return { consent: consentView(c), providerRevoked: true };
   let providerRevoked = true;
   const provider = providerByName(c.provider);
   if (!provider) providerRevoked = false;
@@ -394,8 +395,9 @@ export async function revokeConsent(userId: string, id: string): Promise<{ conse
     try {
       await withTimeout((signal) => provider.revoke(handleOf(c), { signal }));
     } catch (err) {
-      providerRevoked = false;
-      logger.error({ err: codeOf(err), consentId: id }, "aa: provider did not confirm the revoke");
+      // A provider that no longer knows the consent has nothing left to withdraw.
+      providerRevoked = err instanceof AaProviderError && err.code === "CONSENT_NOT_FOUND";
+      if (!providerRevoked) logger.error({ err: codeOf(err), consentId: id }, "aa: provider did not confirm the revoke");
     }
   }
   // Sync stops either way. If the provider did not confirm, say so: the person may need to withdraw at the bank.
@@ -666,9 +668,14 @@ export async function syncAllConsents(now = new Date()): Promise<{ checked: numb
 }
 
 /**
- * Account deletion: withdraw every consent at the provider and remove the records. A consent that could not be
- * withdrawn (no provider available, or it did not confirm) is kept, so the grant is not lost with its handle, and is
- * counted in `remaining`; the caller refuses the deletion while any remain.
+ * Account deletion: withdraw every consent at its provider and remove the records.
+ * - A consent already withdrawn is done, unless the withdrawal was never confirmed (`revoke_not_confirmed`): that
+ *   one is tried again. A provider that no longer knows the consent counts as withdrawn.
+ * - A consent whose provider is not registered here (AA_PROVIDER unset, or the sandbox refused in production)
+ *   cannot be withdrawn from this server at all. Its record is deleted anyway, so the person is not stuck, and the
+ *   hash of its handle is logged so it can be withdrawn by hand.
+ * - A consent whose registered provider failed to withdraw it is kept and counted in `remaining`: the grant is not
+ *   lost with its handle, and the caller refuses the deletion until it can be withdrawn.
  */
 export async function deleteAaDataForUser(userId: string): Promise<{ remaining: number }> {
   await connectDB();
@@ -676,16 +683,24 @@ export async function deleteAaDataForUser(userId: string): Promise<{ remaining: 
   const done: Types.ObjectId[] = [];
   let remaining = 0;
   for (const c of all) {
-    if (c.status === "revoked") {
+    if (c.status === "revoked" && c.lastError !== "revoke_not_confirmed") {
       done.push(c._id);
       continue;
     }
     const provider = providerByName(c.provider);
+    if (!provider) {
+      logger.warn({ userId, consentId: c._id.toString(), provider: c.provider, handleHash: c.handleHash }, "aa: consent deleted without a provider to withdraw it; withdraw it by hand");
+      done.push(c._id);
+      continue;
+    }
     try {
-      if (!provider) throw new AaProviderError("PROVIDER_ERROR", "provider_unavailable");
       await withTimeout((signal) => provider.revoke(handleOf(c), { signal }));
       done.push(c._id);
     } catch (err) {
+      if (err instanceof AaProviderError && err.code === "CONSENT_NOT_FOUND") {
+        done.push(c._id);
+        continue;
+      }
       remaining += 1;
       logger.error({ err: codeOf(err), consentId: c._id.toString() }, "aa: could not withdraw a consent while deleting an account");
     }

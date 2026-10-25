@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import mongoose from "mongoose";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { MongoMemoryReplSet } from "mongodb-memory-server";
 import { NextRequest } from "next/server";
 
 vi.mock("@/lib/redis", () => ({ redis: null }));
@@ -8,10 +8,10 @@ vi.mock("@/lib/redis", () => ({ redis: null }));
 process.env.CAPTURE_ENCRYPTION_KEY = "test-capture-encryption-key-at-least-32-chars";
 process.env.CRON_SECRET = "test-cron-secret-aa";
 
-let mongod: MongoMemoryServer;
+let mongod: MongoMemoryReplSet;
 
 beforeAll(async () => {
-  mongod = await MongoMemoryServer.create();
+  mongod = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
   process.env.MONGODB_URI = mongod.getUri();
   const { default: connectDB } = await import("@/lib/mongodb");
   await connectDB();
@@ -941,7 +941,59 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
       expect(await Transaction.countDocuments({ user: a })).toBe(1);
     });
 
-    it("a failure while moving the balance removes the row again", async () => {
+    it("a failed split create leaves no rows and no balance move", async () => {
+      const { bank } = await linked();
+      const { Account, Transaction } = await models();
+      const { createTransaction } = await import("@/lib/transaction-service");
+      const input = {
+        userId: a, actor: actor(), accountId: String(bank._id), type: "expense" as const, amount: 5000, category: "food", date: new Date().toISOString(), tags: [], isRecurring: false,
+        splits: [{ category: "food", amount: 2000 }, { category: "fuel", amount: 3000 }],
+      };
+      const spy = vi.spyOn(Transaction, "insertMany").mockRejectedValueOnce(new Error("boom") as never);
+      await expect(createTransaction(input as never)).rejects.toThrow("boom");
+      spy.mockRestore();
+      expect((await Account.findById(bank._id).lean<Json>())?.balance).toBe(100000);
+      expect(await Transaction.countDocuments({ user: a })).toBe(0);
+      await createTransaction(input as never);
+      expect((await Account.findById(bank._id).lean<Json>())?.balance).toBe(95000);
+      expect(await Transaction.countDocuments({ user: a })).toBe(2);
+    });
+
+    it("editing a transfer written as history leaves both balances alone", async () => {
+      const { bank } = await linked();
+      const { Account } = await models();
+      const cash = await Account.create({ user: a, name: "Cash", type: "cash", balance: 2000 });
+      const { createTransaction } = await import("@/lib/transaction-service");
+      const { updateTransfer } = await import("@/lib/transfer-service");
+      const made = await createTransaction({
+        userId: a, actor: actor(), accountId: String(bank._id), transferToId: String(cash._id), type: "transfer", amount: 3000, category: "Transfer",
+        date: new Date().toISOString(), tags: [], isRecurring: false, skipBalance: true, provenance: { source: "aa", historical: true },
+      } as never);
+      const id = String((made as Json).transaction._id);
+      await updateTransfer({ userId: a, transferId: id, amount: 4500, actor: actor() } as never);
+      expect((await Account.findById(bank._id).lean<Json>())?.balance).toBe(100000);
+      expect((await Account.findById(cash._id).lean<Json>())?.balance).toBe(2000);
+    });
+
+    it("lines cloned from a history row by a split edit are history too, so deleting one leaves the balance", async () => {
+      const { bank } = await linked();
+      const { Account, Transaction } = await models();
+      const { createTransaction, deleteTransaction } = await import("@/lib/transaction-service");
+      const { replaceSplits } = await import("@/lib/split-service");
+      const made = await createTransaction({
+        userId: a, actor: actor(), accountId: String(bank._id), type: "expense", amount: 6000, category: "food",
+        date: new Date().toISOString(), tags: [], isRecurring: false, skipBalance: true, provenance: { source: "aa", historical: true, reviewStatus: null },
+      } as never);
+      const id = String((made as Json).transaction._id);
+      await replaceSplits({ userId: a, transactionId: id, splits: [{ category: "food", amount: 2000 }, { category: "fuel", amount: 4000 }], actor: actor() });
+      const rows = await Transaction.find({ user: a }).lean<Json[]>();
+      expect(rows).toHaveLength(2);
+      expect(rows.every((r) => r.balanceApplied === false)).toBe(true);
+      await deleteTransaction(a, String(rows[1]._id), actor());
+      expect((await Account.findById(bank._id).lean<Json>())?.balance).toBe(100000);
+    });
+
+    it("a failure after the row was written leaves neither the row nor a balance move", async () => {
       const { bank } = await linked();
       const { Account, Transaction } = await models();
       const { createTransaction } = await import("@/lib/transaction-service");
@@ -1005,18 +1057,57 @@ describe("Account Aggregator sync (framework, sandbox provider)", () => {
       expect((await Account.findById(bank._id).lean<Json>())?.balance).toBe(100000);
     });
 
-    it("keeps consents it could not withdraw when the account is deleted", async () => {
-      const { consentId } = await linked();
+    it("account deletion: a consent with no registered provider is deleted locally and logged, so the person is not stuck", async () => {
+      await linked();
       const { deleteAaDataForUser } = await import("@/lib/aa-service");
       const { AaConsent } = await models();
-      // Its provider is no longer registered: the grant cannot be withdrawn, so the record is kept.
       await AaConsent.updateOne({ user: a }, { $set: { provider: "retired" } });
+      expect(await deleteAaDataForUser(a)).toEqual({ remaining: 0 });
+      expect(await AaConsent.countDocuments({ user: a })).toBe(0);
+    });
+
+    it("account deletion: a registered provider that fails to withdraw keeps the record and is counted", async () => {
+      const { consentId } = await linked();
+      const { deleteAaDataForUser } = await import("@/lib/aa-service");
+      const provider = (await import("@/lib/aa/providers")).getAaProvider()!;
+      const { AaConsent } = await models();
+      const spy = vi.spyOn(provider, "revoke").mockRejectedValueOnce(new Error("down") as never);
       expect(await deleteAaDataForUser(a)).toEqual({ remaining: 1 });
       expect(await AaConsent.countDocuments({ user: a })).toBe(1);
-      await AaConsent.updateOne({ user: a }, { $set: { provider: "sandbox" } });
+      spy.mockRestore();
       expect(await deleteAaDataForUser(a)).toEqual({ remaining: 0 });
       expect(await AaConsent.countDocuments({ user: a })).toBe(0);
       void consentId;
+    });
+
+    it("account deletion: a revoke the provider never confirmed is tried again, and a consent the provider forgot counts as withdrawn", async () => {
+      const { consentId } = await linked();
+      const { deleteAaDataForUser } = await import("@/lib/aa-service");
+      const { sandboxControl } = await import("@/lib/aa/sandbox");
+      const provider = (await import("@/lib/aa/providers")).getAaProvider()!;
+      const { AaConsent } = await models();
+      // Revoked locally, but the provider never confirmed it.
+      const bad = vi.spyOn(provider, "revoke").mockRejectedValueOnce(new Error("down") as never);
+      await revoke(consentId);
+      bad.mockRestore();
+      expect((await AaConsent.findOne({ user: a }).lean<Json>())).toMatchObject({ status: "revoked", lastError: "revoke_not_confirmed" });
+      const again = vi.spyOn(provider, "revoke");
+      expect(await deleteAaDataForUser(a)).toEqual({ remaining: 0 });
+      expect(again).toHaveBeenCalledTimes(1);
+      again.mockRestore();
+      expect(await AaConsent.countDocuments({ user: a })).toBe(0);
+
+      // Still failing: kept. Provider forgot it: done.
+      const second = await linked(a);
+      void second;
+      await AaConsent.updateOne({ user: a }, { $set: { status: "revoked", lastError: "revoke_not_confirmed" } });
+      const fail = vi.spyOn(provider, "revoke").mockRejectedValueOnce(new Error("down") as never);
+      expect(await deleteAaDataForUser(a)).toEqual({ remaining: 1 });
+      const { AaProviderError } = await import("@/lib/aa/provider");
+      fail.mockRejectedValueOnce(new AaProviderError("CONSENT_NOT_FOUND") as never);
+      expect(await deleteAaDataForUser(a)).toEqual({ remaining: 0 });
+      fail.mockRestore();
+      void sandboxControl;
     });
 
     it("refuses the sandbox in production unless it is allowed on purpose", async () => {

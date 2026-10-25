@@ -107,7 +107,12 @@ export async function DELETE() {
     } catch {
       await deleteAllReceiptsOfUser(user.id).catch((err) => logger.error({ err, userId: user.id }, "final receipt purge failed"));
     }
-    await deleteAaDataForUser(user.id).catch((err) => logger.error({ err: err instanceof Error ? err.name : "unknown", userId: user.id }, "final bank link purge failed"));
+    // Same for a bank link added by a request that was already running: it cannot stop the deletion now, so it is logged.
+    await deleteAaDataForUser(user.id)
+      .then((r) => {
+        if (r.remaining > 0) logger.error({ userId: user.id, remaining: r.remaining }, "bank links left after account deletion");
+      })
+      .catch((err) => logger.error({ err: err instanceof Error ? err.name : "unknown", userId: user.id }, "final bank link purge failed"));
 
     return NextResponse.json({ data: { message: "Account deleted" } });
   } catch (err) {
