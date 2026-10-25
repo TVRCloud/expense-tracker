@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { leaveShare, revokeShare, ShareServiceError, shareUpdateSchema, updateShare } from "@/lib/share-service";
-import { shareJsonError } from "@/lib/share-browser";
+import { readShareJson, shareJsonError } from "@/lib/share-browser";
 
 type Params = Promise<{ id: string }>;
 
@@ -12,8 +12,9 @@ export async function PATCH(req: NextRequest, ctx: { params: Params }) {
     const { user, errorResponse } = await requireAuth();
     if (errorResponse) return errorResponse;
     const { id } = await ctx.params;
-    const body = await req.json().catch(() => null);
-    const parsed = shareUpdateSchema.safeParse(body);
+    const read = await readShareJson(req);
+    if (!read.ok) return read.res;
+    const parsed = shareUpdateSchema.safeParse(read.body);
     if (!parsed.success) return NextResponse.json({ error: "Change is invalid" }, { status: 400 });
     return NextResponse.json({ data: { share: await updateShare(user.id, id, parsed.data) } });
   } catch (err) {

@@ -98,9 +98,9 @@ describe("household sharing", () => {
     const { POST } = await import("@/app/api/integrations/shares/route");
     return POST(req("shares", who, { method: "POST", idem, body: { email: emails.m, accountIds: [a1], role: "viewer", includeBudgets: false, ...body } }), {});
   }
-  async function accept(id: string, code: unknown, who: Who = "m"): Promise<Res> {
+  async function accept(id: string, code: unknown, who: Who = "m", idem?: string): Promise<Res> {
     const { POST } = await import("@/app/api/integrations/shares/[id]/accept/route");
-    return POST(req(`shares/${id}/accept`, who, { method: "POST", body: { code } }), params({ id }));
+    return POST(req(`shares/${id}/accept`, who, { method: "POST", body: { code }, idem }), params({ id }));
   }
   async function listShares(who: Who) {
     const { GET } = await import("@/app/api/integrations/shares/route");
@@ -143,6 +143,7 @@ describe("household sharing", () => {
         category: "Food",
         date: now,
         description: "lunch",
+        note: "OWNER-PRIVATE-NOTE",
         tags: ["private-tag"],
         attachments: ["receipt-id-1"],
         source: "sms",
@@ -227,6 +228,48 @@ describe("household sharing", () => {
       // Another account is still open to the same owner, up to 10 live shares.
       for (let i = 5; i < 10; i++) expect((await invite({ email: `friend${i}@x.com`, accountIds: [a2] })).status).toBe(201);
       expect((await invite({ email: "friend10@x.com", accountIds: [a2] })).status).toBe(409);
+    });
+
+    it("the owner's list cannot tell a registered address from an unregistered one", async () => {
+      await invite({ email: emails.s }); // registered, name "Name-s"
+      await invite({ email: "nobody-here@x.com" });
+      const { default: User } = await import("@/models/User");
+      await User.create({ name: "Gone", email: "gone@x.com", password: "h", isActive: false });
+      await invite({ email: "gone@x.com" });
+      const owned = (await listShares("o")).owned as { member: { email: string; name: string | null }; status: string }[];
+      expect(owned).toHaveLength(3);
+      for (const o of owned) {
+        expect(o.status).toBe("pending");
+        expect(o.member.name).toBeNull();
+      }
+      expect(JSON.stringify(owned)).not.toMatch(/Name-s|Gone/);
+      // The same through the create answer and the browser list.
+      const created = (await (await invite({ email: emails.x })).json()).data.share;
+      expect(created.member.name).toBeNull();
+      // Once accepted, the member's name shows (they chose to join).
+      const id = await activeShare({ email: emails.m });
+      const after = (await listShares("o")).owned as { id: string; member: { name: string | null } }[];
+      expect(after.find((o) => o.id === id)!.member.name).toBe("Name-m");
+    });
+
+    it("limits hold when invites race", async () => {
+      const { default: Share } = await import("@/models/Share");
+      // Four live shares on the joint account already (the limit is five).
+      await Share.insertMany(
+        Array.from({ length: 4 }, (_, i) => ({ owner: ids.o, memberEmail: `seed${i}@x.com`, accountIds: [a1], status: "pending", inviteExpiresAt: new Date(Date.now() + 1e9) }))
+      );
+      const results = await Promise.all(Array.from({ length: 5 }, (_, i) => invite({ email: `racer${i}@x.com` })));
+      expect(results.every((r) => r.status === 201 || r.status === 409)).toBe(true);
+      expect(await Share.countDocuments({ owner: ids.o, accountIds: a1, status: { $in: ["pending", "active"] } })).toBeLessThanOrEqual(5);
+
+      // The per-owner limit (ten) the same way: eight live on the other account, then a race on the joint one.
+      await Share.deleteMany({});
+      await Share.insertMany(
+        Array.from({ length: 8 }, (_, i) => ({ owner: ids.o, memberEmail: `held${i}@x.com`, accountIds: [a2], status: "pending", inviteExpiresAt: new Date(Date.now() + 1e9) }))
+      );
+      const more = await Promise.all(Array.from({ length: 5 }, (_, i) => invite({ email: `late${i}@x.com` })));
+      expect(more.every((r) => r.status === 201 || r.status === 409)).toBe(true);
+      expect(await Share.countDocuments({ owner: ids.o, status: { $in: ["pending", "active"] } })).toBeLessThanOrEqual(10);
     });
 
     it("tells a registered invitee in the app, without the code", async () => {
@@ -398,10 +441,11 @@ describe("household sharing", () => {
       expect(text).not.toContain("deleted one");
       expect(text).not.toContain(a2);
       expect(text).not.toMatch(/private-tag|receipt-id-1|attachments|tags|source|sms/);
+      expect(text).not.toMatch(/OWNER-PRIVATE-NOTE|"note"/);
       const descs = body.data.data.map((t: { description: string }) => t.description).sort();
       expect(descs).toEqual(["from savings", "joint dinner", "pay", "refund", "to savings"]);
       for (const t of body.data.data) {
-        expect(Object.keys(t).sort()).toEqual(["account", "addedBy", "amount", "category", "date", "description", "id", "note", "subcategory", "transferTo", "type"]);
+        expect(Object.keys(t).sort()).toEqual(["account", "addedBy", "amount", "category", "date", "description", "id", "subcategory", "transferTo", "type"]);
       }
     });
 
@@ -583,6 +627,75 @@ describe("household sharing", () => {
     });
   });
 
+  describe("hardening", () => {
+    it("a replayed accept after a revoke or a leave is a 404, and the stored answer holds no accounts", async () => {
+      const { data } = await (await invite()).json();
+      const first = await accept(data.share.id, data.code, "m", "acc-1");
+      expect(first.status).toBe(200);
+      expect((await first.json()).data.share).toMatchObject({ status: "active", accountIds: [a1] });
+      const same = await accept(data.share.id, data.code, "m", "acc-1");
+      expect(same.status).toBe(200);
+      expect((await same.json()).data.share).toMatchObject({ status: "active" });
+      const { default: IdempotencyRecord } = await import("@/models/IdempotencyRecord");
+      expect(JSON.stringify(await IdempotencyRecord.find({ endpoint: /accept/ }).lean())).not.toContain(a1);
+
+      expect((await endShare(data.share.id, "o")).status).toBe(200);
+      const stale = await accept(data.share.id, data.code, "m", "acc-1");
+      expect(stale.status).toBe(404);
+      expect(JSON.stringify(await stale.json())).not.toContain(a1);
+    });
+
+    it("an editor write re-reads the share: a revoke, a role change or a removed account stops it", async () => {
+      const id = await activeShare({ role: "editor" });
+      const svc = await import("@/lib/share-service");
+      const member = { id: ids.m, name: "Name-m", email: emails.m, role: "user" };
+      const input = { accountId: a1, type: "expense" as const, amount: 100, category: "x", date: new Date().toISOString() };
+      const { default: Transaction } = await import("@/models/Transaction");
+      const { default: Share } = await import("@/models/Share");
+
+      // The request loaded its context while the member was an editor ...
+      const ctx = (await svc.loadActiveShare(ids.m, ids.o))!;
+      // ... and the owner changes the role before the write.
+      await svc.updateShare(ids.o, id, { role: "viewer" });
+      await expect(svc.addSharedTransaction(ctx, member, input)).rejects.toMatchObject({ code: "FORBIDDEN_ROLE" });
+      await svc.updateShare(ids.o, id, { role: "editor" });
+      // Account taken out of the share.
+      await Share.updateOne({ _id: id }, { $set: { accountIds: [a2] } });
+      await expect(svc.addSharedTransaction(ctx, member, input)).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await Share.updateOne({ _id: id }, { $set: { accountIds: [a1] } });
+      // Revoked.
+      await svc.revokeShare(ids.o, id);
+      await expect(svc.addSharedTransaction(ctx, member, input)).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(await Transaction.countDocuments({})).toBe(0);
+    });
+
+    it("a row an editor adds does not round up into the owner's goal; the owner's own row does", async () => {
+      const { default: Goal } = await import("@/models/Goal");
+      const goal = await Goal.create({ user: ids.o, name: "Trip", targetAmount: 10000000, roundUpEnabled: true, roundUpTo: 100 });
+      await activeShare({ role: "editor" });
+      const res = await sharedPost({ accountId: a1, type: "expense", amount: 4250, category: "Food", date: new Date().toISOString() });
+      expect(res.status).toBe(201);
+      await new Promise((r) => setTimeout(r, 300));
+      expect((await Goal.findById(goal._id).lean<{ savedAmount: number }>())!.savedAmount).toBe(0);
+
+      // Control: the owner's own expense does round up, so the check above can fail.
+      const { createTransaction } = await import("@/lib/transaction-service");
+      await createTransaction({
+        userId: ids.o,
+        actor: { id: ids.o, name: "Name-o", email: emails.o, role: "user" },
+        accountId: a1,
+        type: "expense",
+        amount: 4250,
+        category: "Food",
+        date: new Date().toISOString(),
+        tags: [],
+        isRecurring: false,
+      });
+      await new Promise((r) => setTimeout(r, 300));
+      expect((await Goal.findById(goal._id).lean<{ savedAmount: number }>())!.savedAmount).toBe(50);
+    });
+  });
+
   // ── ending a share ──
   describe("revoke and leave", () => {
     it("a revoke is effective on the next request", async () => {
@@ -658,6 +771,26 @@ describe("household sharing", () => {
       void mine;
     });
 
+    it("deleting an account also ends pending invites addressed to its email", async () => {
+      const { data } = await (await invite()).json(); // o -> m, still pending
+      sessionUser.current = { id: ids.m, name: "Name-m", email: emails.m, role: "user" };
+      const { DELETE } = await import("@/app/api/me/route");
+      expect((await DELETE()).status).toBe(200);
+      const { default: Share } = await import("@/models/Share");
+      const row = await Share.findById(data.share.id).lean<{ status: string; endedBy: string; inviteTokenHash?: string }>();
+      expect(row).toMatchObject({ status: "revoked", endedBy: "account_deleted" });
+      expect(row!.inviteTokenHash).toBeUndefined();
+      // Someone who registers the freed address cannot use the old code.
+      const { default: User } = await import("@/models/User");
+      const reborn = await User.create({ name: "New", email: emails.m, password: "h", isActive: true });
+      const { default: ApiKey } = await import("@/models/ApiKey");
+      const { hashKey } = await import("@/lib/integrations/auth");
+      await ApiKey.create({ user: reborn._id, label: "p", keyHash: hashKey("reborn-key"), lastFour: "-key" });
+      KEYS.m = "reborn-key";
+      expect((await accept(data.share.id, data.code)).status).toBe(404);
+      KEYS.m = KEY_M;
+    });
+
     it("a backup never carries shares or the people they name", async () => {
       await seedData();
       await activeShare({ role: "editor" });
@@ -709,6 +842,24 @@ describe("household sharing", () => {
       expect((await GET()).status).toBe(401);
       const { GET: accounts } = await import("@/app/api/household/shared/[ownerId]/accounts/route");
       expect((await accounts(brReq("x"), params({ ownerId: ids.o }))).status).toBe(401);
+    });
+
+    it("a body over 8 KB is refused (413) before it is parsed", async () => {
+      const big = "x".repeat(20 * 1024);
+      const { POST } = await import("@/app/api/household/shares/route");
+      const { PATCH } = await import("@/app/api/household/shares/[id]/route");
+      const { POST: acceptRoute } = await import("@/app/api/household/shares/[id]/accept/route");
+      as("o");
+      expect((await POST(brReq("shares", "POST", { email: emails.m, accountIds: [a1], pad: big }))).status).toBe(413);
+      expect((await PATCH(brReq("x", "PATCH", { role: "editor", pad: big }), params({ id: a1 }))).status).toBe(413);
+      as("m");
+      expect((await acceptRoute(brReq("x", "POST", { code: big }), params({ id: a1 }))).status).toBe(413);
+      // Not JSON at all.
+      const bad = new NextRequest("http://localhost/api/household/shares", { method: "POST", body: "{nope" });
+      as("o");
+      expect((await POST(bad)).status).toBe(400);
+      const { default: Share } = await import("@/models/Share");
+      expect(await Share.countDocuments({})).toBe(0);
     });
 
     it("invite, accept, read and leave", async () => {

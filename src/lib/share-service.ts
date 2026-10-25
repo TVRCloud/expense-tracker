@@ -22,7 +22,7 @@ import { MAX_MINOR_AMOUNT } from "@/lib/currency";
 // existing query is scoped: every current route still filters by `user`. The
 // `shared` routes call `loadActiveShare` first and answer 404 when it finds
 // nothing, so a revoked, pending, expired, declined or never-existing share
-// look the same. Design and threat model: docs/security.md (Household sharing).
+// look the same. Design and threat model: docs/household.md.
 
 export const MAX_LIVE_SHARES_PER_OWNER = 10;
 export const MAX_SHARES_PER_ACCOUNT = 5;
@@ -183,6 +183,20 @@ async function checkAccountLimits(accountIds: string[], exceptShareId?: string) 
   }
 }
 
+/** True when the live shares of this owner, or of any of these accounts, are over the limits. */
+async function overLimits(ownerId: string, accountIds: string[]) {
+  const live = await Share.countDocuments({ owner: ownerId, status: { $in: [...LIVE] } });
+  if (live > MAX_LIVE_SHARES_PER_OWNER) return true;
+  const ids = accountIds.map((id) => new Types.ObjectId(id));
+  const rows = await Share.aggregate<{ _id: Types.ObjectId; n: number }>([
+    { $match: { status: { $in: [...LIVE] }, accountIds: { $in: ids } } },
+    { $unwind: "$accountIds" },
+    { $match: { accountIds: { $in: ids } } },
+    { $group: { _id: "$accountIds", n: { $sum: 1 } } },
+  ]);
+  return rows.some((r) => r.n > MAX_SHARES_PER_ACCOUNT);
+}
+
 // ── Views ──────────────────────────────────────────────────────────────────
 
 function ownerView(s: ShareDoc, member?: UserBrief) {
@@ -255,6 +269,14 @@ export async function createInvite(owner: { id: string; name: string; email: str
     throw err;
   }
 
+  // The counts above and the insert are separate steps, so two invites sent at the same moment can
+  // both pass. Count again now that this one exists; if the limit is passed, take this one back.
+  // (If both are over, both go: the owner retries. The limit is never exceeded for good.)
+  if (await overLimits(owner.id, accountIds)) {
+    await Share.deleteOne({ _id: share._id, status: "pending" });
+    throw new ShareServiceError("LIMIT_REACHED", "Sharing limit reached. Try again.");
+  }
+
   // A registered invitee is told in the app; the code itself only goes to the owner.
   const invitee = await User.findOne({ email: input.email, isActive: true }).select("_id").lean<{ _id: Types.ObjectId }>();
   if (invitee) {
@@ -304,24 +326,23 @@ export async function listShares(user: { id: string; email: string }) {
       .lean<ShareDoc[]>(),
   ]);
 
-  const memberKeys = owned.filter((s) => s.member).map((s) => s.member);
-  const emails = owned.map((s) => s.memberEmail);
+  // A member's name is looked up only through the `member` id of an ACTIVE share (they accepted).
+  // A pending invite shows the typed address and no name, so the list cannot tell the owner
+  // whether that address is registered, or whose it is.
+  const memberKeys = owned.filter((s) => s.status === "active" && s.member).map((s) => s.member);
   const [members, owners] = await Promise.all([
-    owned.length
-      ? User.find({ $or: [{ _id: { $in: memberKeys } }, { email: { $in: emails } }] }).select("name email").lean<UserBrief[]>()
+    memberKeys.length
+      ? User.find({ _id: { $in: memberKeys }, isActive: true }).select("name").lean<UserBrief[]>()
       : Promise.resolve([] as UserBrief[]),
     received.length
       ? User.find({ _id: { $in: received.map((s) => s.owner) } }).select("name").lean<UserBrief[]>()
       : Promise.resolve([] as UserBrief[]),
   ]);
   const memberById = new Map(members.map((u) => [idStr(u._id), u]));
-  const memberByEmail = new Map(members.map((u) => [(u.email ?? "").toLowerCase(), u]));
   const ownerById = new Map(owners.map((u) => [idStr(u._id), u]));
 
   return {
-    owned: owned.map((s) =>
-      ownerView(s, (s.member ? memberById.get(idStr(s.member)) : undefined) ?? memberByEmail.get(s.memberEmail))
-    ),
+    owned: owned.map((s) => ownerView(s, s.status === "active" && s.member ? memberById.get(idStr(s.member)) : undefined)),
     received: received.map((s) => memberView(s, ownerById.get(idStr(s.owner)))),
   };
 }
@@ -346,7 +367,13 @@ export async function updateShare(ownerId: string, shareId: string, input: Share
     { new: true }
   ).lean<ShareDoc>();
   if (!updated) throw new ShareServiceError("NOT_FOUND", "Share not found");
-  const member = updated.member ? await User.findById(updated.member).select("name email").lean<UserBrief>() : null;
+  // Same race as an invite: count again after the change and put the old accounts back if over.
+  if (input.accountIds !== undefined && (await overLimits(ownerId, set.accountIds as string[]))) {
+    await Share.updateOne({ _id: shareId, status: { $in: [...LIVE] } }, { $set: { accountIds: existing.accountIds } });
+    throw new ShareServiceError("LIMIT_REACHED", "Sharing limit reached. Try again.");
+  }
+  const member =
+    updated.status === "active" && updated.member ? await User.findById(updated.member).select("name").lean<UserBrief>() : null;
   return ownerView(updated, member ?? undefined);
 }
 
@@ -412,6 +439,16 @@ export async function acceptInvite(user: { id: string; email: string; name: stri
   return memberView(accepted, owner);
 }
 
+/** The live answer for a replayed accept: the caller's own active share, or a 404 when it has ended since. */
+export async function currentMemberShare(userId: string, shareId: string) {
+  await connectDB();
+  if (!Types.ObjectId.isValid(shareId)) throw new ShareServiceError("NOT_FOUND", "Invite not found or expired");
+  const share = await Share.findOne({ _id: shareId, member: userId, status: "active" }).lean<ShareDoc>();
+  if (!share) throw new ShareServiceError("NOT_FOUND", "Invite not found or expired");
+  const owner = await User.findOne({ _id: share.owner, isActive: true }).select("name").lean<UserBrief>();
+  return memberView(share, owner ?? undefined);
+}
+
 export async function declineInvite(user: { id: string; email: string; name: string }, shareId: string) {
   await connectDB();
   if (!Types.ObjectId.isValid(shareId)) throw new ShareServiceError("NOT_FOUND", "Invite not found or expired");
@@ -446,10 +483,13 @@ export async function leaveShare(user: { id: string; name: string; email: string
 }
 
 /** Account deletion: every share the person owns or is a member of ends at once. */
-export async function revokeAllSharesOfUser(userId: string) {
+export async function revokeAllSharesOfUser(userId: string, email?: string) {
   await connectDB();
+  // Pending invites addressed to the person's email end too, or someone else who later registers
+  // the freed address could accept them with a code the owner meant for the old account.
+  const addressed = email ? [{ memberEmail: email.toLowerCase(), status: "pending" }] : [];
   const result = await Share.updateMany(
-    { $or: [{ owner: userId }, { member: userId }], status: { $in: [...LIVE] } },
+    { $or: [{ owner: userId }, { member: userId }, ...addressed], status: { $in: [...LIVE] } },
     endUpdate("account_deleted", "revoked")
   );
   return result.modifiedCount;
@@ -571,7 +611,7 @@ export async function listSharedTransactions(ctx: ShareContext, p: SharedTransac
 
   const [rows, total] = await Promise.all([
     Transaction.find(query)
-      .select("account type amount currency category subcategory description note date transferTo addedBy")
+      .select("account type amount currency category subcategory description date transferTo addedBy")
       .sort({ date: -1, _id: -1 })
       .skip(skip)
       .limit(limit)
@@ -585,7 +625,6 @@ export async function listSharedTransactions(ctx: ShareContext, p: SharedTransac
           category: string;
           subcategory?: string;
           description?: string;
-          note?: string;
           date: Date;
           transferTo?: Types.ObjectId;
           addedBy?: Types.ObjectId;
@@ -610,7 +649,6 @@ export async function listSharedTransactions(ctx: ShareContext, p: SharedTransac
       category: r.category,
       subcategory: r.subcategory ?? null,
       description: r.description ?? null,
-      note: r.note ?? null,
       date: r.date,
       addedBy: r.addedBy ? { id: idStr(r.addedBy), name: adderName.get(idStr(r.addedBy)) ?? null } : null,
     })),
@@ -699,6 +737,14 @@ export async function addSharedTransaction(ctx: ShareContext, member: AuthUser, 
     throw new ShareServiceError("FORBIDDEN_ROLE", "You can view this account but not add to it");
   }
   if (!ctx.accountIds.some((id) => idStr(id) === input.accountId)) throw new ShareServiceError("NOT_FOUND", "Not found");
+
+  // `ctx` was read at the start of the request. Read the share again right before writing, so a
+  // revoke, a role change or an account taken out of the share a moment ago is honoured.
+  const live = await Share.findOne({ _id: ctx.share._id, owner: ctx.ownerId, member: member.id, status: "active" })
+    .select("role accountIds")
+    .lean<{ role: "viewer" | "editor"; accountIds: Types.ObjectId[] }>();
+  if (!live || !live.accountIds.some((id) => idStr(id) === input.accountId)) throw new ShareServiceError("NOT_FOUND", "Not found");
+  if (live.role !== "editor") throw new ShareServiceError("FORBIDDEN_ROLE", "You can view this account but not add to it");
 
   let result;
   try {

@@ -32,7 +32,7 @@ Purpose: server business logic shared by browser routes, integration routes, ser
 - Models in src/models. Callers: src/app/api, src/app pages, server.ts, scripts/.
 
 ## Rules and gotchas
-- Household sharing never changes how an existing query is scoped: every current route still filters by `user`. New shared reads must go through `loadActiveShare` and the share's account ids, return a field whitelist (never the raw document), and answer 404, not 403, for anything the caller may not see; a share is never cached. No realtime resource streams shared data.
+- Household sharing never changes how an existing query is scoped: every current route still filters by `user`. New shared reads must go through `loadActiveShare` and the share's account ids, return a field whitelist (never the raw document), and answer 404, not 403, for anything the caller may not see; a share is never cached. No realtime resource streams shared data. `createTransaction` skips the owner's goal round-up for a row with `provenance.addedBy` (a household editor's); the editor write re-reads the live share right before it writes.
 - budget-service and goal-service own create, update and soft delete; the browser `[id]` routes and the integration `[id]` routes both call them.
 - transfer-service owns transfer edit (amount, accounts, date: balances fixed in one pass); create and delete call transaction-service. A transfer row is never income or spending.
 - subscription-service never stores detections, only the user's choice per merchant and cadence (`SubscriptionDecision`); it leaves out recurring series the user already tracks (`isRecurring`).

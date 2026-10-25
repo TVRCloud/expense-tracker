@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth-guard";
 import logger from "@/lib/logger";
 import { createInvite, listShares, shareInviteSchema } from "@/lib/share-service";
-import { shareJsonError } from "@/lib/share-browser";
+import { readShareJson, shareJsonError } from "@/lib/share-browser";
 
 // GET /api/household/shares — { owned, received } (same as GET /api/integrations/shares).
 export async function GET() {
@@ -23,8 +23,9 @@ export async function POST(req: NextRequest) {
   try {
     const { user, errorResponse } = await requireAuth();
     if (errorResponse) return errorResponse;
-    const body = await req.json().catch(() => null);
-    const parsed = shareInviteSchema.safeParse(body);
+    const read = await readShareJson(req);
+    if (!read.ok) return read.res;
+    const parsed = shareInviteSchema.safeParse(read.body);
     if (!parsed.success) return NextResponse.json({ error: "Invite is invalid" }, { status: 400 });
     const created = await createInvite(user, parsed.data);
     return NextResponse.json({ data: { share: created.share, code: created.token } }, { status: 201 });

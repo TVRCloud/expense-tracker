@@ -52,6 +52,8 @@ export async function idempotentShareWrite(opts: {
   execute: () => Promise<{ status: number; body: Record<string, unknown> }>;
   /** Added to the first answer only, never stored (a one-time invite code). */
   extraOnce?: () => Record<string, unknown>;
+  /** Replaces a replayed answer with a live one (it may throw a ShareServiceError, mapped as usual). */
+  onReplay?: () => Promise<Record<string, unknown>>;
 }) {
   const key = idempotencyKeyOf(opts.req);
   if (!key) return integrationError("VALIDATION_ERROR", "Missing or invalid Idempotency-Key header", opts.requestId);
@@ -65,6 +67,9 @@ export async function idempotentShareWrite(opts: {
     });
     if (outcome.kind === "conflict") {
       return integrationError("IDEMPOTENCY_CONFLICT", conflictMessage(outcome.reason), opts.requestId);
+    }
+    if (outcome.kind === "replayed" && opts.onReplay) {
+      return integrationOk(await opts.onReplay(), opts.requestId, { status: outcome.status });
     }
     const body = outcome.kind === "executed" && opts.extraOnce ? { ...outcome.body, ...opts.extraOnce() } : outcome.body;
     return integrationOk(body, opts.requestId, { status: outcome.status });
