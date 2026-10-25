@@ -54,8 +54,15 @@ function AlertRow({ item, onMute }: { item: Anomaly; onMute: (category: string) 
   const open = item.status === "open";
 
   function act(status: AnomalyAction, message: string) {
-    answer.mutate({ id: item.id, status }, { onError: () => toast.error("Could not save your answer") });
-    toast(message);
+    answer.mutate(
+      { id: item.id, status },
+      {
+        onError: () => toast.error("Could not save your answer"),
+        // The expense may refuse the tag (a loan or card payment row, or ten tags already).
+        onSuccess: (res) => status === "report" && toast(res.data.data.tagged ? message : "Reported, not tagged"),
+      }
+    );
+    if (status !== "report") toast(message);
   }
 
   return (

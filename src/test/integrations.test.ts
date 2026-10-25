@@ -10630,16 +10630,53 @@ describe("anomaly alerts", () => {
       await vi.waitFor(() => expect(spy).toHaveBeenCalled(), { timeout: 5000 });
       spy.mockRestore();
     });
-    it("a notification that cannot be created leaves no alert behind, so a retry still alerts", async () => {
+    it("a notification that cannot be created keeps the alert and the other checks still run", async () => {
       const { default: Notification } = await import("@/models/Notification");
       await history(6, 50000);
-      const big = await add(150000, "2026-10-14T06:00:00Z");
+      await add(150000, "2026-10-14T06:00:00Z");
+      const big = await add(150000, "2026-10-14T06:05:00Z"); // large AND a duplicate of the row before
       const spy = vi.spyOn(Notification, "create").mockRejectedValueOnce(new Error("db down"));
-      expect(await detect(big)).toBe(0);
-      expect(await alerts()).toHaveLength(0);
+      expect(await detect(big)).toBe(2); // the large-spend alert survived its failed notification; the duplicate check ran
       spy.mockRestore();
-      expect(await detect(big)).toBe(1);
-      expect(await Notification.countDocuments({ user: userId })).toBe(1);
+      const rows = await alerts();
+      expect(rows.map((a) => a.kind).sort()).toEqual(["duplicate_charge", "large_spend"]);
+      expect(await Notification.countDocuments({ user: userId })).toBe(1); // only the one that failed is missing
+      // it still lists on /alerts
+      const { GET } = await import("@/app/api/integrations/anomalies/route");
+      expect((await (await GET(new NextRequest("http://localhost/x", { headers: headers() }), {})).json()).data.openCount).toBe(2);
+    });
+    it("the push is awaited before the check finishes, and a failing push does not break it", async () => {
+      const push = await import("@/lib/push");
+      await history(6, 50000);
+      let settled = false;
+      const spy = vi.spyOn(push, "sendPushToUser").mockImplementation(async () => {
+        await new Promise((r) => setTimeout(r, 150));
+        settled = true;
+      });
+      expect(await detect(await add(150000, "2026-10-14T06:00:00Z"))).toBe(1);
+      expect(settled).toBe(true);
+      spy.mockImplementation(async () => {
+        throw new Error("push down");
+      });
+      expect(await detect(await add(160000, "2026-10-14T07:00:00Z"))).toBe(1);
+      spy.mockRestore();
+      expect(await alerts()).toHaveLength(2);
+    });
+    it("a split evaluates each category once", async () => {
+      const { createTransaction } = await import("@/lib/transaction-service");
+      const service = await import("@/lib/anomaly-service");
+      const spy = vi.spyOn(service, "detectAnomalies").mockResolvedValue(0);
+      const actor = { id: userId, name: "Anom", email: "a@x.com", role: "user" };
+      await createTransaction({
+        userId, actor, accountId, type: "expense", amount: 30000, currency: "INR", date: new Date().toISOString(), tags: [], isRecurring: false,
+        splits: [{ category: "Dining", amount: 10000 }, { category: "Dining", amount: 5000 }, { category: "Home", amount: 15000 }],
+      });
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(2), { timeout: 3000 });
+      await new Promise((r) => setTimeout(r, 200));
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(spy.mock.calls.map((c) => (c[1] as { category: string }).category).sort()).toEqual(["Dining", "Home"]);
+      expect(spy.mock.calls.every((c) => (c[2] as { splitLine?: boolean }).splitLine === true)).toBe(true);
+      spy.mockRestore();
     });
     it("deleting one half of a duplicate pair retires the open alert on the other", async () => {
       const { deleteTransaction } = await import("@/lib/transaction-service");
@@ -10743,6 +10780,78 @@ describe("anomaly alerts", () => {
       // answering "this was me" after a report also clears it
       await patch(id, { status: "this_was_me" }, "r4");
       expect((await Transaction.findById(big._id).lean<{ tags: string[] }>())!.tags).toEqual(["trip"]);
+    });
+    it("a tag the person added by hand is never removed by a later answer", async () => {
+      const { big, id } = await seedOpen();
+      const { default: Transaction } = await import("@/models/Transaction");
+      await Transaction.updateOne({ _id: big._id }, { $set: { tags: ["trip", "anomaly-reported"] } });
+      const rep = await patch(id, { status: "report" }, "o1");
+      expect((await rep.json()).data).toMatchObject({ status: "reported", tagged: true });
+      const dis = await patch(id, { status: "dismiss" }, "o2");
+      expect((await dis.json()).data).toMatchObject({ status: "dismissed", tagged: false });
+      expect((await Transaction.findById(big._id).lean<{ tags: string[] }>())!.tags).toEqual(["trip", "anomaly-reported"]);
+      // and nothing about the bookkeeping leaks into the contract
+      const { data } = await (await list("?status=all")).json();
+      expect(data.data[0].data).not.toHaveProperty("tagAdded");
+    });
+    it("a quicker dismiss that lands between the status write and the tag write leaves no tag", async () => {
+      const { big, id } = await seedOpen();
+      const { default: Transaction } = await import("@/models/Transaction");
+      const { default: Anomaly } = await import("@/models/Anomaly");
+      // dismiss lands right after report's status write, just before its tag write
+      const real = Transaction.findOneAndUpdate.bind(Transaction);
+      const spy = vi.spyOn(Transaction, "findOneAndUpdate").mockImplementationOnce(((...args: Parameters<typeof real>) => ({
+        lean: async () => {
+          await Anomaly.updateOne({ _id: id }, { $set: { status: "dismissed" } });
+          return (real as any)(...args).lean(); // eslint-disable-line @typescript-eslint/no-explicit-any
+        },
+      })) as never);
+      const rep = await patch(id, { status: "report" }, "q1");
+      expect(spy).toHaveBeenCalledTimes(2); // the tag was written, then taken off again
+      spy.mockRestore();
+      expect((await rep.json()).data).toMatchObject({ tagged: false });
+      expect((await Transaction.findById(big._id).lean<{ tags: string[] }>())!.tags).toEqual(["trip"]);
+      const { default: LedgerBlock } = await import("@/models/LedgerBlock");
+      expect(await LedgerBlock.countDocuments({ user: userId, scope: "transaction", entityId: big._id.toString(), action: "update" })).toBe(2);
+      expect((await Anomaly.findById(id).lean<{ status: string; data: Record<string, unknown> }>())!.status).toBe("dismissed");
+    });
+    it("a removal that conflicts keeps the bookkeeping, so the next answer still takes the tag off", async () => {
+      const { big, id } = await seedOpen();
+      const { default: Transaction } = await import("@/models/Transaction");
+      await patch(id, { status: "report" }, "c1");
+      const spy = vi.spyOn(Transaction, "findOneAndUpdate").mockReturnValue({ lean: async () => null } as never);
+      await patch(id, { status: "dismiss" }, "c2");
+      spy.mockRestore();
+      expect((await Transaction.findById(big._id).lean<{ tags: string[] }>())!.tags).toEqual(["trip", "anomaly-reported"]);
+      await patch(id, { status: "this_was_me" }, "c3");
+      expect((await Transaction.findById(big._id).lean<{ tags: string[] }>())!.tags).toEqual(["trip"]);
+    });
+    it("setUserTag redoes its check when the row changes under it, and says conflict when it keeps changing", async () => {
+      const { setUserTag } = await import("@/lib/transaction-service");
+      const { default: Transaction } = await import("@/models/Transaction");
+      const actor = { id: userId, name: "Anom", email: "a@x.com", role: "user" };
+      const row = await add(1000, "2026-10-14T06:00:00Z", { tags: ["trip"] });
+      const lose = { lean: async () => null } as never;
+      const spy = vi.spyOn(Transaction, "findOneAndUpdate").mockReturnValueOnce(lose);
+      expect(await setUserTag(userId, row._id.toString(), "anomaly-reported", "add", actor)).toBe("changed");
+      expect((await Transaction.findById(row._id).lean<{ tags: string[] }>())!.tags).toEqual(["trip", "anomaly-reported"]);
+      spy.mockRestore();
+      // the cap fills between the read and the write: the redo sees it and says full, not changed
+      const full = await add(1000, "2026-10-14T06:00:00Z", { tags: ["a", "b", "c", "d", "e", "f", "g", "h", "i"] });
+      const spy2 = vi.spyOn(Transaction, "findOneAndUpdate").mockImplementationOnce((() => ({
+        lean: async () => {
+          await Transaction.updateOne({ _id: full._id }, { $push: { tags: "j" } });
+          return null;
+        },
+      })) as never);
+      expect(await setUserTag(userId, full._id.toString(), "anomaly-reported", "add", actor)).toBe("full");
+      spy2.mockRestore();
+      const stuck = await add(1000, "2026-10-14T06:00:00Z");
+      const spy3 = vi.spyOn(Transaction, "findOneAndUpdate").mockReturnValue(lose);
+      expect(await setUserTag(userId, stuck._id.toString(), "anomaly-reported", "add", actor)).toBe("conflict");
+      expect(spy3).toHaveBeenCalledTimes(3);
+      spy3.mockRestore();
+      expect(await setUserTag(userId, "6add859ded263392628d4999", "x", "add", actor)).toBe("not_found");
     });
     it("a row linked to a loan repayment refuses the tag, but the alert still answers", async () => {
       const { big, id } = await seedOpen();

@@ -610,13 +610,15 @@ export async function updateTransaction(input: UpdateTransactionInput) {
   return transaction;
 }
 
-export type UserTagOutcome = "changed" | "unchanged" | "blocked" | "full" | "not_found";
+export type UserTagOutcome = "changed" | "unchanged" | "blocked" | "full" | "not_found" | "conflict";
 
 /**
  * Adds or removes ONE user tag on a live row, the way an edit would: refused for a row linked to a
  * credit statement payment or a loan repayment ("blocked"), kept within the tag cap ("full"), and
  * written to the ledger. Atomic ($addToSet and $pull with the cap in the filter), so it cannot undo a
- * concurrent edit of the other tags. Used by anomaly alerts to tag a reported expense.
+ * concurrent edit of the other tags. "changed" means this call wrote the tag change and nothing else;
+ * "unchanged" means the row already was as asked. When the row changes between the read and the write
+ * the whole check is redone (3 tries), then "conflict". Used by anomaly alerts to tag a reported expense.
  */
 export async function setUserTag(
   userId: string,
@@ -626,27 +628,30 @@ export async function setUserTag(
   actor: AuthUser
 ): Promise<UserTagOutcome> {
   await connectDB();
-  const before = await Transaction.findOne({ _id: transactionId, user: userId, isDeleted: { $ne: true } }).lean<{
-    date: Date;
-    tags?: unknown[];
-  }>();
-  if (!before) return "not_found";
-  if (await getLinkedTransactionBlocker(userId, transactionId, before.tags)) return "blocked";
-  const has = (before.tags ?? []).includes(tag);
-  if (mode === "add" && has) return "unchanged";
-  if (mode === "remove" && !has) return "unchanged";
-  if (mode === "add" && (before.tags ?? []).length >= MAX_TAGS) return "full";
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const before = await Transaction.findOne({ _id: transactionId, user: userId, isDeleted: { $ne: true } }).lean<{
+      date: Date;
+      tags?: unknown[];
+    }>();
+    if (!before) return "not_found";
+    if (await getLinkedTransactionBlocker(userId, transactionId, before.tags)) return "blocked";
+    const has = (before.tags ?? []).includes(tag);
+    if (mode === "add" && has) return "unchanged";
+    if (mode === "remove" && !has) return "unchanged";
+    if (mode === "add" && (before.tags ?? []).length >= MAX_TAGS) return "full";
 
-  const after = await Transaction.findOneAndUpdate(
-    mode === "add"
-      ? { _id: transactionId, user: userId, isDeleted: { $ne: true }, tags: { $ne: tag }, [`tags.${MAX_TAGS - 1}`]: { $exists: false } }
-      : { _id: transactionId, user: userId, isDeleted: { $ne: true }, tags: tag },
-    mode === "add" ? { $addToSet: { tags: tag } } : { $pull: { tags: tag } },
-    { new: true }
-  ).lean();
-  if (!after) return "unchanged"; // changed under us: nothing for this call to do
-  await appendLedgerBlock({ userId, scope: "transaction", entityId: transactionId, action: "update", before, after, actor });
-  return "changed";
+    const after = await Transaction.findOneAndUpdate(
+      mode === "add"
+        ? { _id: transactionId, user: userId, isDeleted: { $ne: true }, tags: { $ne: tag }, [`tags.${MAX_TAGS - 1}`]: { $exists: false } }
+        : { _id: transactionId, user: userId, isDeleted: { $ne: true }, tags: tag },
+      mode === "add" ? { $addToSet: { tags: tag } } : { $pull: { tags: tag } },
+      { new: true }
+    ).lean();
+    if (!after) continue; // the row changed under us: read it again and decide again
+    await appendLedgerBlock({ userId, scope: "transaction", entityId: transactionId, action: "update", before, after, actor });
+    return "changed";
+  }
+  return "conflict";
 }
 
 // Shared with DELETE /api/transactions/[id] (browser) and the integration

@@ -112,9 +112,9 @@ async function raise(userId: string, a: NewAnomaly): Promise<boolean> {
     if ((err as { code?: number }).code === 11000) return false;
     throw err;
   }
-  // Created before the push, so a retry after a crash cannot send it twice. When it fails the alert is
-  // removed again: left behind, its dedupKey would make every retry stop at "already alerted" and the
-  // notification would never exist.
+  // The alert is the record and is kept whatever happens next: it shows on /alerts even when the inbox
+  // notification cannot be written. Nothing retries (one background pass, and the dedupKey stops a second
+  // evaluation), so a failure here is logged and the other checks and the push carry on.
   try {
     await Notification.create({
       user: userId,
@@ -124,13 +124,14 @@ async function raise(userId: string, a: NewAnomaly): Promise<boolean> {
       meta: { kind: "anomaly", anomalyKind: a.kind, anomalyId, transactionId: a.transaction ?? null },
     });
   } catch (err) {
-    await Anomaly.deleteOne({ _id: anomalyId, user: userId }).catch((delErr) =>
-      logger.error({ err: delErr, userId, anomalyId }, "could not remove an alert whose notification failed")
-    );
-    throw err;
+    logger.error({ err, userId, anomalyId }, "anomaly notification failed; the alert is kept");
   }
-  // Awaited (it never throws): this runs inside after() on Vercel, which may freeze once the task settles.
-  await sendPushToUser(userId, { title: a.title, body: a.body, url: "/alerts" });
+  // Awaited: this runs inside after() on Vercel, which may freeze once the task settles. A failure is logged.
+  try {
+    await sendPushToUser(userId, { title: a.title, body: a.body, url: "/alerts" });
+  } catch (err) {
+    logger.error({ err, userId, anomalyId }, "anomaly push failed");
+  }
   return true;
 }
 
@@ -355,7 +356,8 @@ function view(doc: AnomalyDoc, currency: string): AnomalyView {
     amount: doc.amount,
     currency,
     transactionId: doc.transaction ? doc.transaction.toString() : null,
-    data: doc.data ?? {},
+    // `tagAdded` is bookkeeping for the report tag, not part of the contract.
+    data: Object.fromEntries(Object.entries(doc.data ?? {}).filter(([k]) => k !== "tagAdded")),
     createdAt: doc.createdAt,
     resolvedAt: doc.resolvedAt ?? null,
   };
@@ -389,11 +391,14 @@ export async function listAnomalies(
 }
 
 /**
- * Answers an alert; the last answer wins. "report" tags the expense `anomaly-reported` and any other
- * answer after a report takes the tag off again, both through setUserTag (ledgered, refused for a row
- * linked to a loan repayment or statement payment, within the tag cap). The alert is answered even
- * when the tag cannot be written; `tagged` says whether the expense carries the tag afterwards.
- * Nothing else happens automatically. Returns null when the alert is not this user's.
+ * Answers an alert; the last answer wins. "report" tags the expense `anomaly-reported` through
+ * setUserTag (ledgered, refused for a row linked to a loan repayment or statement payment, within the
+ * tag cap). The tag is taken off again by a later answer only when this alert put it there
+ * (`data.tagAdded`), so a tag the person added by hand is never removed. Known limit: two reports
+ * racing a dismiss within milliseconds can end `reported` without the tag. The alert is answered even
+ * when the tag cannot be written; `tagged` says whether the expense carries the tag after a report.
+ * Answers are not serialised, so after writing the tag the status is read again and the tag is undone
+ * when a quicker answer already moved the alert on. Returns null when the alert is not this user's.
  */
 export async function resolveAnomaly(
   userId: string,
@@ -410,17 +415,35 @@ export async function resolveAnomaly(
     { new: false }
   ).lean<AnomalyDoc>();
   if (!before) return null;
+  const transactionId = before.transaction?.toString();
   let tagged = false;
-  if (before.transaction && (action === "report" || before.status === "reported")) {
+  const hadFlag = before.data?.tagAdded === true;
+  const clearFlag = () => Anomaly.updateOne({ _id: id, user: userId }, { $unset: { "data.tagAdded": 1 } });
+  // The flag is only cleared once the tag is really off (or was never there): a refused or conflicting
+  // removal keeps it, so the next answer tries again.
+  const takeOff = async () => {
+    const outcome = await setUserTag(userId, transactionId!, REPORTED_TAG, "remove", actor);
+    if (outcome === "changed" || outcome === "unchanged" || outcome === "not_found") await clearFlag();
+  };
+  if (transactionId) {
     try {
-      const outcome = await setUserTag(
-        userId,
-        before.transaction.toString(),
-        REPORTED_TAG,
-        action === "report" ? "add" : "remove",
-        actor
-      );
-      tagged = action === "report" && (outcome === "changed" || outcome === "unchanged");
+      if (action === "report") {
+        // Marked before the write, so a failure after the tag landed (the ledger block) still lets a later
+        // answer take it off; unmarked again when the row turns out to have carried the tag already.
+        if (!hadFlag) await Anomaly.updateOne({ _id: id, user: userId }, { $set: { "data.tagAdded": true } });
+        const outcome = await setUserTag(userId, transactionId, REPORTED_TAG, "add", actor);
+        if (outcome !== "changed" && !hadFlag) await clearFlag();
+        if (outcome === "changed") {
+          // A quicker "dismiss" may have landed between the status write and the tag write.
+          const now = await Anomaly.findOne({ _id: id, user: userId }).select("status").lean<{ status: AnomalyStatus }>();
+          if (now && now.status !== "reported") await takeOff();
+          else tagged = true;
+        } else {
+          tagged = outcome === "unchanged";
+        }
+      } else if (hadFlag) {
+        await takeOff();
+      }
     } catch (err) {
       logger.error({ err, userId, anomalyId: id }, "tagging a reported expense failed");
     }
