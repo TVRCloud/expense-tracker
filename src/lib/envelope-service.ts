@@ -1,5 +1,6 @@
 import { z } from "zod";
 import connectDB from "@/lib/mongodb";
+import logger from "@/lib/logger";
 import EnvelopePlan from "@/models/EnvelopePlan";
 import Budget from "@/models/Budget";
 import User from "@/models/User";
@@ -169,6 +170,8 @@ export interface EnvelopeView {
   previousMonth: string;
   /** The previous month has a plan that could be copied into an empty month. */
   hasPrevious: boolean;
+  /** Only on a write's answer when the write succeeded but reading the plan back failed: income, envelopes and the rest are empty, fetch the plan again. */
+  partial?: true;
 }
 
 export function previousMonthOf(month: string): string {
@@ -246,7 +249,36 @@ export async function getEnvelopePlan(userId: string, month?: string): Promise<E
   };
 }
 
-// ── writes ─────────────────────────────────────────────────────────────────
+// ── writes ─────
+
+/**
+ * The answer of a write that has already committed. If reading the plan back fails
+ * the write must not look failed (the caller would retry it, and a move would run
+ * twice), so the answer is a bare view marked `partial` and the client refetches.
+ */
+async function viewAfterWrite(userId: string, month: string): Promise<EnvelopeView> {
+  try {
+    return await getEnvelopePlan(userId, month);
+  } catch (err) {
+    logger.error({ err, month }, "envelope write committed but the plan could not be read back");
+    return {
+      enabled: true,
+      month,
+      currency: "",
+      exponent: 2,
+      income: 0,
+      assigned: 0,
+      unassigned: 0,
+      overAssigned: false,
+      envelopes: [],
+      suggested: [],
+      moves: [],
+      previousMonth: previousMonthOf(month),
+      hasPrevious: false,
+      partial: true,
+    };
+  }
+}
 
 async function writableBase(userId: string) {
   const settings = await readUser(userId);
@@ -334,7 +366,7 @@ export async function assignEnvelopes(userId: string, input: EnvelopeAssignInput
     { returnDocument: "after", updatePipeline: true }
   ).lean<PlanDoc>();
   if (!updated) throw new EnvelopeError("TOO_MANY", `At most ${MAX_ENVELOPES} envelopes in a month`);
-  return getEnvelopePlan(userId, input.month);
+  return viewAfterWrite(userId, input.month);
 }
 
 /** Take `amount` from one envelope and give it to another, in one atomic update. */
@@ -380,7 +412,7 @@ export async function moveBetweenEnvelopes(userId: string, input: EnvelopeMoveIn
         : `${from} has already spent ${floor} of its ${src?.assigned ?? 0}; move less, or allow overspending`
     );
   }
-  return getEnvelopePlan(userId, month);
+  return viewAfterWrite(userId, month);
 }
 
 /** Copy the income and envelopes of another month (default: the month before) into a month with no envelopes yet. */
@@ -402,5 +434,5 @@ export async function copyEnvelopePlan(userId: string, input: EnvelopeCopyInput)
     { $set: { income: src.income ?? 0, envelopes: src.envelopes.map((e) => ({ category: e.category, assigned: e.assigned })), updatedAt: new Date() } }
   );
   if (res.matchedCount === 0) throw new EnvelopeError("PLAN_NOT_EMPTY", `${input.month} already has envelopes`);
-  return getEnvelopePlan(userId, input.month);
+  return viewAfterWrite(userId, input.month);
 }

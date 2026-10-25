@@ -3,7 +3,7 @@ import type { z } from "zod";
 import { requireAuth, type AuthUser } from "@/lib/auth-guard";
 import { ENVELOPE_ERROR_STATUS, EnvelopeError } from "@/lib/envelope-service";
 import { withIdempotency } from "@/lib/integrations/idempotency";
-import { canonicalJson, idempotencyKeyOf } from "@/lib/integrations/write-helpers";
+import { canonicalJson, conflictMessageCheckFirst, idempotencyKeyOf } from "@/lib/integrations/write-helpers";
 import logger from "@/lib/logger";
 
 // The browser routes' shared shape: session auth, a JSON body checked by the
@@ -41,9 +41,12 @@ export async function browserEnvelopeWrite<S extends z.ZodType>(
       endpoint: `envelopes:${label}`,
       key,
       body: { request: canonicalJson(parsed.data) },
-      // No pendingTtlSeconds on purpose: if the move committed but its answer was never stored, the key must stay
-      // pending (a retry gets 409 in progress) rather than expire and move money a second time. Cost: that one key
-      // is blocked for the idempotency TTL; a new attempt with a new key still works.
+      // What is guaranteed: a write that committed never reports an error because the plan could not be read
+      // back (the service answers a `partial` view), so a retry under its key replays the stored answer. If the
+      // process dies after the commit and before the answer is stored, the key stays pending (no
+      // pendingTtlSeconds on purpose, so it cannot expire and run the write again) and a retry answers 409 until
+      // the idempotency TTL; the person checks the plan and uses a new key. A failure before the commit deletes
+      // the pending record, so a retry runs normally.
       execute: async (): Promise<{ status: number; body: Record<string, unknown> }> => {
         try {
           return { status: 200, body: { data: await run(parsed.data, user) } };
@@ -54,7 +57,7 @@ export async function browserEnvelopeWrite<S extends z.ZodType>(
       },
     });
     if (outcome.kind === "conflict") {
-      const message = outcome.reason === "fingerprint_mismatch" ? "Idempotency-Key was already used with a different request" : "A request with this Idempotency-Key is still in progress; retry shortly";
+      const message = conflictMessageCheckFirst(outcome.reason);
       return NextResponse.json({ error: message, code: "IDEMPOTENCY_CONFLICT" }, { status: 409 });
     }
     return NextResponse.json(outcome.body, { status: outcome.status });

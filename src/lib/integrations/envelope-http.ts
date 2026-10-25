@@ -4,7 +4,7 @@ import type { AuthUser } from "@/lib/auth-guard";
 import { ENVELOPE_ERROR_STATUS, EnvelopeError, type EnvelopeErrorCode } from "@/lib/envelope-service";
 import { integrationError, integrationOk, type IntegrationErrorCode } from "@/lib/integrations/response";
 import { withIdempotency } from "@/lib/integrations/idempotency";
-import { canonicalJson, conflictMessage, idempotencyKeyOf, readJsonBody } from "@/lib/integrations/write-helpers";
+import { canonicalJson, conflictMessageCheckFirst, idempotencyKeyOf, readJsonBody } from "@/lib/integrations/write-helpers";
 
 // The shared shape of every envelope write on the integration surface: a valid
 // Idempotency-Key, a JSON body checked by the zod schema, the service call
@@ -57,7 +57,7 @@ export async function envelopeWrite<S extends z.ZodType>(opts: {
       }
     },
   });
-  if (outcome.kind === "conflict") return integrationError("IDEMPOTENCY_CONFLICT", conflictMessage(outcome.reason), requestId);
+  if (outcome.kind === "conflict") return integrationError("IDEMPOTENCY_CONFLICT", conflictMessageCheckFirst(outcome.reason), requestId);
   const body = outcome.body as { errorCode?: EnvelopeErrorCode; message?: string } & Record<string, unknown>;
   if (outcome.status !== 200 && body.errorCode && body.errorCode in INTEGRATION_CODE) {
     return integrationError(INTEGRATION_CODE[body.errorCode], body.message ?? "Request failed", requestId, {

@@ -11,7 +11,8 @@ Purpose: optional zero-based budgeting. Each month the person says what income t
 ## Rules and gotchas
 - Amounts are minor units of the base currency (`currency`, `exponent` in the answer), shown with `formatMinor`; typed text is turned into minor units with that exponent and anything not a number from 0 up to 1e13 is put back as it was.
 - Off by default: with the mode off the page shows a single "Turn on envelopes" card and the API answers an empty plan.
-- The move dialog sends an Idempotency-Key per attempt (kept after a timeout, network drop, 5xx or in-progress conflict, replaced after a definite 4xx refusal with an envelope `code` and whenever the destination, amount or overdraw switch changes) and ignores a second submit while pending, so a double click moves once.
+- Files: `lib/move-key.ts` decides the move dialog's Idempotency-Key, kept per month and source envelope above the dialog (`createMoveKeys`, so closing and reopening finds the same key; the dialog cannot be closed or cancelled while a request is out) (tested in `lib/move-key.test.ts`): the key follows the move (destination, amount, overdraw), is reused for any resend of the same move and replaced only when a different move is sent or after a definite refusal; the form is disabled while a request is out. A `partial` answer to a write means refetch (the hooks already do on settle).
+- The move dialog ignores a second submit while pending, so a double click moves once.
 - Over-assigning is shown in red, never blocked. An envelope is the exact category string, like a budget.
 - Realtime: the `envelopes` resource, and `transactions` and `budgets` events, invalidate `["envelopes"]`.
 

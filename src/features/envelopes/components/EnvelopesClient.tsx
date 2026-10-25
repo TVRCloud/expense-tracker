@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { ArrowRightLeft, ChevronLeft, ChevronRight, Copy, Mails, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { isDefiniteRefusal } from "@/lib/api-client";
+import { createMoveKeys } from "../lib/move-key";
 import { formatMinor } from "@/lib/money-format";
 import { getCategoryColor } from "@/lib/category-colors";
 import { Button } from "@/components/ui/button";
@@ -78,36 +79,44 @@ function AllocationBar({ plan }: { plan: EnvelopePlan }) {
   );
 }
 
-function MoveDialog({ plan, from, onClose }: { plan: EnvelopePlan; from: EnvelopeRow | null; onClose: () => void }) {
+function MoveDialog({ plan, from, onClose, keys }: { plan: EnvelopePlan; from: EnvelopeRow | null; onClose: () => void; keys: ReturnType<typeof createMoveKeys> }) {
   const move = useMoveEnvelopeMoney();
   const [to, setTo] = useState("");
   const [text, setText] = useState("");
   const [overdraw, setOverdraw] = useState(false);
-  // One key per attempt at one move: kept through anything that may have run (a timeout, 5xx or in-progress conflict, so a
-  // retry of the same move replays instead of moving twice), replaced after a definite refusal and whenever the person
-  // changes the destination, amount or overdraw switch (a different move is a different request).
-  const [key, setKey] = useState(() => crypto.randomUUID());
+  // See lib/move-key.ts: the key follows the move, not the edits, lives above this dialog (closing and reopening
+  // it finds the same key), and the form is locked while a request is out.
   useEffect(() => {
     setTo("");
     setText("");
     setOverdraw(false);
-    setKey(crypto.randomUUID());
   }, [from?.category]);
   if (!from) return null;
   const others = plan.envelopes.filter((e) => e.category !== from.category);
   const minor = toMinor(text, plan.exponent);
+  const moveId = `${plan.month}|${from.category}`;
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!from || !to || !minor || minor < 1 || move.isPending) return;
     move.mutate(
-      { month: plan.month, from: from.category, to, amount: minor, allowOverdraw: overdraw || undefined, key },
       {
-        onSuccess: onClose,
+        month: plan.month,
+        from: from.category,
+        to,
+        amount: minor,
+        allowOverdraw: overdraw || undefined,
+        key: keys.get(moveId).keyFor({ to, amount: minor, allowOverdraw: overdraw }),
+      },
+      {
+        onSuccess: () => {
+          keys.done(moveId);
+          onClose();
+        },
         onError: (err) => {
           // Keep the key unless the server refused outright: after a timeout, a dropped
           // connection, a 5xx or an in-progress conflict the first try may have run.
-          if (isDefiniteRefusal(err)) setKey(crypto.randomUUID());
+          if (isDefiniteRefusal(err)) keys.get(moveId).refused();
           toast.error(err.message);
         },
       }
@@ -115,7 +124,7 @@ function MoveDialog({ plan, from, onClose }: { plan: EnvelopePlan; from: Envelop
   }
 
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
+    <Dialog open onOpenChange={(open) => !open && !move.isPending && onClose()}>
       <DialogContent>
         <form onSubmit={submit} className="space-y-4">
           <DialogHeader>
@@ -124,7 +133,7 @@ function MoveDialog({ plan, from, onClose }: { plan: EnvelopePlan; from: Envelop
               {formatMinor(from.assigned, plan.currency)} assigned, {formatMinor(from.spent, plan.currency)} spent.
             </DialogDescription>
           </DialogHeader>
-          <Select value={to} onValueChange={(v) => { setTo(v); setKey(crypto.randomUUID()); }}>
+          <Select value={to} onValueChange={setTo} disabled={move.isPending}>
             <SelectTrigger aria-label="Move to"><SelectValue placeholder="Move to…" /></SelectTrigger>
             <SelectContent>
               {others.map((e) => (
@@ -132,13 +141,13 @@ function MoveDialog({ plan, from, onClose }: { plan: EnvelopePlan; from: Envelop
               ))}
             </SelectContent>
           </Select>
-          <Input aria-label="Amount to move" inputMode="decimal" placeholder="Amount" value={text} onChange={(e) => { setText(e.target.value); setKey(crypto.randomUUID()); }} autoFocus />
+          <Input aria-label="Amount to move" inputMode="decimal" placeholder="Amount" value={text} onChange={(e) => setText(e.target.value)} disabled={move.isPending} autoFocus />
           <label className="flex items-center gap-3 text-sm" style={{ color: "var(--ink-2)" }}>
-            <Switch checked={overdraw} onCheckedChange={(v) => { setOverdraw(v); setKey(crypto.randomUUID()); }} aria-label="Allow taking money that is already spent" />
+            <Switch checked={overdraw} onCheckedChange={setOverdraw} disabled={move.isPending} aria-label="Allow taking money that is already spent" />
             Allow taking money that is already spent
           </label>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="button" variant="outline" onClick={onClose} disabled={move.isPending}>Cancel</Button>
             <Button type="submit" disabled={move.isPending || !to || !minor}>Move</Button>
           </DialogFooter>
         </form>
@@ -154,6 +163,7 @@ export function EnvelopesClient() {
   const copy = useCopyEnvelopePlan();
   const setMode = useSetEnvelopeMode();
   const [moving, setMoving] = useState<EnvelopeRow | null>(null);
+  const moveKeys = useRef(createMoveKeys());
   const [name, setName] = useState("");
   const [amount, setAmount] = useState("");
 
@@ -320,7 +330,7 @@ export function EnvelopesClient() {
         </Button>
       </div>
 
-      <MoveDialog plan={plan} from={moving} onClose={() => setMoving(null)} />
+      <MoveDialog plan={plan} from={moving} onClose={() => setMoving(null)} keys={moveKeys.current} />
     </div>
   );
 }
