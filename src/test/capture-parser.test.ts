@@ -242,5 +242,13 @@ describe("parseCapture: message types", () => {
   ])("never books a debit that is still to come: %s", (text) => {
     expect(parseCapture(text, RECEIVED).kind).toBe("ignored");
   });
+
+  it.each([
+    ["Pre-debit notification: Rs 499 will be debited from A/c XX1234 on 28-09-26 towards Netflix mandate received on 01-01-26"],
+    ["Refund of Rs 499 to be credited to your A/c XX1234 in 5 days"],
+    ["Rs 499 will be credited to your A/c XX1234 as refund within 7 days"],
+  ])("never books money that has not moved yet: %s", (text) => {
+    expect(parseCapture(text, RECEIVED).kind).toBe("ignored");
+  });
 });
 

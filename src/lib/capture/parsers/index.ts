@@ -70,7 +70,7 @@ const AMOUNT = String.raw`(?:(Rs\.?|INR|₹|${FOREIGN}|US\$|\$|€|£)\s*([\d,]+
 // "will be debited", "scheduled to be debited": a notice, never a debit.
 const DEBIT_WORDS =
   /(?<!\b(?:will|to|shall)\s+be\s+)\b(debited|debit(?=\s+by\s+transfer)|spent|paid|sent|withdrawn|withdrawal|wdl|purchase|transferred|deducted|payment of|txn of|used|dr(?=\.?\s*(?:Rs|INR|₹|\d)))\b/i;
-const CREDIT_WORDS = /(?<!\b(?:will|to|shall)\s+be\s+)\b(credited|(?<!\brequest\s+(?:has\s+been\s+|is\s+|was\s+)?)received|deposited|refund(?:ed)?|reversed|cashback of|cr(?=\.?\s*(?:Rs|INR|₹|\d)))\b/i;
+const CREDIT_WORDS = /(?<!\b(?:will|to|shall)\s+be\s+)\b(credited|(?<!\b(?:request|mandate)\s+(?:has\s+been\s+|is\s+|was\s+)?)received|deposited|refund(?:ed)?|reversed|cashback of|cr(?=\.?\s*(?:Rs|INR|₹|\d)))\b/i;
 
 /** A fraud warning many alerts end with ("Never share OTP/PIN with anyone"). Removed before the OTP check, so a
  * real debit that carries it is not thrown away as an OTP. Same rule as the phone's `CaptureFilter.OTP_WARNING`. */
@@ -108,12 +108,14 @@ function ignoreReason(text: string): IgnoredParse["reason"] | null {
   }
   // Money that already moved: a past-tense debit or credit ("if debited" is a promise, not a debit).
   const moved =
-    /(?<!\bif\s+(?:the\s+)?(?:amount\s+)?(?:is\s+|gets\s+)?|\b(?:will|to|shall)\s+be\s+|\brequest\s+(?:has\s+been\s+|is\s+|was\s+)?)\b(debited|spent|deducted|withdrawn|wdl|sent|paid|transferred|received|deposited|credited|reversed|debit by transfer|has been refunded|is refunded|refunded to)\b/i.test(
+    /(?<!\bif\s+(?:the\s+)?(?:amount\s+)?(?:is\s+|gets\s+)?|\b(?:will|to|shall)\s+be\s+|\b(?:request|mandate)\s+(?:has\s+been\s+|is\s+|was\s+)?)\b(debited|spent|deducted|withdrawn|wdl|sent|paid|transferred|received|deposited|credited|reversed|debit by transfer|has been refunded|is refunded|refunded to)\b/i.test(
       text
     );
   // A notice before a debit (RBI pre-debit and mandate alerts), or a debit that could not happen, moved nothing.
+  // A pre-debit notification never moves money, whatever else it says ("mandate received on ...").
+  if (/\bpre-?debit\b/i.test(text)) return "reminder";
   if (
-    /\b(scheduled|will be (?:debited|processed|deducted|charged|presented)|upcoming|pre-?debit|insufficient (?:balance|funds))\b/i.test(text) &&
+    /\b(scheduled|(?:will|to) be (?:debited|credited|processed|deducted|charged|presented)|upcoming|insufficient (?:balance|funds))\b/i.test(text) &&
     !moved
   ) {
     return "reminder";
