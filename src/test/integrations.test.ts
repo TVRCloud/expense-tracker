@@ -823,6 +823,33 @@ describe("capture ingest and reconcile", () => {
     expect(await liveTxns(actor.id)).toHaveLength(1);
   });
 
+  it("books a debit that ends with a fraud warning about OTPs (ticket 150)", async () => {
+    const { actor, account } = await setup();
+    const res = await ingest(actor, "sms", `${SMS}. Never share OTP/PIN with anyone.`, T0);
+    expect(res.body.status).toBe("created");
+    expect(await balanceOf(account._id)).toBe(100000 - 25000);
+  });
+
+  it("sends a card spend abroad to review with no rupee amount filled in (ticket 150)", async () => {
+    const { actor, account } = await setup();
+    const res = await ingest(actor, "sms", "USD 12.99 spent on your Card XX1234 at NETFLIX.COM on 26-09-26. Avl Lmt INR 1,02,340.00", T0);
+    expect(res.body).toMatchObject({ status: "queued", reason: "foreign_currency" });
+    expect(await liveTxns(actor.id)).toHaveLength(0);
+    expect(await balanceOf(account._id)).toBe(100000);
+    const { getReviewInbox } = await import("@/lib/reconcile/inbox");
+    const inbox = (await getReviewInbox(actor.id)) as unknown as { couldntMatch: { reason: string; parsed: { amount: number | null } }[] };
+    const item = inbox.couldntMatch.find((c) => c.reason === "foreign_currency");
+    expect(item?.parsed.amount).toBeNull();
+  });
+
+  it("sends a credit card bill payment to review, never as income (ticket 150)", async () => {
+    const { actor, account } = await setup();
+    const res = await ingest(actor, "sms", "Payment of Rs 25,000.00 received towards your Credit Card XX1234 on 26-09-26. Thank you.", T0);
+    expect(res.body).toMatchObject({ status: "queued", reason: "card_payment" });
+    expect(await liveTxns(actor.id)).toHaveLength(0);
+    expect(await balanceOf(account._id)).toBe(100000);
+  });
+
   it("ignores an OTP message and creates nothing", async () => {
     const { actor } = await setup();
     const res = await ingest(actor, "sms", "123456 is your OTP for txn of Rs 500 at AMAZON. Do not share.", T0);

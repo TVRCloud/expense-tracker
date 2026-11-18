@@ -79,7 +79,8 @@ export function serializeCapture(c: RawCapture) {
       kind: c.parse?.kind ?? "unknown",
       confidence: c.parse?.confidence ?? 0,
       type: (f.type as string) ?? null,
-      amount: (f.amountMinor as number) ?? null,
+      // A spend charged in another currency has no rupee figure yet: the person enters what the bank billed.
+      amount: typeof f.currency === "string" && f.currency !== "INR" ? null : ((f.amountMinor as number) ?? null),
       last4: (f.last4 as string) ?? null,
       merchant: (f.merchant as string) ?? null,
       ref: (f.ref as string) ?? null,
