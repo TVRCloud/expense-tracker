@@ -1,4 +1,4 @@
-# Finance OS
+# Finance App
 
 A production-quality full-stack expense tracker built with Next.js 15 App Router, TypeScript, shadcn/ui, and MongoDB.
 
