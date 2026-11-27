@@ -27,5 +27,20 @@ describe("Punjab & Sind Bank parser", () => {
       text: "PSB000000781934523 A/C No **7326 Credited with Rs 437--Vendor Amount (CLR BAL 7627.75CR)(04-11-2026 15:20:11) Punjab&Sind Bank",
       want: { parserId: "psb", type: "income", amountMinor: 43700, last4: "7326", merchant: undefined },
     },
+    {
+      name: "a loan account's digits are never the account",
+      text: "PSB000000781934524 Loan A/c No **9917 Debited with Rs 5,415--EMI (CLR BAL 120415.00DR)(04-11-2026 10:41:22) Punjab&Sind Bank",
+      want: { parserId: "psb" },
+    },
+    {
+      name: "a phone number is never part of the payee",
+      text: "PSB000000781934525 A/c No **7326 Debited with Rs 85--UPI/DR/631955667790/RAVI 9812345678/YESB/88880000111122/U (CLR BAL 6499.75CR)(04-11-2026 13:05:45)-Punjab&Sind Bank",
+      want: { parserId: "psb", type: "expense", amountMinor: 8500, merchant: "RAVI" },
+    },
+    {
+      name: "an IMPS credit names the sender",
+      text: "PSB000000781934526 A/c No **7326 Credited with Rs 2,240--IMPS/631955667791/RAVI KUMAR/SBIN/U (CLR BAL 8739.75CR)(04-11-2026 14:05:45)-Punjab&Sind Bank",
+      want: { parserId: "psb", type: "income", amountMinor: 224000, merchant: "RAVI KUMAR" },
+    },
   ]);
 });

@@ -2,9 +2,10 @@
 // a NEFT credit names the sender between slashes ("UTR:<code>/NEFT/NAME /").
 
 import type { FoundAccount } from "../extract/account";
-import { cleanParty, KnownBankParser, NAME, sharedParty, verbAccount } from "./known";
+import { cleanParty, NAME, sharedParty, verbAccount } from "./known";
+import { nameOnly, PublicSectorParser } from "./public-sector-base";
 
-export class IndianBankParser extends KnownBankParser {
+export class IndianBankParser extends PublicSectorParser {
   readonly id = "indian";
   readonly bankName = "Indian Bank";
   override readonly senderIds = ["INDBNK"];
@@ -27,7 +28,8 @@ export class IndianBankParser extends KnownBankParser {
   protected override merchant(text: string, type: "income" | "expense"): string | undefined {
     const sent = text.match(new RegExp(String.raw`\bto\s${NAME}\.RRN\b`, "i"));
     const neft = text.match(/\/NEFT\/([^/]{1,60}?)\s?\//i);
-    return cleanParty(sent?.[1]) ?? cleanParty(neft?.[1]) ?? sharedParty(super.merchant(text, type));
+    if (sent || neft) return nameOnly(sent?.[1] ?? neft?.[1]);
+    return nameOnly(sharedParty(super.merchant(text, type)));
   }
 
   protected override ref(text: string): string | undefined {

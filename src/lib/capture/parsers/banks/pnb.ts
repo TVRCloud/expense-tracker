@@ -4,9 +4,10 @@
 // accounts ("Your a/c no XX6731 is debited … and a/c XX5582 credited"): the person's is the one next to the verb.
 
 import type { FoundAccount } from "../extract/account";
-import { cleanParty, KnownBankParser, NAME, sharedParty, verbAccount } from "./known";
+import { cleanParty, NAME, sharedParty, verbAccount } from "./known";
+import { nameOnly, PublicSectorParser } from "./public-sector-base";
 
-export class PnbParser extends KnownBankParser {
+export class PnbParser extends PublicSectorParser {
   readonly id = "pnb";
   readonly bankName = "Punjab National Bank";
   override readonly senderIds = ["PNBSMS", "PNBBNK", "PNBCCD"];
@@ -32,7 +33,8 @@ export class PnbParser extends KnownBankParser {
     const thru = text.match(new RegExp(String.raw`\bto\s${NAME}\sthru\sUPI\b`, "i"));
     const shared = sharedParty(super.merchant(text, type));
     // A help line ("Report it to the bank", "forward this SMS to report") is never the payee.
-    return cleanParty(thru?.[1]) ?? (shared && !/^(?:the\s)?bank\b/i.test(shared) ? shared : undefined);
+    if (thru) return nameOnly(thru[1]);
+    return shared && !/^(?:the\s)?bank\b|\bATM\b/i.test(shared) ? nameOnly(shared) : undefined;
   }
 
   protected override ref(text: string): string | undefined {
@@ -40,6 +42,10 @@ export class PnbParser extends KnownBankParser {
   }
 
   protected override atm(text: string): boolean {
-    return super.atm(text) || /\bdebited\b[^]{0,80}?\bthru\scard\s[X*]{0,8}\d{4}\b[^]{0,120}?\bPNB\sATM\b/i.test(text);
+    if (super.atm(text)) return true;
+    // Cash taken "at PNB ATM" with the card; never a charge or fee at an ATM, a shop near one, or a reversal.
+    if (/\b(?:charges?|fees?|enquiry|revers(?:al|ed)|not\sdispensed|refund)\b/i.test(text)) return false;
+    // "at PNB ATM", "at SBI ATM": cash from an ATM; never "at non-PNB ATM" (a fee) or a shop "near" one.
+    return /\bdebited\b[^]{0,80}?\bthru\scard\s[X*]{0,8}\d{4}\b[^]{0,40}?\bat\s(?!non-)(?:[A-Za-z]{2,12}\s)?ATM\b/i.test(text);
   }
 }

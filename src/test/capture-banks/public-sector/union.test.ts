@@ -24,8 +24,13 @@ describe("Union Bank of India parser", () => {
     },
     {
       name: "an offer is ignored",
-      text: "Get 15% cashback offer on Union Bank Debit Card. Shop for Rs 750 or more. T&C apply.",
+      text: "Festive offer: shop with your Union Bank Debit Card above Rs 1,750 and win a voucher. Click here to know more.",
       want: { kind: "ignored", reason: "promo" },
+    },
+    {
+      name: "a phone number after the payee is never kept",
+      text: "Union Bank of India A/c*5093 Dr Rs265.00 on 04-11-26 14:10 by MB 6601234569 RAVI 9812345678, Bal Rs2,840.80",
+      want: { parserId: "union", type: "expense", amountMinor: 26500, merchant: "RAVI", ref: undefined },
     },
   ]);
 });

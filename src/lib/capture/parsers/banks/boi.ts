@@ -5,11 +5,12 @@
 
 import type { FoundAccount } from "../extract/account";
 import type { FoundDirection } from "../extract/direction";
-import { cleanParty, KnownBankParser, NAME, sharedParty, verbAccount } from "./known";
+import { cleanParty, NAME, sharedParty, verbAccount } from "./known";
+import { nameOnly, PublicSectorParser } from "./public-sector-base";
 
 const DEBIT_AND_CREDIT_TO = /\bdebited\sA\/c\s?XX\d{4}\sand\scredited\sto\s/i;
 
-export class BoiParser extends KnownBankParser {
+export class BoiParser extends PublicSectorParser {
   readonly id = "boi";
   readonly bankName = "Bank of India";
   override readonly senderIds = ["BOIIND", "BOIBNK"];
@@ -21,7 +22,8 @@ export class BoiParser extends KnownBankParser {
 
   protected override direction(text: string): FoundDirection | null {
     // The payee is credited, the person's account debited: money out, and not an unsure read.
-    if (DEBIT_AND_CREDIT_TO.test(text)) return { type: "expense", ambiguous: false };
+    // Not when it has been reversed or refunded: then the shared rules (and Review) decide.
+    if (DEBIT_AND_CREDIT_TO.test(text) && !/\b(?:revers(?:al|ed)|refund(?:ed)?)\b/i.test(text)) return { type: "expense", ambiguous: false };
     return super.direction(text);
   }
 
@@ -37,6 +39,7 @@ export class BoiParser extends KnownBankParser {
     if (/\bCash\sAcceptor\b/i.test(text)) return undefined;
     const payee = text.match(new RegExp(String.raw`\band\scredited\sto\s${NAME}\svia\b`, "i"));
     const neft = text.match(/\bBy\sNEFTINWARD\s[A-Za-z0-9]{1,30}\/([^./]{1,60}?)\s?\./i);
-    return cleanParty(payee?.[1]) ?? cleanParty(neft?.[1]) ?? sharedParty(super.merchant(text, type));
+    if (payee || neft) return nameOnly(payee?.[1] ?? neft?.[1]);
+    return nameOnly(sharedParty(super.merchant(text, type)));
   }
 }

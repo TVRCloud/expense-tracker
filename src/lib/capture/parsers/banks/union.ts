@@ -4,12 +4,13 @@
 import type { FoundAmount } from "../extract/amount";
 import type { FoundAccount } from "../extract/account";
 import type { FoundFigure } from "../extract/balance";
-import { cleanParty, KnownBankParser, sharedParty, verbAccount } from "./known";
+import { cleanParty, sharedParty, verbAccount } from "./known";
+import { nameOnly, PublicSectorParser } from "./public-sector-base";
 
 /** "Rs:740.00" reads as "Rs 740.00" (same length, so positions do not move). */
 const plainRupees = (text: string) => text.replace(/\bRs:/gi, "Rs ");
 
-export class UnionParser extends KnownBankParser {
+export class UnionParser extends PublicSectorParser {
   readonly id = "union";
   readonly bankName = "Union Bank of India";
   override readonly senderIds = ["UNIONB"];
@@ -37,7 +38,8 @@ export class UnionParser extends KnownBankParser {
 
   protected override merchant(text: string, type: "income" | "expense"): string | undefined {
     const mb = text.match(/\bby\sMB\s\d{6,12}\s(\S[^,.;]{0,58}?),/i);
-    if (mb) return cleanParty(mb[1]);
+    // A phone or account number after the name is never part of it ("RAVI 9812345678").
+    if (mb) return nameOnly(mb[1]);
     if (/\bby\sMob\sBk\b/i.test(text)) return undefined;
     return sharedParty(super.merchant(plainRupees(text), type));
   }

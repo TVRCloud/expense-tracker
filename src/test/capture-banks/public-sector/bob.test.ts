@@ -41,5 +41,42 @@ describe("Bank of Baroda parser", () => {
       want: { parserId: "bob", type: "expense", amountMinor: 231575, last4: "3381", instrument: "card", merchant: "CROMA ONLINE" },
       auto: true,
     },
+    {
+      name: "a 'Cr' after the balance is the balance's sign, never the direction",
+      text: "Rs.545.00 debited from A/c XX7193 on 08-11-26 to SURYA STORES. Avl Bal Rs.9,247.40 Cr. -Bank of Baroda",
+      source: { sender: "AD-BOBSMS-S" },
+      want: { parserId: "bob", type: "expense", amountMinor: 54500, last4: "7193", merchant: "SURYA STORES" },
+    },
+    {
+      name: "a 'Dr' after the balance never makes a credit an expense",
+      text: "Rs.2,035.00 credited to A/c XX7193 on 08-11-26 by RAVI MENON. Bal INR 1,145.00 Dr -BOB",
+      source: { sender: "AD-BOBSMS-S" },
+      want: { parserId: "bob", type: "income", amountMinor: 203500, last4: "7193" },
+    },
+    {
+      name: "a spaced 'Dr.' after the available balance",
+      text: "Rs.2,655.00 Credited to A/c XX558812 on 01-11-2026. AvlBal:Rs 7,786.10 Dr. -Bank of Baroda",
+      want: { parserId: "bob", type: "income", amountMinor: 265500, last4: "8812" },
+    },
+    {
+      name: "a BOBCARD bill paid from the account is a card payment in Review",
+      text: "Rs.12,450.00 Dr. from A/c XX558812 for BOBCARD payment. Ref:631955120777 -Bank of Baroda",
+      want: { parserId: "bob", cardPayment: true },
+      auto: false,
+    },
+    {
+      name: "a payment received on the BOBCARD is a card payment with the card's digits",
+      text: "Thank you for the payment of Rs 12,450.00 on your BOBCARD ending 3381. Avl limit Rs 61,200 -BOBCARD",
+      source: { sender: "AD-BOBCRD-S" },
+      want: { parserId: "bob", cardPayment: true, last4: "3381" },
+      auto: false,
+    },
+    {
+      name: "a transfer to the BOBCARD never names the card as the payee",
+      text: "Rs.12,450.00 transferred from A/c ...7193 to:BOBCARD 3381. Total Bal:Rs.9,247.40CR. -Bank of Baroda",
+      source: { sender: "AD-BOBSMS-S" },
+      want: { parserId: "bob", cardPayment: true, merchant: undefined },
+      auto: false,
+    },
   ]);
 });
