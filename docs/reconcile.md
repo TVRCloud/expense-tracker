@@ -22,7 +22,7 @@ Every message is stored in `captured_messages`. The raw text is encrypted with `
 ## Ingest rules
 
 1. **Same text again, from any channel, at any time:** `duplicate`. Matched by the unique content hash of the normalized text, so there is no 24h idempotency window.
-2. **OTP, offer, due reminder, collect request:** `ignored`.
+2. **OTP, offer, due reminder, collect request:** `ignored`. A mandate notice (set up, changed, paused, resumed, revoked) and a fund house's SIP, allotment or redemption note are `ignored` too, with reason `mandate` or `investment`: kept for the record, never booked and never in Review (the bank sends its own debit). A debit made under a mandate is a normal transaction.
 3. **Bank notification with no SMS yet:** held as `pending_sms` for 15 minutes.
    - If the matching SMS arrives in that time, the transaction uses the **SMS values**. The notification is kept as a `supporting` record.
    - If no SMS arrives, it becomes a transaction with `source: notification`, labelled "lower priority, verify".
@@ -112,7 +112,7 @@ const replies = {
     : '✅ Logged that as a transaction. Check it in Reconcile when you get a moment.',
   updated: '🔄 Updated an existing transaction with this SMS (SMS is the source of truth).',
   duplicate: '👍 Already have this one, nothing added.',
-  ignored: 'ℹ️ Not a transaction (OTP, offer or reminder), ignored.',
+  ignored: 'ℹ️ Not a transaction (OTP, offer, reminder, mandate or fund notice), ignored.',
   queued: "📥 Couldn't match this automatically. It's in Reconcile for you to check.",
 };
 return [{ json: { success: true, reply: replies[d.status] ?? replies.queued } }];

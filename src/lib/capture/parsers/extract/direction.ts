@@ -13,7 +13,37 @@ export interface FoundDirection {
   ambiguous: boolean;
 }
 
+// Money into a loan ("Your loan account XX6618 is credited ... by debit to A/c XX7305", "EMI ... credited to your loan
+// account"): it left the person's own account, so it is spending from that account, never income. A disbursal (the
+// loan paying out to the person) is the other way round and keeps the usual reading.
+const LOAN_CREDITED =
+  /\bloan\s+(?:a\/c|acct|account)(?:\s*no\.?)?\s*[x*]{0,12}\d{0,16}\s+(?:is\s+|has\s+been\s+|was\s+)?credited\b|\bcredited\s+(?:to|in|into|towards)\s+(?:your\s+)?loan\s+(?:a\/c|acct|account)\b/i;
+const DEBIT_FROM_ACCOUNT =
+  /\b(?:by\s+(?:NACH\s+|ECS\s+|auto\s?-?)?debit\s+(?:to|from|of)|debited\s+(?:from|to))\s+(?:your\s+)?(?:[A-Za-z]{2,15}\s+){0,3}?(?:a\/c|acct|account)\b/i;
+// The loan paying out or being topped up by someone else: a disbursal ("being loan amount ... transferred to your
+// a/c"), cashback, subvention, interest or a subsidy. Those keep the usual reading.
+const PAID_OUT =
+  /\bdisburs|\bloan\s+amount\b|\b(?:transferred|credited|paid)\s+(?:to|in|into)\s+your\s+(?:savings\s+)?(?:a\/c|acct|account)\b/i;
+// Interest, cashback, subvention or a subsidy as the thing credited ("Interest of Rs 115 credited ...").
+// Only as the subject of its own "credited" sentence, so an EMI's "(principal Rs 1,980, interest Rs 335)" or a
+// closing "Interest Rs 315." is not one.
+const TOP_UP_SUBJECT =
+  /(?:^|[.;!]\s{1,3})(?:an?\s|your\s)?(?:[A-Za-z]{2,15}\s)?(?:interest|cashback|subvention|subsidy)\s(?:of\s|amount\s(?:of\s)?)?(?:Rs\.?|INR|₹)[^.;!]{0,60}?\bcredited\b/i;
+const TOP_UP_WORD = /\b(?:cashback|subvention|interest|subsidy)\b/i;
+// An EMI or a prepayment names interest as a part of it ("EMI incl. interest"): still a repayment.
+const REPAYMENT_WORD = /\b(?:EMI|repayment|re-?payment|prepayment|part-?prepayment|instal(?:l)?ments?|foreclosure)\b/i;
+function notARepayment(text: string): boolean {
+  // A payout, or interest, cashback, subvention or a subsidy as the thing credited ("Interest subsidy of Rs 1,200
+  // credited ... Your EMI stays the same").
+  if (PAID_OUT.test(text) || TOP_UP_SUBJECT.test(text)) return true;
+  // An EMI or prepayment, or money debited from the person's account, is a repayment whatever interest it names.
+  if (REPAYMENT_WORD.test(text) || DEBIT_FROM_ACCOUNT.test(text)) return false;
+  return TOP_UP_WORD.test(text);
+}
+
 export function findDirection(text: string): FoundDirection | null {
+  // Unsure which account paid unless the message says it was debited: then it is checked in Review.
+  if (LOAN_CREDITED.test(text) && !notARepayment(text)) return { type: "expense", ambiguous: !DEBIT_FROM_ACCOUNT.test(text) };
   const debit = text.search(DEBIT_WORDS);
   const credit = text.search(CREDIT_WORDS);
   if (debit === -1 && credit === -1) return null;

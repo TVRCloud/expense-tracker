@@ -626,6 +626,15 @@ async function decide(
     );
     return { httpStatus: 200, body: { status: "ignored", captureId: capture._id.toString(), reason: parse.reason } };
   }
+  // A mandate notice or a fund house's note: no money moved in this message (the bank sends its own debit), so it is
+  // kept for the record, never booked and never put in Review (ticket 157).
+  if (parse.kind === "mandate" || parse.kind === "investment") {
+    await CapturedMessage.updateOne(
+      { _id: capture._id },
+      { $set: { outcome: "ignored", reason: parse.kind, status: "resolved", resolvedAt: new Date() } }
+    );
+    return { httpStatus: 200, body: { status: "ignored", captureId: capture._id.toString(), reason: parse.kind } };
+  }
   if (parse.kind === "unknown") return queue(capture, "unparsed");
   if (parse.kind === "loan_emi_payment") return decideLoan(input.user, capture, parse);
   return decideMoney(input.user, capture, parse, accountId, { promoting: false });

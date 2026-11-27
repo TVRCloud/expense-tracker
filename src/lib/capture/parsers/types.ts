@@ -1,7 +1,7 @@
 // Shapes every capture parser returns. Kept apart from the parsers so a bank
 // parser, the generic fallback and ingest all share one definition.
 
-export const PARSER_VERSION = 5;
+export const PARSER_VERSION = 6;
 export const CONFIDENCE_AUTO_CREATE = 0.8;
 
 /** Where a message came from: the SMS sender id ("VM-HDFCBK") or, for a notification, the app label and package. */
@@ -48,6 +48,42 @@ export interface LoanEmiParse {
   period?: string;
 }
 
+/** A mandate (UPI AutoPay, e-mandate, NACH, standing instruction) set up, changed, paused, resumed or revoked. No money
+ * moved: ingest stores it with reason "mandate", never as a transaction and never in Review (ticket 157). A debit made
+ * under a mandate is a normal money parse. */
+export interface MandateParse {
+  kind: "mandate";
+  parserId: "mandate";
+  confidence: number;
+  event: "created" | "modified" | "revoked" | "paused" | "resumed";
+  merchant?: string;
+  /** The most the mandate may take each time, in paise (INR only). */
+  maxAmountMinor?: number;
+  /** "monthly", "weekly", "yearly", "as presented" ... as printed, lower case. */
+  frequency?: string;
+  bankName?: string;
+  last4?: string;
+  startDate?: Date;
+  validUntil?: Date;
+}
+
+/** A fund house or registrar's message about a mutual fund SIP, purchase, unit allotment, redemption or switch.
+ * Information only: the bank sends its own debit or credit, so booking this too would count the money twice. Stored
+ * with reason "investment" (ticket 157). Units and NAV stay strings as printed; money is in paise. */
+export interface InvestmentParse {
+  kind: "investment";
+  parserId: "investment";
+  confidence: number;
+  event: "sip" | "purchase" | "allotment" | "redemption" | "switch";
+  fundName?: string;
+  amountMinor?: number;
+  units?: string;
+  nav?: string;
+  /** Last four digits of the folio only, never the whole number. */
+  folioLast4?: string;
+  date?: Date;
+}
+
 export interface IgnoredParse {
   kind: "ignored";
   parserId: "ignore";
@@ -61,4 +97,4 @@ export interface UnknownParse {
   confidence: 0;
 }
 
-export type CaptureParse = MoneyParse | LoanEmiParse | IgnoredParse | UnknownParse;
+export type CaptureParse = MoneyParse | LoanEmiParse | MandateParse | InvestmentParse | IgnoredParse | UnknownParse;
