@@ -33,12 +33,13 @@ describe("sourceKey", () => {
 describe("buildReport", () => {
   it("counts each outcome per sender, most misses first, and what changed since capture", () => {
     const rows = buildReport([
-      { text: BOOKED, receivedAt: AT, channel: "sms", sender: "VM-HDFCBK", storedKind: "money" },
-      { text: OTP, receivedAt: AT, channel: "sms", sender: "AD-HDFCBK", storedKind: "money" },
-      { text: REVIEW, receivedAt: AT, channel: "sms", sender: "VM-ICICIT" },
-      { text: UNKNOWN, receivedAt: AT, channel: "sms", sender: "VM-ICICIT" },
+      // Senders no bank parser owns, so the generic parser reads them whatever banks exist.
+      { text: BOOKED, receivedAt: AT, channel: "sms", sender: "VM-OTHRBK", storedKind: "money" },
+      { text: OTP, receivedAt: AT, channel: "sms", sender: "AD-OTHRBK", storedKind: "money" },
+      { text: REVIEW, receivedAt: AT, channel: "sms", sender: "VM-NOBANK" },
+      { text: UNKNOWN, receivedAt: AT, channel: "sms", sender: "VM-NOBANK" },
     ]);
-    expect(rows.map((r) => r.source)).toEqual(["ICICIT", "HDFCBK"]);
+    expect(rows.map((r) => r.source)).toEqual(["NOBANK", "OTHRBK"]);
     expect(rows[1]).toMatchObject({ total: 2, booked: 1, ignored: 1, changed: 1, bankParser: 0 });
     expect(rows[0]).toMatchObject({ total: 2, review: 1, unknown: 1, changed: 0 });
   });
@@ -54,6 +55,11 @@ describe("buildReport", () => {
       { text: OTP, receivedAt: AT, channel: "sms", sender: "VM-NAVIFN" },
     ]);
     expect(row).toMatchObject({ loan: 1, ignored: 1, bankParser: 0 });
+  });
+
+  it("counts what a registered bank parser read", () => {
+    const [row] = buildReport([{ text: BOOKED, receivedAt: AT, channel: "sms", sender: "VM-HDFCBK" }]);
+    expect(row).toMatchObject({ source: "HDFCBK", bankParser: 1 });
   });
 
   it("counts what a bank parser read", () => {

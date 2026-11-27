@@ -29,7 +29,10 @@ export const SHARED_PARSER_IDS: ReadonlySet<string> = new Set(["ignore", "navi_e
 
 /** A parse function over a given set of bank parsers. `parseCapture` is this over BANK_PARSERS; tests pass their own. */
 export function createCaptureParser(parsers: readonly BankParser[]) {
-  return function parse(text: string, receivedAt: Date = new Date(), source?: MessageSource): CaptureParse {
+  return function parse(raw: string, receivedAt: Date = new Date(), source?: MessageSource): CaptureParse {
+    // Styled Unicode letters (mathematical bold, full width) read as plain text, so an OTP written in them is still
+    // ignored and a bank alert in them is still read.
+    const text = raw.normalize("NFKC");
     const reason = ignoreReason(text);
     if (reason) return { kind: "ignored", parserId: "ignore", confidence: 1, reason };
 

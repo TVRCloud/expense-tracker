@@ -57,7 +57,7 @@ export abstract class BankParser {
     if (parsedDate) confidence += 0.1;
     if (ref || merchant) confidence += 0.05;
     if (direction.ambiguous) confidence -= 0.15;
-    confidence += this.confidenceBonus;
+    confidence += this.confidenceBonusFor(text);
     // Charged abroad: today's rate is not what the bank billed, so the person confirms the rupee amount.
     if (amount.currency !== "INR") confidence = Math.min(confidence, 0.6);
     // Paying a card bill is a move between the person's own accounts: always reviewed, never booked as income.
@@ -115,6 +115,12 @@ export abstract class BankParser {
 
   protected ref(text: string): string | undefined {
     return findRef(text);
+  }
+
+  /** The bonus for this message. A bank parser returns its bonus only when the message has one of its own known
+   * shapes, so a sender alone never earns it. Defaults to the fixed `confidenceBonus`. */
+  protected confidenceBonusFor(_text: string): number {
+    return this.confidenceBonus;
   }
 
   protected atm(text: string): boolean {

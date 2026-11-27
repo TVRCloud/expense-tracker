@@ -86,9 +86,9 @@ describe("findBankParser", () => {
     expect(findBankParser(undefined, parsers)).toBeNull();
   });
 
-  it("ships with no bank parsers yet, so every message still reads as before", () => {
-    expect(BANK_PARSERS).toHaveLength(0);
-    expect(money(parseCapture(SPEND, RECEIVED, { sender: "VM-HDFCBK" })).parserId).toBe("generic");
+  it("registers the six bank parsers, and a sender none of them owns still reads with the generic parser", () => {
+    expect(BANK_PARSERS.map((p) => p.id)).toEqual(["hdfc", "icici", "sbi", "axis", "kotak", "idfc"]);
+    expect(money(parseCapture(SPEND, RECEIVED, { sender: "VM-OTHRBK" })).parserId).toBe("generic");
   });
 });
 
@@ -155,7 +155,7 @@ describe("createCaptureParser", () => {
     expect(bill.confidence).toBe(0.5);
   });
 
-  it("reads every kind of message the same with or without a sender while no bank parser is registered", () => {
+  it("reads every kind of message the same with or without a sender that no bank parser owns", () => {
     const messages = [
       SPEND,
       "INR 1,200.00 credited to your A/c No XX5678 on 12 Nov 2026 by NEFT from ACME PVT LTD",
@@ -169,8 +169,8 @@ describe("createCaptureParser", () => {
     ];
     for (const text of messages) {
       const plain = parseCapture(text, RECEIVED);
-      expect(parseCapture(text, RECEIVED, { sender: "VM-HDFCBK-S" })).toEqual(plain);
-      expect(parseCapture(text, RECEIVED, { sender: "HDFC Bank", packageName: "com.snapwork.hdfc" })).toEqual(plain);
+      expect(parseCapture(text, RECEIVED, { sender: "VM-OTHRBK-S" })).toEqual(plain);
+      expect(parseCapture(text, RECEIVED, { sender: "Other Bank", packageName: "com.other.bank" })).toEqual(plain);
     }
   });
 
