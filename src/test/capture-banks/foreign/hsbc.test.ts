@@ -104,14 +104,101 @@ describe("HSBC parser", () => {
     },
     {
       name: "a cash deposit to the account",
-      text: "HSBC: A/c 118-402***-731 is credited with INR 3,500.00 on 06NOV towards cash deposit at CDM SECTOR 29 .",
-      want: { parserId: "hsbc", type: "income", amountMinor: 350000, last4: "731" },
+      text: "HSBC: A/c 118-402***-731 is credited with INR 3,560.00 on 06NOV towards cash deposit at CDM SECTOR 29 .",
+      want: { parserId: "hsbc", type: "income", amountMinor: 356000, last4: "731" },
       auto: true,
     },
     {
       name: "a payment to the credit card ('creditcard' as one word) is a card bill payment",
       text: "Your HSBC creditcard xxxxx4471 payment of INR 11,350.00 has been received. Thank you.",
       want: { parserId: "hsbc", cardPayment: true, last4: "4471", instrument: "card" },
+      auto: false,
+    },
+    // Ticket 174 review, round 2: money-back words only count in what the message says happened.
+    {
+      name: "outgoing NEFT with a 'what if it failed' line stays money out, never on the beneficiary",
+      text: "HSBC: Dear HSBC Customer, your NEFT transaction with reference number HSBCN00612047815 for INR 14,650.00 has been credited to the ICICI A/c XXXXXXXX5163 of NEHA SURI on 08-11-2026 at 09:41:22 . If it has failed, the amount will be returned.",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 1465000, last4: undefined, merchant: "NEHA SURI" },
+      auto: false,
+    },
+    {
+      name: "outgoing NEFT with a help line about failed transactions",
+      text: "HSBC: Dear HSBC Customer, your NEFT transaction with reference number HSBCN00612047815 for INR 14,650.00 has been credited to the ICICI A/c XXXXXXXX5163 of NEHA SURI on 08-11-2026 at 09:41:22 . Report failed or unauthorised txns to 1800 103 7719.",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 1465000, last4: undefined },
+      auto: false,
+    },
+    {
+      name: "a payee whose name says 'refund' is still money out",
+      text: "HSBC: Dear HSBC Customer, your NEFT transaction with reference number HSBCN00612047815 for INR 14,650.00 has been credited to the AXIS A/c XXXXXXXX5163 of REFUND HELPDESK LLP on 08-11-2026 at 09:41:22 .",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 1465000, last4: undefined, merchant: "REFUND HELPDESK LLP" },
+    },
+    {
+      name: "a re-sent NEFT 'now credited to' the beneficiary is money out, held in Review",
+      text: "HSBC: Dear HSBC Customer, your NEFT transaction with reference number HSBCN00612047815 for INR 14,650.00 earlier returned has now been credited to the ICICI A/c XXXXXXXX5163 of NEHA SURI on 08-11-2026 .",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 1465000, last4: undefined },
+      auto: false,
+    },
+    {
+      name: "a shop called 'refund' is a spend",
+      text: "HSBC: Thank you for using HSBC Credit Card XXXX4471 for INR 762.00 on 08-Nov-26 at REFUND ROASTERS .",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 76200, last4: "4471", merchant: "REFUND ROASTERS" },
+      auto: true,
+    },
+    {
+      name: "a shop called 'credited' is a spend",
+      text: "HSBC: Thank you for using HSBC Credit Card XXXX4471 for INR 762.00 on 08-Nov-26 at CREDITED BAKEHOUSE .",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 76200, last4: "4471" },
+      auto: true,
+    },
+    {
+      name: "a shop called 'reversal' is a spend, never dropped",
+      text: "HSBC: Thank you for using HSBC Credit Card XXXX4471 for INR 762.00 on 08-Nov-26 at REVERSAL BISTRO .",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 76200, last4: "4471" },
+      auto: true,
+    },
+    {
+      name: "a shop called 'returned' is a spend, never dropped",
+      text: "HSBC: Thank you for using HSBC Debit Card XXXXX47xx for INR 762.00 on 08-Nov-26 at RETURNED BOOKS DEPOT .",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 76200, last4: undefined },
+    },
+    {
+      name: "a cashback line after a spend is not money back",
+      text: "HSBC: Thank you for using HSBC Credit Card XXXX4471 for INR 762.00 on 08-Nov-26 at FERN MARKET . Cashback of INR 38.00 credited on eligible spends this month.",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 76200, last4: "4471" },
+      auto: true,
+    },
+    {
+      name: "a reward points promo after a spend is not money back",
+      text: "HSBC: Thank you for using HSBC Credit Card XXXX4471 for INR 762.00 on 08-Nov-26 at FERN MARKET . Get reward points credited instantly with HSBC app.",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 76200, last4: "4471" },
+      auto: true,
+    },
+    {
+      name: "a reversal still to come keeps the spend",
+      text: "HSBC: Thank you for using HSBC Credit Card XXXX4471 for INR 762.00 on 08-Nov-26 at FERN MARKET . The amount will be reversed in 7 days.",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 76200, last4: "4471" },
+      auto: false,
+    },
+    {
+      name: "a card alert never takes digits from a ref",
+      text: "HSBC: Thank you for using HSBC Debit Card 47xx for INR 762.00 on 08-Nov-26 at FERN MARKET ref XX5163 .",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 76200, last4: undefined },
+    },
+    {
+      name: "a card alert naming no card never takes digits from a ref number",
+      text: "HSBC: Thank you for using HSBC Debit Card for INR 762.00 on 08-Nov-26 at FERN MARKET . Ref no XXXX5163.",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 76200, last4: undefined },
+    },
+    {
+      name: "a mandate set-up debit names the payee, not the mandate words",
+      text: "HSBC: A/c 118-402***-731 is debited with INR 2.00 on 08NOV at 09.41.22 towards UPI mandate set up for TUNEWAVE .",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 200, last4: "731", merchant: "TUNEWAVE" },
+      auto: false,
+    },
+    {
+      name: "a mandate verification debit names no payee",
+      text: "HSBC: A/c 118-402***-731 is debited with INR 1.00 on 08NOV at 09.41.22 towards NACH mandate verification .",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 100, last4: "731", merchant: undefined },
       auto: false,
     },
     {

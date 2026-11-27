@@ -35,6 +35,11 @@ describe("American Express parser", () => {
       auto: true,
     },
     {
+      name: "a payment 'received by the merchant' is a spend, not a card bill payment",
+      text: "Your payment of INR 715.00 towards your AMEX card ** 45832 was received by the merchant FERN MARKET on 15 October 2026.",
+      want: { parserId: "amex", last4: "5832" },
+    },
+    {
       name: "an OTP is ignored",
       text: "Your American Express one-time code is 814205 for INR 4,120.00 at TRAVELNEST. Do not share it.",
       want: { kind: "ignored", reason: "otp" },

@@ -7,7 +7,7 @@ import type { FoundAccount } from "../extract/account";
 
 const CARD = /\b(?:AMEX|American\sExpress)\scard\s(?:ending\s(?:in\s)?|\*{1,4}\s?)\d{0,2}(\d{4})\b/i;
 // "Your payment of INR ... towards your American Express Card ... has been received": a bill payment.
-const BILL_PAID = /\bpayment\sof\sINR\s?[\d,.]{1,15}\stowards\syour\s(?:AMEX|American\sExpress)\scard\b[^.]{0,60}?\breceived\b/i;
+const BILL_PAID = /\bpayment\sof\sINR\s?[\d,.]{1,15}\stowards\syour\s(?:AMEX|American\sExpress)\scard\b[^.]{0,60}?\b(?:has\sbeen|was|is)\sreceived\b(?!\sby\b)/i;
 
 export class AmexParser extends KnownBankParser {
   readonly id = "amex";

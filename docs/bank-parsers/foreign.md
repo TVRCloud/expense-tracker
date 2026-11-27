@@ -14,14 +14,17 @@ banks' apps is on the phone's known list.
   the other party's account at their bank ("as NEFT from|to UTIB A/c ***2271 of NAME"): never last4.
 - An outgoing NEFT reads "your NEFT transaction ... has been credited to the <bank> A/c XX<4> of NAME": an expense;
   the beneficiary's account is never last4, the person's own "A/c ...***-731" is kept when printed, and with none it
-  goes to Review. One that failed, could not be processed, was returned or was credited back to the person's own
-  account is money back (income), never money out.
+  goes to Review. Only an HSBC-format account of the person's own after "credited to" makes it money back (income);
+  any other mention of a failure or a return keeps it money out, held in Review, without the beneficiary's digits.
+- "Money back" words (reversed, refunded, returned, failed, ...) count only in what the message says happened: never
+  inside a payee or shop name, a condition ("If it has failed ..."), a help line, a promo, cashback or reward points,
+  or something still to come ("will be reversed").
 - A card is read with four digits ("Credit Card XXXX6603", "creditcard xxxxx6603"); one masked to fewer
-  ("XXXXX58xx") gives no last4. "Thank you for using HSBC ... Card" is money out unless the message says it was
+  ("XXXXX58xx"), or a card alert naming no card, gives no last4 (never digits from a ref). "Thank you for using HSBC ... Card" is money out unless the message says it was
   reversed, refunded or credited back. "Your HSBC creditcard ... payment of INR ... has been received" is a card bill
   payment (Review).
 - Merchant: the other party after "of" on a NEFT alert, the beneficiary on an outgoing NEFT, a UPI id after "to", the
-  payee after "towards" (mandate words dropped), the shop after "used at" or "at", the payee after "paid from ... to";
+  payee after "towards" (mandate words and steps such as "set up for" or "verification" dropped), the shop after "used at" or "at", the payee after "paid from ... to";
   never a time of day ("at 10.02.11") or a cash deposit.
 
 ## Standard Chartered (`standard-chartered.ts`, header `SCBANK`)
