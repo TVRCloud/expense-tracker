@@ -1,9 +1,9 @@
 // Karnataka Bank. A UPI debit reads "Your a/c XX1234 debited for Rs.X on <date> trf to NAME. UPI:<masked ref>"; the
 // shared rules read it, this parser only adds the bank's name and shape.
 
-import { KnownBankParser } from "./known";
+import { PrivateBankParser } from "./private-base";
 
-export class KarnatakaParser extends KnownBankParser {
+export class KarnatakaParser extends PrivateBankParser {
   readonly id = "karnataka";
   readonly bankName = "Karnataka Bank";
   override readonly senderIds = ["KBLBNK"];

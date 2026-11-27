@@ -3,9 +3,10 @@
 // direction.
 
 import type { FoundAccount } from "../extract/account";
-import { KnownBankParser, verbAccount } from "./known";
+import { verbAccount } from "./known";
+import { PrivateBankParser } from "./private-base";
 
-export class CityUnionParser extends KnownBankParser {
+export class CityUnionParser extends PrivateBankParser {
   readonly id = "city_union";
   readonly bankName = "City Union Bank";
   override readonly senderIds = ["CUBANK"];

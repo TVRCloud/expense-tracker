@@ -2,9 +2,11 @@
 // and "Your account no. ending with 1234 is debited with INR X on <date> for IMPS": the payer of an ACH credit follows
 // "ACH Credit:".
 
-import { cleanParty, KnownBankParser, sharedParty } from "./known";
+import { cleanParty, sharedParty } from "./known";
+import { scrubParty } from "./party-scrub";
+import { PrivateBankParser } from "./private-base";
 
-export class SaraswatParser extends KnownBankParser {
+export class SaraswatParser extends PrivateBankParser {
   readonly id = "saraswat";
   readonly bankName = "Saraswat Bank";
   override readonly senderIds = ["SARBNK"];
@@ -15,6 +17,6 @@ export class SaraswatParser extends KnownBankParser {
 
   protected override merchant(text: string, type: "income" | "expense"): string | undefined {
     const ach = text.match(/\bACH\s(?:Credit|Debit):\s?(\S[^.;]{0,58}?)(?:\.\s|\.$|$)/i);
-    return cleanParty(ach?.[1]) ?? sharedParty(super.merchant(text, type));
+    return scrubParty(cleanParty(ach?.[1])) ?? scrubParty(sharedParty(super.merchant(text, type)));
   }
 }

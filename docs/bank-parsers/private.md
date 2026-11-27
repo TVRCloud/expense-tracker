@@ -5,6 +5,13 @@ never a real message), what it overrides, and anything left to the generic parse
 `src/lib/capture/parsers/banks/<file>.ts`, listed in `banks/groups/private.ts`; tests in
 `src/test/capture-banks/private/`. No app packages are claimed: the phone's bank app list has none of these banks yet.
 
+Shared by the group (`banks/private-base.ts`, `banks/party-scrub.ts`):
+- A debit the message itself says was undone ("has been reversed", "reversal", "returned unpaid") stays in Review.
+- Payee names lose references, masked numbers and card numbers ("631088123456/name@bank" keeps the UPI id, "HDFC CC
+  6612" becomes "HDFC CC", "X7781 RAVI" becomes "RAVI"); digits inside a UPI id are kept.
+- A card the message only mentions ("towards ... Debit Card 6612 annual fee") never replaces the account the money
+  left or reached (Federal, YES BANK, IndusInd).
+
 ## Federal Bank (`federal.ts`, id `federal`)
 - Headers: `FEDBNK`, `FEDFIB`. Left out: `FEDSCP` (a co-branded card; not sure it only carries Federal's messages).
 - Shapes: "Debited Rs X from a/c X1234 on <date> <time> via UPI to <UPI id>", "Rs X debited/credited via UPI|IMPS|NEFT
@@ -31,16 +38,22 @@ never a real message), what it overrides, and anything left to the generic parse
 - Shapes: "A/c *XX1234 debited|credited by Rs X towards|from <UPI id>", "INR X spent on IndusInd Card XX1234 on ...
   at SHOP", "INR X debited from your A/C 201***041234 towards Debit Card Purchase".
 - Overrides: the UPI id after "towards"; the last four digits of a partly shown account ("A/C 201***041234",
-  "Account 15XXXXX1234"); the card digits; the payee after the last "/" of an ACH debit; deposit interest "paid on
-  your ... Deposit" is money in (income, no account, so Review), never an expense.
+  "Account 15XXXXX1234"), never a loan, card, deposit, RD or FD account, and with two accounts left only the one
+  written "your A/C" (else none); the card digits; the payee after the last "/" of an ACH debit; deposit interest
+  "paid on your ... Deposit" is money in (income, no account, so Review), never an expense, but TDS deducted on it is
+  not; money moved into an RD, FD or deposit from the savings account ("credited to your RD A/C ... by debit to A/C")
+  is an expense of the savings account; a payee built around a masked number ("FD closure 410***551203") is dropped.
 
 ## South Indian Bank (`south-indian.ts`, id `south_indian`)
 - Header: `SIBSMS`.
 - Shapes: "UPI debit:Rs.X A/c X1234, <date> RRN: <ref>", "A/c X1234 DEBIT:Rs.X SHOP MCT Bal:Rs.Y", "UPI
   Credit:INR Rs.X in A/c X1234. Info: UPI/<bank>/<ref>/ NAME on <date>", "Your A/c X1234 is credited with Rs.X Info:
   IMPS/<bank>/<ref>/ NAME".
-- Overrides: direction from "debit:" / "credit:" before an amount (no verb in these messages); the shop before
-  "MCT"/"Bal:"; the payer in the Info field; the reference in the Info field.
+- Overrides: direction from "debit:" / "credit:" before an amount, which decides over any word in the Info text
+  ("UPI Credit:... Info: ... Paid via ..." is income), but only when the token leads the message or the message is
+  one of the shapes ("Last debit:Rs.X", "Hold debit:Rs.X", a returned cheque are not a transaction) and never next to
+  reversed/returned/failed (then Review); "CC PAYMENT" is a card bill payment; the shop before "MCT"/"Bal:"; the
+  payer in the Info field; the reference in the Info field.
 
 ## Karnataka Bank (`karnataka.ts`, id `karnataka`)
 - Header: `KBLBNK`. Not `KBANKT`: no evidence it is Karnataka Bank's (it appears in Kotak's own links), so it is
@@ -76,7 +89,7 @@ never a real message), what it overrides, and anything left to the generic parse
 - Shape: "Dear Customer Your A/c no XXXX1234 is credited|debited with X on <date> by NEFT|UPI From|To : NAME. Balance
   is Y" (no currency on the amount; the shared bare-amount rule reads it).
 - Overrides: the party after "From :" (income) or "To :" (expense). A "Loan Recovery" credit or a negative balance
-  is a loan account, not the person's money moving: kept in Review.
+  is a loan account, not the person's money moving: a credit like that is kept in Review (a debit is not).
 
 ## Kerala Gramin Bank (`kerala-gramin.ts`, id `kerala_gramin`)
 - Header: `KGBANK`.

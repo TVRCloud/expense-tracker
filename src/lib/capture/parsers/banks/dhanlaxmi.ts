@@ -3,12 +3,13 @@
 // ... and debited from a/c no. XXXX5678") takes the account next to the verb that matches the direction.
 
 import type { FoundAccount } from "../extract/account";
-import { cleanParty, KnownBankParser, sharedParty, verbAccount } from "./known";
+import { cleanParty, sharedParty, verbAccount } from "./known";
+import { PrivateBankParser } from "./private-base";
 
 // "Payment from PhonePe" names the app the money came through, not a person.
 const APP = /^(?:PhonePe|GPay|Google\sPay|Paytm|BHIM|Amazon\sPay|CRED|Mobikwik)$/i;
 
-export class DhanlaxmiParser extends KnownBankParser {
+export class DhanlaxmiParser extends PrivateBankParser {
   readonly id = "dhanlaxmi";
   readonly bankName = "Dhanlaxmi Bank";
   override readonly senderIds = ["DHANBK"];

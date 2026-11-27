@@ -3,9 +3,10 @@
 // A credit reads "Account XXXX1234 is credited with INR X on <date> from <UPI id>".
 
 import type { FoundAccount } from "../extract/account";
-import { KnownBankParser, verbAccount } from "./known";
+import { verbAccount } from "./known";
+import { PrivateBankParser } from "./private-base";
 
-export class KeralaGraminParser extends KnownBankParser {
+export class KeralaGraminParser extends PrivateBankParser {
   readonly id = "kerala_gramin";
   readonly bankName = "Kerala Gramin Bank";
   override readonly senderIds = ["KGBANK"];

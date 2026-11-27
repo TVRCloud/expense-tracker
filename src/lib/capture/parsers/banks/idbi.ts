@@ -2,9 +2,10 @@
 // <date>; Bal Rs Y NAME credited. UPI:<ref>"); the reference is written "UPI:<12 digits>". An AutoPay debit names the
 // payee after "towards" and before "for AutoPay".
 
-import { cleanParty, creditedParty, KnownBankParser, NAME, sharedParty } from "./known";
+import { cleanParty, creditedParty, NAME, sharedParty } from "./known";
+import { PrivateBankParser } from "./private-base";
 
-export class IdbiParser extends KnownBankParser {
+export class IdbiParser extends PrivateBankParser {
   readonly id = "idbi";
   readonly bankName = "IDBI Bank";
   override readonly senderIds = ["IDBIBK"];

@@ -1,9 +1,9 @@
 // J&K Bank. "Your A/c XXXX1234 is Debited by INR X at <time> by RTGS-<ref>. A/C Bal is INR Y Cr." and the same with
 // "Credited with"; the reference follows the rail and a dash.
 
-import { KnownBankParser } from "./known";
+import { PrivateBankParser } from "./private-base";
 
-export class JkParser extends KnownBankParser {
+export class JkParser extends PrivateBankParser {
   readonly id = "jk";
   readonly bankName = "J&K Bank";
   override readonly senderIds = ["JKBANK"];

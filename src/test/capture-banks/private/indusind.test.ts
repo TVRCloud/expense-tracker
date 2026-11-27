@@ -32,6 +32,7 @@ describe("IndusInd Bank parser", () => {
       name: "IMPS credit on an account written with its first digits",
       text: "Your IndusInd Account 15XXXXX6152 has been credited for INR 340.25 towards IMPS/604377039911. Call 0000000000 to report issue-IndusInd Bank",
       want: { parserId: "indusind", type: "income", amountMinor: 34025, last4: "6152" },
+      auto: true,
     },
     {
       name: "deposit interest is money in, kept in Review (no account)",

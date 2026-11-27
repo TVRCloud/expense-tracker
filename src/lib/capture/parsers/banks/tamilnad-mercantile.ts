@@ -3,9 +3,10 @@
 // verb that matches the direction, the other party the UPI id after "linked to".
 
 import type { FoundAccount } from "../extract/account";
-import { KnownBankParser, sharedParty, verbAccount } from "./known";
+import { sharedParty, verbAccount } from "./known";
+import { PrivateBankParser } from "./private-base";
 
-export class TamilnadMercantileParser extends KnownBankParser {
+export class TamilnadMercantileParser extends PrivateBankParser {
   readonly id = "tmb";
   readonly bankName = "Tamilnad Mercantile Bank";
   override readonly senderIds = ["TMBANK"];

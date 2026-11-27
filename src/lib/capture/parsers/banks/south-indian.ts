@@ -3,12 +3,22 @@
 // "Info: <rail>/<bank code>/<ref>/ NAME" field.
 
 import type { FoundDirection } from "../extract/direction";
-import { cleanParty, KnownBankParser, sharedParty } from "./known";
+import type { MoneyParse } from "../types";
+import { cleanParty, REVIEW_CEILING, sharedParty } from "./known";
+import { scrubParty } from "./party-scrub";
+import { PrivateBankParser } from "./private-base";
 
 const DEBIT_COLON = /\b(?:UPI\s)?debit:\s?(?:INR\s)?Rs\.?\s?\d/i;
 const CREDIT_COLON = /\b(?:UPI\s)?credit:\s?(?:INR\s)?Rs\.?\s?\d/i;
+// The token leads the message ("UPI debit:Rs.X", "A/c X1234 DEBIT:Rs.X"): only then is it what happened. "Last
+// debit:Rs.X" in a balance message, "for debit:Rs.X ... returned" or "Hold debit:Rs.X" are not a transaction.
+const LEADING_TOKEN = /^(?:UPI\s(?:debit|credit):|A\/c\sX\d{4}\s(?:DEBIT|CREDIT):)/i;
+// A card bill paid from the account ("DEBIT:Rs.X CC PAYMENT SIB CARD MCT").
+const CC_PAYMENT = /\bCC\sPAYMENT\b/i;
+// "UPI debit:Rs.X A/c X1234 reversed": the token no longer says what happened; kept in Review.
+const UNDONE = /\b(?:revers(?:ed|al)|returned|refunded|cancelled|failed)\b/i;
 
-export class SouthIndianParser extends KnownBankParser {
+export class SouthIndianParser extends PrivateBankParser {
   readonly id = "south_indian";
   readonly bankName = "South Indian Bank";
   override readonly senderIds = ["SIBSMS"];
@@ -20,18 +30,34 @@ export class SouthIndianParser extends KnownBankParser {
   ];
 
   protected override direction(text: string): FoundDirection | null {
-    const shared = super.direction(text);
-    if (shared) return shared;
+    // The bank's own token decides when it leads the message or the message is one of its shapes, whatever the Info
+    // text says ("UPI Credit:... Info: ... Paid via PhonePe" is money in; "UPI debit:... Received with thanks" is out).
     const debit = DEBIT_COLON.test(text);
     const credit = CREDIT_COLON.test(text);
-    if (debit === credit) return null;
-    return { type: debit ? "expense" : "income", ambiguous: false };
+    if (debit !== credit && !UNDONE.test(text) && (LEADING_TOKEN.test(text) || this.hasShape(text))) {
+      return { type: debit ? "expense" : "income", ambiguous: false };
+    }
+    return super.direction(text);
+  }
+
+  override parse(text: string, receivedAt: Date): MoneyParse | null {
+    const parse = super.parse(text, receivedAt);
+    // The bank's token next to a word that undoes it: whatever the shared rules read, it is checked in Review.
+    if (parse && (DEBIT_COLON.test(text) || CREDIT_COLON.test(text)) && UNDONE.test(text) && parse.confidence > REVIEW_CEILING) {
+      return { ...parse, confidence: REVIEW_CEILING };
+    }
+    return parse;
+  }
+
+  protected override cardPayment(text: string): boolean {
+    return CC_PAYMENT.test(text) || super.cardPayment(text);
   }
 
   protected override merchant(text: string, type: "income" | "expense"): string | undefined {
     const shop = text.match(/\bDEBIT:\s?Rs\.?\s?[\d,]{1,15}(?:\.\d{1,2})?\s(\S[^.;:]{0,58}?)\s(?:MCT\s)?Bal:/i);
     const info = text.match(/\bInfo:\s?(?:UPI|IMPS|NEFT)\/[A-Za-z]{3,5}\/\d{6,22}\/\s?(\S[^/;]{0,58}?)(?:\son\s\d|\.\s|\.$|$)/i);
-    return cleanParty(shop?.[1]) ?? cleanParty(info?.[1]) ?? sharedParty(super.merchant(text, type));
+    if (CC_PAYMENT.test(text)) return undefined;
+    return scrubParty(cleanParty(shop?.[1])) ?? scrubParty(cleanParty(info?.[1])) ?? scrubParty(sharedParty(super.merchant(text, type)));
   }
 
   protected override ref(text: string): string | undefined {

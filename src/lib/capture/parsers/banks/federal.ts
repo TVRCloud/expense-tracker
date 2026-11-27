@@ -4,9 +4,11 @@
 // after "for" and the card as "Federal Bank Debit Card 1234".
 
 import type { FoundAccount } from "../extract/account";
-import { cleanParty, KnownBankParser, NAME, sharedParty } from "./known";
+import { cleanParty, NAME, sharedParty } from "./known";
+import { scrubParty } from "./party-scrub";
+import { PrivateBankParser } from "./private-base";
 
-export class FederalParser extends KnownBankParser {
+export class FederalParser extends PrivateBankParser {
   readonly id = "federal";
   readonly bankName = "Federal Bank";
   override readonly senderIds = ["FEDBNK", "FEDFIB"];
@@ -20,7 +22,10 @@ export class FederalParser extends KnownBankParser {
   ];
 
   protected override account(text: string, type: "income" | "expense"): FoundAccount | null {
-    const card = text.match(/\bFederal\sBank\s(?:Debit|Credit)\sCard\s[x*]{0,4}(\d{4})\b/i);
+    // A card named in a message that also says which account the money left or reached is what it was for ("towards
+    // Federal Bank Debit Card 6612 annual fee"): the account wins.
+    const accountMoved = /\b(?:debited\sfrom|credited\sto)\s(?:your\s)?(?:a\/c|acct|account)\b/i.test(text);
+    const card = accountMoved ? null : text.match(/\bFederal\sBank\s(?:Debit|Credit)\sCard\s[x*]{0,4}(\d{4})\b/i);
     if (card) return { last4: card[1], instrument: "card" };
     return super.account(text, type);
   }
@@ -28,6 +33,9 @@ export class FederalParser extends KnownBankParser {
   protected override merchant(text: string, type: "income" | "expense"): string | undefined {
     const mandate = text.match(new RegExp(String.raw`\bpayment\sof\sINR\s[\d,.]{1,15}\sfor\s${NAME}\svia\se-mandate\b`, "i"));
     const sentBy = text.match(new RegExp(String.raw`\bIt\swas\ssent\sby\s${NAME}\son\s[A-Za-z]{3,9}\s\d{1,2}\b`, "i"));
-    return cleanParty(mandate?.[1]) ?? cleanParty(sentBy?.[1]) ?? sharedParty(super.merchant(text, type));
+    const shared = sharedParty(super.merchant(text, type));
+    // "towards Federal Bank Debit Card 6612 annual fee" names the person's own card, not a payee.
+    const ownCard = shared && /\bFederal\sBank\s(?:Debit|Credit)\sCard\b/i.test(shared);
+    return cleanParty(mandate?.[1]) ?? cleanParty(sentBy?.[1]) ?? (ownCard ? undefined : scrubParty(shared));
   }
 }

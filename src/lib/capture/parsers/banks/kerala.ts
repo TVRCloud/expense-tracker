@@ -4,11 +4,13 @@
 // in Review.
 
 import type { MoneyParse } from "../types";
-import { cleanParty, KnownBankParser, REVIEW_CEILING, sharedParty } from "./known";
+import { cleanParty, REVIEW_CEILING, sharedParty } from "./known";
+import { scrubParty } from "./party-scrub";
+import { PrivateBankParser } from "./private-base";
 
 const LOAN = /\bLoan\sRecovery\b|\bBalance\sis\s-\s?\d/i;
 
-export class KeralaParser extends KnownBankParser {
+export class KeralaParser extends PrivateBankParser {
   readonly id = "kerala";
   readonly bankName = "Kerala Bank";
   override readonly senderIds = ["KELBNK"];
@@ -17,12 +19,14 @@ export class KeralaParser extends KnownBankParser {
 
   override parse(text: string, receivedAt: Date): MoneyParse | null {
     const parse = super.parse(text, receivedAt);
-    if (parse && LOAN.test(text) && parse.confidence > REVIEW_CEILING) return { ...parse, confidence: REVIEW_CEILING };
+    if (parse && parse.type === "income" && LOAN.test(text) && parse.confidence > REVIEW_CEILING) {
+      return { ...parse, confidence: REVIEW_CEILING };
+    }
     return parse;
   }
 
   protected override merchant(text: string, type: "income" | "expense"): string | undefined {
     const party = text.match(new RegExp(String.raw`\b${type === "income" ? "From" : "To"}\s?:\s?(\S[^.;:]{0,58}?)(?:\.\s|\.$|$)`, "i"));
-    return cleanParty(party?.[1]) ?? sharedParty(super.merchant(text, type));
+    return scrubParty(cleanParty(party?.[1])) ?? scrubParty(sharedParty(super.merchant(text, type)));
   }
 }
