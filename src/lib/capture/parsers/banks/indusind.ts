@@ -28,6 +28,16 @@ const OWN = /^your\s$/i;
 // A card named in a message that also says which account (with its number) money left or reached is only what it
 // was for. "debited from account linked" names no account, so the card stays.
 const ACCOUNT_MOVED = /\b(?:debited\sfrom|credited\sto)\s(?:your\s)?(?:a\/c|acct|account)(?:\sno\.?)?\s?\*?[x*\d]/i;
+// The account the money left, written as the person's own ("by debit from your A/C <mask>", "from your A/C
+// <mask>"): whatever account "credited" names, this one paid, so the message is an expense of it.
+const OWN_PAYER = /\b(?:by\sdebit\s(?:to|from)\s(?:your\s)?(?:Savings\s)?|from\syour\s(?:Savings\s)?)(?:A\/C|Account)\s(\d{0,4}[X*]{2,10}\d{0,4}?(\d{4}))\b/i;
+// The account the money reached, written as the person's own ("to your A/C <mask> credited", "credited to your A/C
+// <mask>"); deposits are read by FUNDS_DEPOSIT first.
+const OWN_PAYEE =
+  /\b(?:(?:to|in|into)\syour\s(?:Savings\s)?(?:A\/C|Account)\s(\d{0,4}[X*]{2,10}\d{0,4}?(\d{4}))\s(?:credited|via)\b|credited\s(?:to|in|into)\syour\s(?:Savings\s)?(?:A\/C|Account)\s(\d{0,4}[X*]{2,10}\d{0,4}?(\d{4}))\b)/i;
+// A card bill paid from the account linked to the card ("debited from your account linked for IndusInd Credit Card
+// XX8812 payment").
+const LINKED_CARD_BILL = /\bdebited\sfrom\syour\saccount\slinked\b[^.]{0,40}?\bCredit\sCard\sXX\d{4}\spayment\b/i;
 // The person's own account leading IndusInd's UPI shape: "A/c *XX7731 debited by ...".
 const LEADING_OWN = /^A\/c\s\*?XX(\d{4})\b/i;
 // The verb right before or right after a partly shown account tells whose it is.
@@ -49,11 +59,22 @@ export class IndusIndParser extends PrivateBankParser {
 
   protected override direction(text: string): FoundDirection | null {
     if (DEPOSIT_INTEREST.test(text) && !TAX.test(text)) return { type: "income", ambiguous: false };
+    if (OWN_PAYER.test(text)) return { type: "expense", ambiguous: false };
     if (FUNDS_DEPOSIT.test(text) && FROM_SAVINGS.test(text)) return { type: "expense", ambiguous: false };
+    if (OWN_PAYEE.test(text) && !FUNDS_DEPOSIT.test(text)) return { type: "income", ambiguous: false };
     return super.direction(text);
   }
 
+  protected override cardPayment(text: string): boolean {
+    return LINKED_CARD_BILL.test(text) || super.cardPayment(text);
+  }
+
   protected override account(text: string, type: "income" | "expense"): FoundAccount | null {
+    // The person's own account the money left or reached, when the message says so ("from your A/C <mask>").
+    const payer = type === "expense" ? text.match(OWN_PAYER) : null;
+    if (payer) return { last4: payer[2], instrument: "account" };
+    const payee = type === "income" && !FUNDS_DEPOSIT.test(text) ? text.match(OWN_PAYEE) : null;
+    if (payee) return { last4: payee[2] ?? payee[4], instrument: "account" };
     // "A/c *XX7731 debited by ...": the account the message is about leads it.
     const leading = text.match(LEADING_OWN);
     if (leading) return { last4: leading[1], instrument: "account" };

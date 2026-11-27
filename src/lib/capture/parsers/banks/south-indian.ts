@@ -17,9 +17,9 @@ const LEADING_TOKEN = /^(?:UPI\s(?:debit|credit):|A\/c\sX\d{4}\s(?:DEBIT|CREDIT)
 // "CC PAYMENT" (or "SIB CC PAYMENT") is the transaction type only right after the amount, never inside a shop name
 // ("ABC CC PAYMENT SOLUTIONS").
 const CC_PAYMENT =
-  /\bDEBIT:\s?Rs\.?\s?[\d,]{1,15}(?:\.\d{1,2})?\s(?:[A-Z]{2,6}\s)?CC\sPAYMENT\b(?!\s(?:SOLUTIONS?|SERVICES?|LTD|LIMITED|PVT|CO)\b)/i;
+  /\b(?:DEBIT:\s?Rs\.?\s?[\d,]{1,15}(?:\.\d{1,2})?\s(?:[A-Z]{2,6}\s)?|RRN:?\s?\d{6,22}\s)CC\sPAYMENT\b(?!\s(?:SOLUTIONS?|SERVICES?|LTD|LIMITED|PVT|CO)\b)/i;
 // The bank's token counts only in its own part of the message, never inside the free Info text.
-const ownPart = (text: string) => text.split(/\bInfo:/i)[0];
+const ownPart = (text: string) => text.split(/\b(?:Info|Remarks|Note)\s?[:\-]/i)[0];
 // "UPI debit:Rs.X A/c X1234 reversed": the token no longer says what happened; kept in Review.
 const UNDONE = /\b(?:revers(?:ed|al)|returned|refunded|cancelled|failed)\b/i;
 
@@ -38,10 +38,13 @@ export class SouthIndianParser extends PrivateBankParser {
     // The bank's own token decides when it leads the message or the message is one of its shapes, whatever the Info
     // text says ("UPI Credit:... Info: ... Paid via PhonePe" is money in; "UPI debit:... Received with thanks" is out).
     const own = ownPart(text);
-    const debit = DEBIT_COLON.test(own);
-    const credit = CREDIT_COLON.test(own);
-    if (debit !== credit && !UNDONE.test(own) && (LEADING_TOKEN.test(text) || this.hasShape(text))) {
-      return { type: debit ? "expense" : "income", ambiguous: false };
+    if (!UNDONE.test(own)) {
+      // The token that leads the message decides, even when another one follows it.
+      const lead = text.match(LEADING_TOKEN)?.[0];
+      if (lead) return { type: /debit/i.test(lead) ? "expense" : "income", ambiguous: false };
+      const debit = DEBIT_COLON.test(own);
+      const credit = CREDIT_COLON.test(own);
+      if (debit !== credit && this.hasShape(text)) return { type: debit ? "expense" : "income", ambiguous: false };
     }
     return super.direction(text);
   }

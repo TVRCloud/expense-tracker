@@ -6,11 +6,11 @@ never a real message), what it overrides, and anything left to the generic parse
 `src/test/capture-banks/private/`. No app packages are claimed: the phone's bank app list has none of these banks yet.
 
 Shared by the group (`banks/private-base.ts`, `banks/party-scrub.ts`):
-- A debit the message itself says was undone ("has been reversed", "reversal", "returned unpaid") stays in Review; the
-  payee's own name is left out of that check ("REVERSAL CAFE" is a payee).
+- A debit with an undo word anywhere in the message ("reversed", "reversal", "refunded", "returned unpaid", "bounced",
+  "charged back") stays in Review, a payee's own name included ("REVERSAL CAFE" goes to Review too: accepted noise).
 - Payee names lose references, masked numbers and card numbers ("631088123456/name@bank" keeps the UPI id, "HDFC CC
-  6612" becomes "HDFC CC", "X7781 RAVI" becomes "RAVI"); digits inside a UPI id and names like "X100 MOBILES" or
-  "9x12 FURNITURE" are kept.
+  6612" becomes "HDFC CC"); a one-X code ("X7781") is removed only after a/c, account or card or when it is the whole
+  name; digits inside a UPI id and names like "X1000 FITNESS" or "9x12 FURNITURE" are kept.
 - A card the message only mentions ("towards ... Debit Card 6612 annual fee") never replaces the account the money
   left or reached (Federal, YES BANK, IndusInd); that account must be written with its number ("debited from account
   linked to the card" names none, so the card stays).
@@ -41,25 +41,28 @@ Shared by the group (`banks/private-base.ts`, `banks/party-scrub.ts`):
 - Shapes: "A/c *XX1234 debited|credited by Rs X towards|from <UPI id>", "INR X spent on IndusInd Card XX1234 on ...
   at SHOP", "INR X debited from your A/C 201***041234 towards Debit Card Purchase".
 - Overrides: the UPI id after "towards"; the last four digits of a partly shown account ("A/C 201***041234",
-  "Account 15XXXXX1234"), never a loan, card, deposit, RD or FD account: the own account that leads the UPI shape
+  "Account 15XXXXX1234"), never a loan, card, deposit, RD or FD account: an account written as the person's own after
+  "by debit to/from (your) A/C" or "from your A/C" paid (an expense of it, whatever account "credited" names), one
+  written "to/in your A/C <mask> credited" or "credited to your A/C <mask>" received; then the own account that leads the UPI shape
   ("A/c *XX1234 debited by") wins, then the partly shown account right next to the direction's verb ("debited from
   your A/C <mask>", "<mask> has been credited"), then, with two left, the one written "your A/C" (else none); the card digits; the payee after the last "/" of an ACH debit; deposit interest
   "paid on your ... Deposit" is money in (income, no account, so Review), never an expense, but TDS deducted on it is
   not; money moved into an RD, FD or deposit from the savings account ("credited to your RD A/C ... by debit to A/C")
   (also spelled out, "Recurring Deposit", "Fixed Deposit") is an expense of the savings account; a payee guess that
-  runs into "debited"/"credited" is dropped; a payee built around a masked number ("FD closure 410***551203") is dropped.
+  runs into "debited"/"credited" is dropped; "debited from your account linked for IndusInd Credit Card XX1234
+  payment" is a card bill payment; a payee built around a masked number ("FD closure 410***551203") is dropped.
 
 ## South Indian Bank (`south-indian.ts`, id `south_indian`)
 - Header: `SIBSMS`.
 - Shapes: "UPI debit:Rs.X A/c X1234, <date> RRN: <ref>", "A/c X1234 DEBIT:Rs.X SHOP MCT Bal:Rs.Y", "UPI
   Credit:INR Rs.X in A/c X1234. Info: UPI/<bank>/<ref>/ NAME on <date>", "Your A/c X1234 is credited with Rs.X Info:
   IMPS/<bank>/<ref>/ NAME".
-- Overrides: direction from "debit:" / "credit:" before an amount, read only before "Info:" and deciding over any word
-  in the Info text
+- Overrides: direction from "debit:" / "credit:" before an amount, read only before "Info:"/"Remarks:"/"Note:" (any
+  spelling) and deciding over any word in the Info text; a token that leads the message wins over a later one
   ("UPI Credit:... Info: ... Paid via ..." is income), but only when the token leads the message or the message is
   one of the shapes ("Last debit:Rs.X", "Hold debit:Rs.X", a returned cheque are not a transaction) and never next to
-  reversed/returned/failed (then Review); "CC PAYMENT" right after the amount (optionally after a short bank word) is a
-  card bill payment, never inside a shop name ("ABC CC PAYMENT SOLUTIONS"); the shop before "MCT"/"Bal:"; the
+  reversed/returned/failed (then Review); "CC PAYMENT" right after the amount (optionally after a short bank word) or right after
+  the RRN is a card bill payment, never inside a shop name ("ABC CC PAYMENT SOLUTIONS"); the shop before "MCT"/"Bal:"; the
   payer in the Info field; the reference in the Info field.
 
 ## Karnataka Bank (`karnataka.ts`, id `karnataka`)

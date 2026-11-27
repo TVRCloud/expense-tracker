@@ -114,9 +114,9 @@ describe("South Indian: the bank's own token decides, whatever the Info text say
       want: { type: "expense", merchant: "9746011223@ybl" },
     },
     {
-      name: "a debit to a mobile-masked payee keeps only the name",
+      name: "a one-X code in front of a name stays (it may be part of the name, like X1000 FITNESS)",
       text: "A/c X8846 DEBIT:Rs.940.00 X6634 SUNIL MCT Bal:Rs.4,899.00 -South Indian Bank",
-      want: { type: "expense", merchant: "SUNIL" },
+      want: { type: "expense", merchant: "X6634 SUNIL" },
     },
     {
       name: "a card bill paid from the account is a card payment",
@@ -259,10 +259,11 @@ describe("names with numbers that are part of the name stay whole", () => {
       want: { merchant: "8x10 FRAMES" },
     },
     {
-      name: "a payee whose name says reversal is still booked",
+      // Accepted noise (phase 9 decision): any undo word anywhere sends a debit to Review, a payee's name included.
+      name: "a payee whose name says reversal goes to Review",
       text: "Dear Customer Your A/c no XXXX3390 is debited with 415.00 on 07-11-2026 by UPI To : REVERSAL BAKERY. Balance is 2210.00 - Kerala Bank",
       want: { type: "expense", merchant: "REVERSAL BAKERY" },
-      auto: true,
+      auto: false,
     },
   ]);
 });
@@ -273,6 +274,97 @@ describe("Federal: an e-mandate card payment keeps its card", () => {
       name: "'Amount debited from account linked' names no account",
       text: "Hi, payment of INR 236.00 for MusicBox via e-mandate ID: MB22LKJH7741 on Federal Bank Credit Card 9058 is processed successfully. Amount debited from account linked to the card. - Federal Bank",
       want: { type: "expense", last4: "9058", instrument: "card", merchant: "MusicBox" },
+    },
+  ]);
+});
+
+// Ticket 172 review, round 3.
+describe("IndusInd: the account written as the person's own paid, whatever account 'credited' names", () => {
+  readsAll({ sender: "VM-INDUSB-S" }, [
+    {
+      name: "credited to another account by debit from yours",
+      text: "INR 1,265 credited to A/C 71XXXXXX5072 by debit from your A/C 207***003386 - IndusInd Bank",
+      want: { type: "expense", amountMinor: 126500, last4: "3386" },
+    },
+    {
+      name: "another account has been credited from yours",
+      text: "Account 71XXXXXX5072 has been credited with INR 1,265 from your A/C 207***003386 - IndusInd Bank",
+      want: { type: "expense", last4: "3386" },
+    },
+    {
+      name: "received in another account from yours",
+      text: "INR 1,265 received in A/C 71XXXXXX5072 from your A/C 207***003386 via IMPS - IndusInd Bank",
+      want: { type: "expense", last4: "3386" },
+    },
+    {
+      name: "sent from another account to yours is income",
+      text: "INR 1,265 sent from Account 71XXXXXX5072 to your A/C 207***003386 credited via IMPS - IndusInd Bank",
+      want: { type: "income", last4: "3386" },
+    },
+    {
+      name: "a card bill paid from the account linked to the card",
+      text: "INR 9,850 debited from your account linked for IndusInd Credit Card XX4417 payment - IndusInd Bank",
+      want: { cardPayment: true, last4: "4417", instrument: "card" },
+      auto: false,
+    },
+  ]);
+});
+
+describe("South Indian: Info in any spelling, CC PAYMENT after an RRN, a one-X name", () => {
+  readsAll({ sender: "AD-SIBSMS-S" }, [
+    {
+      name: "'Info :' with a space",
+      text: "Dear Customer, Your A/c X8846 is credited with Rs.2,730.00 Info : IMPS/HDFC/631066655555/ debit:Rs.2730 adj. Final balance is Rs.7,210.00-South Indian Bank",
+      want: { type: "income" },
+    },
+    {
+      name: "'Remarks:'",
+      text: "Dear Customer, Your A/c X8846 is credited with Rs.2,730.00 Remarks: debit:Rs.2730 adj. Final balance is Rs.7,210.00-South Indian Bank",
+      want: { type: "income" },
+    },
+    {
+      name: "the leading token wins over a later one",
+      text: "UPI Credit:INR Rs.1,375.00 in A/c X8846 07-11-26 RRN: 631066611111 note debit:Rs.1375 back -South Indian Bank",
+      want: { type: "income" },
+    },
+    {
+      name: "a UPI debit with CC PAYMENT after the RRN is a card payment",
+      text: "UPI debit:Rs.5,715.00 A/c X8846, 07-11-26 RRN: 631066677777 CC PAYMENT Bal:Rs.1,210.00 -South Indian Bank",
+      want: { cardPayment: true },
+      auto: false,
+    },
+    {
+      name: "a refund word in the Info text sends a debit to Review",
+      text: "UPI debit:INR Rs.315.00 in A/c X8846. Info:UPI/ICIC/631066622222/ Refunded thanks on 07-11-26. Final balance is Rs.5,925.00 -South Indian Bank",
+      want: { type: "expense" },
+      auto: false,
+    },
+    { name: "X2000 GYM stays whole", text: "A/c X8846 DEBIT:Rs.715.00 X2000 GYM MCT Bal:Rs.1,210.00 -South Indian Bank", want: { merchant: "X2000 GYM" } },
+  ]);
+});
+
+describe("an undo word anywhere sends a debit to Review", () => {
+  readsAll({}, [
+    {
+      name: "Karnataka: '... reversed.' after the payee",
+      source: { sender: "VM-KBLBNK-S" },
+      text: "Your a/c XX3390 debited for Rs.265.00 on 07-11-26 trf to LAKE VIEW reversed. UPI:6*********55 -KarnatakaBank",
+      want: { type: "expense" },
+      auto: false,
+    },
+    {
+      name: "Kerala Bank: '... has been reversed.'",
+      source: { sender: "VM-KELBNK-S" },
+      text: "Dear Customer Your A/c no XXXX3390 is debited with 415.00 on 07-11-2026 by UPI To : GREENBASKET has been reversed. Balance is 2210.00 - Kerala Bank",
+      want: { type: "expense" },
+      auto: false,
+    },
+    {
+      name: "Saraswat: an ACH debit returned unpaid",
+      source: { sender: "VM-SARBNK-S" },
+      text: "Your A/c no. 3390 is debited with INR 615.00 on 07-11-2026 towards ACH Debit:BRIGHTGRID RETURNED UNPAID. Current Bal is INR 1,180.00 CR - Saraswat Bank",
+      want: { type: "expense" },
+      auto: false,
     },
   ]);
 });

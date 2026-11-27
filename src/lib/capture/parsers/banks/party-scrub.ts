@@ -15,7 +15,9 @@ export function scrubParty(name: string | undefined): string | undefined {
     .replace(/^\d{6,22}\s?\/\s?/, "")
     // A partly shown or masked number anywhere: "410***551203", "XX4421", "X7781" (never inside a UPI id, never a
     // name like "X100 MOBILES" or "9x12 FURNITURE").
-    .replace(/(?<![\w.@-])(?:\d{0,6}[x*]{2,12}\d{2,12}|[xX]\d{4})(?![\w@.-])/g, " ")
+    .replace(/(?<![\w.@-])\d{0,6}[x*]{2,12}\d{2,12}(?![\w@.-])/gi, " ")
+    // One X and four digits only after a/c, account or card ("A/c X7781"): "X1000 FITNESS" is a name.
+    .replace(/\b(a\/c|acct|account|card)\s[xX]\d{4}\b/gi, "$1")
     // A card number after "CC" or "card": "HDFC CC 6612".
     .replace(/\b(CC|card)\s\d{4}\b/gi, "$1")
     // A reference of six or more digits, never the digits of a UPI id ("9847012345@ybl").
@@ -23,5 +25,7 @@ export function scrubParty(name: string | undefined): string | undefined {
     .replace(/\s+/g, " ")
     .replace(/[\s\-/.]+$/, "")
     .trim();
+  // A name that is nothing but a one-X mask ("X7781").
+  if (/^[xX]\d{4}$/.test(v)) return undefined;
   return v.length >= 2 && /[A-Za-z]{2}/.test(v) ? v : undefined;
 }
