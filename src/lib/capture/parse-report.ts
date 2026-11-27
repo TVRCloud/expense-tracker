@@ -2,7 +2,7 @@
 // which to give a bank parser first (ticket 154). Pure: the script in scripts/capture-parse-report.ts feeds it.
 // The report holds counts and sender ids only, never message text, amounts or account digits.
 
-import { CONFIDENCE_AUTO_CREATE, parseCapture, type CaptureParse } from "@/lib/capture/parsers";
+import { CONFIDENCE_AUTO_CREATE, parseCapture, SHARED_PARSER_IDS, type CaptureParse } from "@/lib/capture/parsers";
 import { normaliseSender } from "@/lib/capture/parsers/sender";
 
 export interface ReportInput {
@@ -31,19 +31,20 @@ export interface SenderRow {
   changed: number;
 }
 
-/** The group a capture is counted under: the app package for a notification, the SMS header otherwise. A phone
- * number or anything that is not a header is never printed. */
+/** The group a capture is counted under: the app package for a notification, the SMS header otherwise. Both are
+ * client-supplied, so only the strict shapes print: an Android package name, or a header of letters only (a DLT
+ * header). Anything else (a phone number, a label, digits) is counted under a fixed name and never printed. */
 export function sourceKey(input: Pick<ReportInput, "channel" | "sender" | "packageName">): string {
   const pkg = input.packageName?.trim().toLowerCase();
-  if (pkg) return `app:${pkg}`;
+  if (pkg) return /^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+$/.test(pkg) && pkg.length <= 100 ? `app:${pkg}` : "app:other";
+  // A notification's sender is its app label, never a bank header (same rule as the parser registry).
+  if (input.channel === "notification") return "notification:no package";
   const header = normaliseSender(input.sender);
   if (!header) return `${input.channel}:no sender`;
   if (/^\+?\d+$/.test(header)) return `${input.channel}:phone number`;
-  if (!/^[A-Z0-9]{3,9}$/.test(header)) return `${input.channel}:other`;
+  if (!/^[A-Z]{3,9}$/.test(header)) return `${input.channel}:other`;
   return header;
 }
-
-const GENERIC_IDS = new Set(["generic", "navi_emi", "idfc_card_spend", "ignore", "none"]);
 
 export function tally(parse: CaptureParse, row: SenderRow) {
   row.total += 1;
@@ -53,24 +54,36 @@ export function tally(parse: CaptureParse, row: SenderRow) {
   } else if (parse.kind === "loan_emi_payment") row.loan += 1;
   else if (parse.kind === "ignored") row.ignored += 1;
   else row.unknown += 1;
-  if (!GENERIC_IDS.has(parse.parserId)) row.bankParser += 1;
+  if (!SHARED_PARSER_IDS.has(parse.parserId)) row.bankParser += 1;
 }
 
-export function buildReport(inputs: Iterable<ReportInput>, parse = parseCapture): SenderRow[] {
-  const rows = new Map<string, SenderRow>();
-  for (const input of inputs) {
+export class SenderReport {
+  private rows = new Map<string, SenderRow>();
+
+  constructor(private readonly parse = parseCapture) {}
+
+  add(input: ReportInput) {
     const key = sourceKey(input);
-    let row = rows.get(key);
+    let row = this.rows.get(key);
     if (!row) {
       row = { source: key, total: 0, booked: 0, review: 0, loan: 0, ignored: 0, unknown: 0, bankParser: 0, changed: 0 };
-      rows.set(key, row);
+      this.rows.set(key, row);
     }
-    const result = parse(input.text, input.receivedAt, { sender: input.sender, packageName: input.packageName });
+    const result = this.parse(input.text, input.receivedAt, { sender: input.sender, packageName: input.packageName });
     tally(result, row);
     if (input.storedKind && input.storedKind !== result.kind) row.changed += 1;
   }
-  // Most misses first: what lands in Review or comes out unknown is where a bank parser pays off.
-  return [...rows.values()].sort((a, b) => b.review + b.unknown - (a.review + a.unknown) || b.total - a.total);
+
+  /** Most misses first: what lands in Review or comes out unknown is where a bank parser pays off. */
+  rowsByMisses(): SenderRow[] {
+    return [...this.rows.values()].sort((a, b) => b.review + b.unknown - (a.review + a.unknown) || b.total - a.total);
+  }
+}
+
+export function buildReport(inputs: Iterable<ReportInput>, parse = parseCapture): SenderRow[] {
+  const report = new SenderReport(parse);
+  for (const input of inputs) report.add(input);
+  return report.rowsByMisses();
 }
 
 export function formatReport(rows: SenderRow[]): string {

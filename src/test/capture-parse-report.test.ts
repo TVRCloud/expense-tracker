@@ -17,6 +17,14 @@ describe("sourceKey", () => {
     expect(sourceKey({ channel: "sms", sender: "Some Long Label" })).toBe("sms:other");
     expect(sourceKey({ channel: "n8n" })).toBe("n8n:no sender");
   });
+
+  it("never prints a sender or package that could carry message text or digits", () => {
+    expect(sourceKey({ channel: "sms", sender: "XXXX4821" })).toBe("sms:other");
+    expect(sourceKey({ channel: "sms", sender: "VM-AB1234" })).toBe("sms:other");
+    expect(sourceKey({ channel: "notification", packageName: "Rs 640 debited from XX4821" })).toBe("app:other");
+    // A notification's label is the app's own name, never a bank header.
+    expect(sourceKey({ channel: "notification", sender: "AB-HDFCBK" })).toBe("notification:no package");
+  });
 });
 
 describe("buildReport", () => {
@@ -30,6 +38,19 @@ describe("buildReport", () => {
     expect(rows.map((r) => r.source)).toEqual(["ICICIT", "HDFCBK"]);
     expect(rows[1]).toMatchObject({ total: 2, booked: 1, ignored: 1, changed: 1, bankParser: 0 });
     expect(rows[0]).toMatchObject({ total: 2, review: 1, unknown: 1, changed: 0 });
+  });
+
+  it("counts a loan EMI and never counts a format or the ignore check as a bank parser", () => {
+    const [row] = buildReport([
+      {
+        text: "Payment Successful: Advance EMI of Rs.3,980/- received towards Navi Finserv loan account 010000000001 for October 2026.",
+        receivedAt: AT,
+        channel: "sms",
+        sender: "VM-NAVIFN",
+      },
+      { text: OTP, receivedAt: AT, channel: "sms", sender: "VM-NAVIFN" },
+    ]);
+    expect(row).toMatchObject({ loan: 1, ignored: 1, bankParser: 0 });
   });
 
   it("counts what a bank parser read", () => {
