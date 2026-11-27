@@ -28,5 +28,16 @@ describe("Standard Chartered parser", () => {
       want: { parserId: "standard_chartered", type: "expense", amountMinor: 105000, last4: "5832" },
       auto: true,
     },
+    {
+      name: "RTGS credit written as a noun",
+      text: "Dear Customer, there is an RTGS credit of INR 2,85,000.00 in your account 412xxxx5832 on 15/10/2026.Available Balance:INR 3,49,118.20 -StanChart",
+      want: { parserId: "standard_chartered", type: "income", amountMinor: 28500000, last4: "5832", balanceMinor: 34911820 },
+      auto: true,
+    },
+    {
+      name: "an OTP is ignored",
+      text: "605172 is the OTP for your StanChart txn of Rs 1,265.00. Never share it. -StanChart",
+      want: { kind: "ignored", reason: "otp" },
+    },
   ]);
 });

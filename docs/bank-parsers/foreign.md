@@ -9,13 +9,20 @@ banks' apps is on the phone's known list.
 - Shapes: "HSBC: A/c <ddd-ddd***-ddd> is credited|debited with INR ...", "HSBC: INR ... is credited to | paid from
   your A/c ...", "HSBC: INR ... is paid from account XXXXXX<4> to <payee> ...", "Thank you for using HSBC Debit|Credit
   Card ...", "Your HSBC creditcard xxxxx<4> used at <shop> for INR ...".
-- Account: printed as "A/c 118-402***-731", so only three digits show (like ICICI); they are kept as last4. A NEFT
-  credit also names the payer's account at their own bank ("as NEFT from UTIB A/c ***2271 of NAME"): never last4.
-- An outgoing NEFT reads "your NEFT transaction ... has been credited to the <bank> A/c XX<4> of NAME": it is an
-  expense, the beneficiary's account is never last4, and with no account of the person's printed it goes to Review.
-- A debit card is masked to two digits ("XXXXX58xx"), too few to name an account: no last4.
-- Merchant: the payer after "of" on a NEFT credit, the beneficiary on an outgoing NEFT, the shop after "used at" or
-  "at", the payee after "paid from ... to".
+- Account: printed as "A/c 118-402***-731", so only three digits show (like ICICI); they are kept as last4, and
+  matching a three-digit last4 to a saved account is account-match's job (src/lib/CLAUDE.md). A NEFT alert also names
+  the other party's account at their bank ("as NEFT from|to UTIB A/c ***2271 of NAME"): never last4.
+- An outgoing NEFT reads "your NEFT transaction ... has been credited to the <bank> A/c XX<4> of NAME": an expense;
+  the beneficiary's account is never last4, the person's own "A/c ...***-731" is kept when printed, and with none it
+  goes to Review. One that failed, could not be processed, was returned or was credited back to the person's own
+  account is money back (income), never money out.
+- A card is read with four digits ("Credit Card XXXX6603", "creditcard xxxxx6603"); one masked to fewer
+  ("XXXXX58xx") gives no last4. "Thank you for using HSBC ... Card" is money out unless the message says it was
+  reversed, refunded or credited back. "Your HSBC creditcard ... payment of INR ... has been received" is a card bill
+  payment (Review).
+- Merchant: the other party after "of" on a NEFT alert, the beneficiary on an outgoing NEFT, a UPI id after "to", the
+  payee after "towards" (mandate words dropped), the shop after "used at" or "at", the payee after "paid from ... to";
+  never a time of day ("at 10.02.11") or a cash deposit.
 
 ## Standard Chartered (`standard-chartered.ts`, header `SCBANK`)
 - Shapes: "Your a/c XX<4> is debited for Rs. ... and credited to a/c XX<4> (UPI Ref no ...)", "Dear Customer, there
@@ -35,7 +42,8 @@ banks' apps is on the phone's known list.
 - Shapes: "You've spent INR ... on your AMEX card ** <5 digits> at <shop> on <date>", "received a payment of INR ...
   towards your AMEX card ** <5 digits>".
 - The card prints five digits; the last four are kept, the length every other card uses for matching.
-- A payment towards the card is a card bill payment (shared rule: capped at 0.5, Review).
+- A payment towards the card ("received a payment of INR ... towards your AMEX card", "Your payment of INR ... towards
+  your American Express Card ending <5 digits> has been received") is a card bill payment: capped at 0.5, Review.
 
 ## Left out
 - Citi: its Indian retail and card business moved to Axis Bank in 2023, and no Indian Citi SMS header could be

@@ -17,6 +17,23 @@ describe("DBS parser", () => {
       want: { parserId: "dbs", type: "income", amountMinor: 353000, last4: "5832", merchant: "priya.s@okicici" },
       auto: true,
     },
+    {
+      name: "IMPS credit from a person",
+      text: "Your account no ********5832 is credited with INR 1,975.00 on 15-10-26 by IMPS from SANJAY GHOSH. - DBS Bank",
+      want: { parserId: "dbs", type: "income", amountMinor: 197500, last4: "5832" },
+      auto: true,
+    },
+    {
+      name: "UPI debit to a UPI id",
+      text: "Your account no ********5832 is debited with INR 128.00 on 15-10-26 by UPI to chaiwala.b@okaxis. - DBS Bank",
+      want: { parserId: "dbs", type: "expense", amountMinor: 12800, last4: "5832", merchant: "chaiwala.b@okaxis" },
+      auto: true,
+    },
+    {
+      name: "an OTP is ignored",
+      text: "DBS Bank: 271946 is your OTP for a transfer of INR 3,215.00. Do not share it with anyone.",
+      want: { kind: "ignored", reason: "otp" },
+    },
   ]);
 
   it("leaves a 'Current Balance' unread (on a card it would be the amount owed)", () => {

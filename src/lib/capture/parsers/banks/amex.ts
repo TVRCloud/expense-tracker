@@ -5,7 +5,9 @@
 import { cleanParty, KnownBankParser, NAME } from "./known";
 import type { FoundAccount } from "../extract/account";
 
-const CARD = /\bAMEX\scard\s\*{1,4}\s?\d{0,2}(\d{4})\b/i;
+const CARD = /\b(?:AMEX|American\sExpress)\scard\s(?:ending\s(?:in\s)?|\*{1,4}\s?)\d{0,2}(\d{4})\b/i;
+// "Your payment of INR ... towards your American Express Card ... has been received": a bill payment.
+const BILL_PAID = /\bpayment\sof\sINR\s?[\d,.]{1,15}\stowards\syour\s(?:AMEX|American\sExpress)\scard\b[^.]{0,60}?\breceived\b/i;
 
 export class AmexParser extends KnownBankParser {
   readonly id = "amex";
@@ -15,7 +17,12 @@ export class AmexParser extends KnownBankParser {
   protected readonly shapes = [
     /\bspent\sINR\s[\d,.]{1,15}\son\syour\sAMEX\scard\s\*{1,4}\s?\d{4,5}\sat\s/i,
     /\breceived\s(?:a\s)?payment\sof\sINR\s[\d,.]{1,15}\stowards\syour\sAMEX\scard\s\*{1,4}\s?\d{4,5}\b/i,
+    BILL_PAID,
   ];
+
+  protected override cardPayment(text: string): boolean {
+    return BILL_PAID.test(text) || super.cardPayment(text);
+  }
 
   protected override account(text: string, type: "income" | "expense"): FoundAccount | null {
     const card = text.match(CARD);

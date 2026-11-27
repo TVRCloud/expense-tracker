@@ -26,6 +26,13 @@ function tricky(bank: string): { name: string; text: string; ok?: "income" }[] {
     { name: "failed payment", text: `Your txn of Rs 284.00 from A/c XX6218 to SHOPLY has failed. -${bank}` },
     { name: "OTP", text: `730418 is your OTP for a payment of Rs 689.00 at SHOPLY. Do not share. -${bank}` },
     { name: "pre-debit notice", text: `Pre-debit alert: Rs 247.00 will be debited from A/c XX6218 on 16-10-26 for TuneCo. -${bank}` },
+    // The foreign banks' own shapes, read wrongly by an earlier draft (ticket 174 review).
+    { name: "card spend reversed", text: `Thank you for using HSBC Credit Card XXXX6218 for INR 1,436.00 at QUAYSIDE CAFE on 14-Oct-26. The transaction has been reversed.`, ok: "income" },
+    { name: "debit card refund credited", text: `HSBC: Thank you for using HSBC Debit Card XXXXX62xx for INR 318.00 on 14-Oct-26 at OAK DELI . Refund of INR 318.00 has been credited.`, ok: "income" },
+    { name: "failed NEFT returned", text: `HSBC: Dear HSBC Customer, your NEFT transaction for INR 6,120.00 has failed and the amount has been credited to the A/c 118-402***-621 on 14-10-2026 .`, ok: "income" },
+    { name: "NEFT not processed and returned", text: `HSBC: Dear HSBC Customer, your NEFT transaction for INR 2,735.00 could not be processed and has been credited to the A/c 118-402***-621 on 14-10-2026 .`, ok: "income" },
+    { name: "HSBC card bill received", text: `Your HSBC creditcard xxxxx6218 payment of INR 9,840.00 has been received. Thank you.` },
+    { name: "Amex card bill received", text: `Your payment of INR 16,400.00 towards your American Express Card ending 36218 has been received. Thank you.` },
   ];
 }
 
