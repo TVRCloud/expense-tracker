@@ -69,7 +69,11 @@ export abstract class KnownBankParser extends BankParser {
     // Cash from an ATM has no shop, whatever word sits after "on".
     if (parse.atm && parse.merchant) parse.merchant = undefined;
     // A debit under a mandate names the payee after the mandate word ("towards e-mandate STREAMLY"): keep the payee.
-    if (parse.merchant) parse.merchant = parse.merchant.replace(/^(?:UPI\s)?(?:e-?mandate|mandate|auto\s?-?pay)\s(?!registration|set\s?-?up|creation)(?=\S)/i, "");
+    if (parse.merchant) {
+      parse.merchant = parse.merchant
+        .replace(/^(?:UPI\s|NACH\s)?(?:e-?mandate|mandate|auto\s?-?pay)\s(?!registration|set\s?-?up|creation)(?=\S)/i, "")
+        .replace(/^NACH[\s-](?=[A-Za-z])/i, "");
+    }
     // A card bill paid from the person's bank account ("debited from A/c XX1234 ... credit card bill"): the type stays
     // income like every card payment (money into the card; ingest queues it as card_payment and never books it), and
     // the digits are only ever the card's own, never the debited account's, so it cannot suggest the wrong account.

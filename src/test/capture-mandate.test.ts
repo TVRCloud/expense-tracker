@@ -19,11 +19,11 @@ const money = (p: CaptureParse) => {
 describe("mandate notices", () => {
   it.each([
     {
-      text: "Your UPI-Mandate for Rs.637.00 is successfully created towards STREAMLY from A/c No: XXXX7362. UMN: 4f2a91c0d2@okaxis -Axis Bank",
+      text: "UPI AutoPay for STREAMLY created: up to Rs 637.00 a month from A/c XX7362. -Axis Bank",
       want: { event: "created", merchant: "STREAMLY", maxAmountMinor: 63700, last4: "7362" },
     },
     {
-      text: "You have successfully created a mandate on TuneBox for a MONTHLY frequency starting from 05-12-2026 for a maximum amount of Rs 189.00. Mandate Ref No- 7c1e90aa31@okhdfc",
+      text: "e-mandate for TuneBox registered: monthly, max Rs 189.00, starting 05-12-2026.",
       want: { event: "created", merchant: "TuneBox", maxAmountMinor: 18900, frequency: "monthly" },
     },
     {
@@ -40,7 +40,7 @@ describe("mandate notices", () => {
   });
 
   it("keeps the start and end dates printed", () => {
-    const start = mandate(parseCapture("You have successfully created a mandate on TuneBox for a MONTHLY frequency starting from 05-12-2026 for a maximum amount of Rs 189.00.", AT));
+    const start = mandate(parseCapture("e-mandate for TuneBox registered: monthly, max Rs 189.00, starting 05-12-2026.", AT));
     expect(start.startDate?.toISOString().slice(0, 10)).toBe("2026-12-05");
     const until = mandate(parseCapture("Your e-mandate for GYMPASS has been paused till 31-01-2027.", AT));
     expect(until.validUntil?.toISOString().slice(0, 10)).toBe("2027-01-31");
@@ -60,6 +60,39 @@ describe("mandate notices", () => {
     ["Use OTP 583104 to create your e-mandate for STREAMLY. Do not share it.", "ignored"],
   ])("%s is not a mandate notice", (text, kind) => {
     expect(parseCapture(text, AT).kind).toBe(kind);
+  });
+});
+
+// Review of ticket 157: when in doubt it is money. Every one of these moved money (or says so), so none may be kept as a
+// mandate notice; each is booked or put in Review like before. Re-worded, invented values.
+describe("money that mentions a mandate is never a notice", () => {
+  it.each([
+    "NACH credit of Rs 4,180 received from ORBIT TOOLS LTD in A/c XX7362. Balance updated.",
+    "Rs 4,180 deposited in A/c XX7362 via NACH from ORBIT TOOLS LTD. Mandate ID changed.",
+    "Refund of Rs 187 for SOUNDLY AutoPay received in A/c XX7362. Mandate cancelled.",
+    "Rs 2,170 WDL A/c XX7362 NACH ORBIT LOANS. Mandate updated",
+    "Purchase of Rs 463 on Card XX5583 at MEDIPLAN via standing instruction. SI registered.",
+    "Rs.187 used at SOUNDLY via AutoPay on Card XX5583. Mandate approved.",
+    "Txn of Rs 463 under e-mandate at PRIMEPIX on HDFC Bank Card XX5583 approved on 05-12-26.",
+    "E-mandate payment of Rs 615 to CLOUDKEEP processed successfully on HDFC Bank Credit Card XX5583. Mandate registered on 01-12-26.",
+    "Payment of Rs 287 via AutoPay to SOUNDLY done from Acct XX362. AutoPay activated.",
+    "Your AutoPay of Rs 331 to TUNEBOX is executed successfully from A/c XX7362. Mandate updated.",
+    "NACH debit Rs 2170 successful in A/c XX7362 for ORBIT LOANS. Mandate UMRN registered.",
+    "Debit INR 2170.00 A/c no. XX6629 05-12-26 NACH-DR-ORBIT LOANS. Mandate executed. Avl Bal INR 9,120.00 updated",
+    "Mandate executed: INR 2,170 debit from IDFC FIRST Bank A/C XX2296 for ORBIT LOANS approved.",
+    "UPI AutoPay: Rs 187 to SOUNDLY successful. Mandate created on 01-12-26.",
+    "Rs. 187 Dr. from A/c XX7362 for UPI AutoPay SOUNDLY. AutoPay activated.",
+  ])("%s", (text) => {
+    for (const sender of SENDERS) {
+      const p = parseCapture(text, AT, { sender });
+      expect(p.kind, String(sender)).not.toBe("mandate");
+      expect(p.kind, String(sender)).not.toBe("investment");
+    }
+  });
+
+  it("never takes a mandate reference written like a UPI id as the merchant", () => {
+    const p = mandate(parseCapture("e-mandate for 7c1e90aa31@okhdfc created, max Rs 187.00.", AT));
+    expect(p.merchant).toBeUndefined();
   });
 });
 
@@ -105,6 +138,25 @@ describe("money into a loan", () => {
       expect(p.type).toBe("expense");
       expect(p.confidence).toBeLessThan(CONFIDENCE_AUTO_CREATE);
     }
+  });
+
+  it("a debit named with the bank between ('by NACH debit from your HDFC Bank A/c') is sure of the account", () => {
+    const p = money(
+      parseCapture("Rs 2,315.00 has been credited to your loan account XX6618 by NACH debit from your HDFC Bank A/c XX7362.", AT, {
+        sender: "VM-HDFCBK-S",
+      })
+    );
+    expect(p).toMatchObject({ type: "expense", last4: "7362" });
+    expect(p.confidence).toBeGreaterThanOrEqual(CONFIDENCE_AUTO_CREATE);
+    expect(p.merchant ?? "").not.toMatch(/debit/i);
+  });
+
+  it.each([
+    "Your loan account XX6618 is credited with Rs 2,40,000.00 being loan amount and the same is transferred to your a/c XX7362.",
+    "Your loan account XX6618 has been credited with Rs 940 cashback. Amount credited to your A/c XX7362.",
+    "Interest of Rs 115 credited to your loan account XX6618 as subvention by the government.",
+  ])("a disbursal, cashback or subvention is never read as a repayment: %s", (text) => {
+    for (const sender of SENDERS) expect(money(parseCapture(text, AT, { sender })).type, String(sender)).toBe("income");
   });
 
   it("a loan paid out to the person is still income", () => {

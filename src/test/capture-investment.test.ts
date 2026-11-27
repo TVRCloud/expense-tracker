@@ -14,7 +14,7 @@ describe("fund house messages", () => {
   it.each([
     {
       sender: "VM-LOTSMF",
-      text: "Unit Allotment Update: Your SIP purchase of Rs.2,750.00 in Lotus Midcap Growth Fund DG has been processed at applicable NAV. Units will be alloted in 1-2 working days.",
+      text: "Lotus MF: your SIP into Lotus Midcap Growth Fund DG for Rs.2,750.00 is processed; units go to your folio at the day's NAV.",
       want: { event: "sip", fundName: "Lotus Midcap Growth Fund DG", amountMinor: 275000 },
     },
     {
@@ -64,5 +64,49 @@ describe("a card or account spend at a fund is still money", () => {
     "Rs 5,000.00 spent on Card XX4417 at HARBOR MUTUAL FUND on 05-12-26. SIP purchase processed.",
   ])("%s", (text) => {
     expect(parseCapture(text, AT).kind).toBe("money");
+  });
+});
+
+// Review of ticket 157: a bank's or a payment app's own message about a SIP or a redemption is the money itself, and a
+// bare "fund" is not a fund house. None of these may be kept as a fund note. Re-worded, invented values.
+describe("money about a fund is never a fund house note", () => {
+  it.each([
+    ["VM-HDFCBK-S", "Rs 4,950 has been debited from your HDFC Bank account XX5150 for SIP in Orchard Value Fund. SIP processed."],
+    ["VM-HDFCBK-S", "Payment Successful! Rs. 4,950.00 from A/c ****5150 to BSE LIMITED MUTUAL FUND SIP via HDFC Bank NetBanking."],
+    ["VM-HDFCBK-S", "Sent Rs.4950.00 From HDFC Bank A/C *5150 To ORCHARD MUTUAL FUND On 05/12/26. SIP has been registered."],
+    ["VM-HDFCBK-S", "INR 11,640.00 deposited in HDFC Bank A/c XX5150 on 05-DEC-26 for NEFT Cr-ORCH0000123-MF REDEMPTION-ASHA. Redemption received."],
+    ["AX-ICICIT-S", "INR 11,640.00 received in ICICI Bank Account XX515 from ORCHARD MUTUAL FUND redemption."],
+    ["JD-SBIINB-S", "Rs 4,950 debited from SBI a/c XX7362 via NACH for SIP in Orchard Value Fund. SIP processed."],
+    ["AX-AXISBK-S", "INR 4950.00 debited A/c no. XX6629 05-12-26 NACH/BSE LTD MUTUAL FUND SIP processed."],
+    ["JD-KOTAKB-S", "Rs 4,950 debited from Kotak Bank A/c X3358 for SIP in Orchard Value Fund (folio XX884411) successfully."],
+    ["JD-KOTAKB-S", "Sent Rs.4950.00 from Kotak Bank AC X3358 to icclmf@icici on 05-12-26. Purchase confirmed."],
+    [undefined, "Paid ₹4,950 to Orchard Mutual Fund. SIP payment successful."],
+    [undefined, "Received ₹11,640 from Orchard Mutual Fund. Redemption processed."],
+    [undefined, "Rs 11,640 deposited to A/c XX5150. Redemption of 92.115 units completed."],
+    [undefined, "Your account 5150 debited Rs 4,950 towards SIP in Orchard Value Fund successful."],
+    [undefined, "Redemption of 92.115 units processed. Amount Rs 11,640 has been credited to HDFC Bank A/c XX5150."],
+    [undefined, "Rs 1,900 paid to Chief Minister Relief Fund. Purchase confirmed via Card XX5583."],
+    [undefined, "Rs 4,950 transferred to PM CARES Fund from A/c XX5150. Allotment of receipt confirmed."],
+    [undefined, "Your fund transfer of Rs 9,850 has been processed from A/c XX5150."],
+    [undefined, "Txn of Rs 4950 on Card XX5583 at PINEVALE MUTUAL FUND successful. Purchase processed."],
+    [undefined, "Rs 14,120 refunded to your A/c XX5150 for unallotted IPO. Fund allotment completed."],
+  ])("%s %s", (sender, text) => {
+    const p = parseCapture(text, AT, { sender });
+    expect(p.kind).not.toBe("investment");
+    expect(p.kind).not.toBe("mandate");
+  });
+});
+
+describe("a fund note never keeps a folio number or a PAN", () => {
+  it.each([
+    "Units allotted in folio 70013348 of Harbor Bluechip Fund at NAV 66.6052 for Rs 2,750.00.",
+    "SIP of Rs 2,750 for PAN ABCDE1234F in Harbor Bluechip Fund processed at NAV 66.6052.",
+  ])("%s", (text) => {
+    const p = investment(parseCapture(text, AT));
+    expect(p.fundName).toBe("Harbor Bluechip Fund");
+    // Every text field: no 5-digit run (a folio) and no PAN. Amounts in paise are numbers, not text.
+    const texts = Object.values(p).filter((v): v is string => typeof v === "string").join(" ");
+    expect(texts).not.toMatch(/\d{5,}/);
+    expect(texts).not.toMatch(/[A-Z]{5}\d{4}[A-Z]/);
   });
 });

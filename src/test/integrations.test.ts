@@ -4519,18 +4519,28 @@ describe("mandate, fund house and loan messages at ingest", () => {
   }
 
   it.each([
-    ["mandate", "Your UPI-Mandate for Rs.637.00 is successfully created towards STREAMLY from A/c No: XXXX7362. UMN: 4f2a91c0d2@okaxis"],
+    ["mandate", "UPI AutoPay for STREAMLY created: up to Rs 637.00 a month from A/c XX7362."],
     ["mandate", "UPI AutoPay mandate for CloudBox of Rs 129.00 has been revoked as requested."],
     ["investment", "Dear Investor, 41.287 units allotted in Folio No 70013348/21 under Harbor Bluechip Fund - Direct Growth at NAV 66.6052 for Rs 2,750.00 on 03-Dec-2026."],
-    ["investment", "Unit Allotment Update: Your SIP purchase of Rs.2,750.00 in Lotus Midcap Growth Fund DG has been processed at applicable NAV."],
+    ["investment", "Lotus MF: your SIP into Lotus Midcap Growth Fund DG for Rs.2,750.00 is processed; units go to your folio at the day's NAV."],
   ])("keeps a %s message without booking it or putting it in Review", async (reason, text) => {
     const { actor } = await setup();
-    const res = await ingest(actor, text);
+    // A fund house's note comes from the fund house; from a bank sender the same text is the money itself.
+    const res = await ingest(actor, text, reason === "investment" ? "VM-HARBMF" : "VM-HDFCBK-S");
     expect(res.body).toMatchObject({ status: "ignored", reason });
     const { capture, txns, counts } = await state(actor.id, res.body.captureId);
     expect(capture).toMatchObject({ outcome: "ignored", reason, status: "resolved", parse: { kind: reason } });
     expect(txns).toHaveLength(0);
     expect(counts).toMatchObject({ needsReview: 0, couldntMatch: 0 });
+  });
+
+  it("reads a bank's own message about a SIP as money, never a fund note", async () => {
+    const { actor } = await setup();
+    const res = await ingest(actor, "Rs 2,750.00 has been debited from your HDFC Bank account XX7362 for SIP in Harbor Bluechip Fund. SIP processed.");
+    expect(res.body.status).toBe("created");
+    const { txns } = await state(actor.id, res.body.captureId);
+    expect(txns).toHaveLength(1);
+    expect(txns[0]).toMatchObject({ type: "expense", amount: 275000 });
   });
 
   it("books a debit made under a mandate", async () => {

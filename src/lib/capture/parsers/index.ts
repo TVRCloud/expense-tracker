@@ -55,14 +55,16 @@ export function createCaptureParser(parsers: readonly BankParser[]) {
     const text = raw.normalize("NFKC");
     const reason = ignoreReason(text);
     if (reason === "otp") return { kind: "ignored", parserId: "ignore", confidence: 1, reason };
-    const notice = parseMandateNotice(text) ?? parseInvestment(text, receivedAt);
+    // A fund house's note never comes from a bank: a bank's message about a SIP or a redemption is the money itself.
+    const bank = findBankParser(source, parsers);
+    const notice = parseMandateNotice(text) ?? (bank ? null : parseInvestment(text, receivedAt));
     if (notice) return notice;
     if (reason) return { kind: "ignored", parserId: "ignore", confidence: 1, reason };
 
     return (
       parseLoanEmi(text) ??
       parseIdfcCardSpend(text, receivedAt) ??
-      findBankParser(source, parsers)?.parse(text, receivedAt) ??
+      bank?.parse(text, receivedAt) ??
       genericParser.parse(text, receivedAt) ?? { kind: "unknown", parserId: "none", confidence: 0 }
     );
   };

@@ -9,23 +9,38 @@
 import { parseMessageDate } from "./dates";
 import { findAmount, toMinorUnits } from "./extract/amount";
 import { findBankName, findLast4 } from "./extract/account";
+import { CREDIT_WORDS, DEBIT_WORDS } from "./extract/direction";
 import type { InvestmentParse, MandateParse } from "./types";
 
 /** A mandate word: UPI AutoPay, e-mandate, NACH, a card's standing instruction, a mandate reference. */
 export const MANDATE_WORD = /\b(?:e-?mandate|mandates?|auto\s?-?pay|NACH|standing\s+instructions?|UMRN|UMN)\b/i;
+const MANDATE_SRC = String.raw`(?:e-?mandate|mandates?|auto\s?-?pay|NACH|standing\s+instructions?|SI)`;
 
 // What happened to the mandate. A word that only says it was used ("processed", "executed") is a payment, not this.
-const EVENTS: [MandateParse["event"], RegExp][] = [
-  ["revoked", /\b(?:revoked|cancell?ed|deactivated|discontinued|deleted|terminated|stopped)\b/i],
-  ["paused", /\b(?:paused|suspended|put\s+on\s+hold)\b/i],
-  ["resumed", /\b(?:resumed|reactivated|unpaused)\b/i],
-  ["modified", /\b(?:modified|updated|changed|amended|revised)\b/i],
-  ["created", /\b(?:created|registered|set\s?-?up|activated|accepted|approved|successfully\s+(?:added|linked))\b/i],
+const EVENT_WORDS: [MandateParse["event"], string][] = [
+  ["revoked", String.raw`revoked|cancell?ed|deactivated|discontinued|deleted|terminated|stopped`],
+  ["paused", String.raw`paused|suspended|put\s+on\s+hold`],
+  ["resumed", String.raw`resumed|reactivated|unpaused`],
+  ["modified", String.raw`modified|updated|changed|amended|revised`],
+  ["created", String.raw`created|registered|set\s?-?up|activated|accepted|approved|successfully\s+(?:added|linked)`],
 ];
+// The event must belong to the mandate itself: the mandate word and the event in one clause, at most
+// 100 characters apart ("UPI-Mandate for Rs.637.00 is successfully created", "created a mandate on"), never across a
+// sentence end. "Balance updated." after a NACH credit is not a mandate being updated.
+const CLAUSE = String.raw`(?:[^.;!?\n]|\.(?=\d))`;
+const EVENTS: [MandateParse["event"], RegExp, RegExp][] = EVENT_WORDS.map(([event, words]) => [
+  event,
+  new RegExp(String.raw`\b${MANDATE_SRC}\b${CLAUSE}{0,100}?\b(?:${words})\b`, "i"),
+  new RegExp(String.raw`\b(?:${words})\s(?:a\s|an\s|the\s|your\s)?(?:new\s)?(?:UPI\s)?${MANDATE_SRC}\b`, "i"),
+]);
 
-// Money that already moved in this message. "will be debited" is a promise, not this.
-const MOVED =
-  /(?<!\b(?:will|to|shall|would)\s+be\s+)\b(?:debited|deducted|credited|paid|spent|withdrawn|sent|transferred|charged|refunded|reversed)\b/i;
+// Money moved in this message, so it is a payment or a credit, never a notice. When in doubt it is money: a missed
+// notice only costs a Review item, a wrongly kept notice loses a payment without a trace.
+const MOVED_MORE =
+  /\b(?:debit|dr|cr|executed|processed|done|paid|used|wdl|txn|deposited|withdrawn|charged|received|sent|transferred|payment\s+successful)\b|\bsuccessful(?:ly)?\b(?!\s+(?:created|registered|set\s?-?up|setup|activated|added|linked|modified|updated|revoked|cancell?ed|paused|resumed)\b)/i;
+export function moneyMoved(text: string): boolean {
+  return DEBIT_WORDS.test(text) || CREDIT_WORDS.test(text) || MOVED_MORE.test(text);
+}
 // Not a settled mandate: a request waiting for approval, a failure, or a pre-debit notice (those stay with ignore.ts).
 const NOT_A_NOTICE =
   /\b(?:has|have)\s+requested\b|\bcollect\s+request\b|\b(?:approve|authori[sz]e)\s+(?:the|this|your)\b|\bpending\s+(?:for\s+)?(?:approval|authori[sz]ation)\b|\b(?:failed|declined|unsuccessful|rejected|could\s+not\s+be)\b|\bpre-?debit\b/i;
@@ -69,25 +84,32 @@ function cleanMerchant(raw: string | undefined): string | undefined {
   const v = raw
     ?.replace(/\s+/g, " ")
     .trim()
-    .replace(/[ .*\-]{1,5}$/, "");
+    .replace(/[ .*\-]{1,5}$/, "")
+    // A verb the bank wrote after the name ("STREAMLY processed").
+    .replace(/\s(?:processed|done|executed|successful(?:ly)?|completed)$/i, "");
   if (!v || v.length < 2 || !/[A-Za-z]{2}/.test(v) || NOT_A_MERCHANT.test(v)) return undefined;
   // A masked number or an amount is never the merchant.
-  if (/[x*]{2,}\d|\b(?:rs|inr)\.?\s?\d|\d{6,}/i.test(v)) return undefined;
+  if (/[x*]{2,}\d|\b(?:rs|inr)\.?\s?\d|\d{6,}/i.test(v) || /[A-Z]{5}\d{4}[A-Z]/.test(v)) return undefined;
+  // A mandate reference written like a UPI id ("4f2a91c0d2@okaxis") is never the merchant.
+  if (/(?:^|\s)[a-z0-9]{8,}@/i.test(v) && /\d/.test(v.split("@")[0])) return undefined;
   return v.slice(0, 60);
 }
 
 /** A mandate set up, changed, paused, resumed or revoked, when no money moved in the message. */
 export function parseMandateNotice(raw: string): MandateParse | null {
   const text = raw.replace(/\s+/g, " ").trim();
-  if (!MANDATE_WORD.test(text) || MOVED.test(text) || NOT_A_NOTICE.test(text)) return null;
-  const event = EVENTS.find(([, re]) => re.test(text))?.[0];
+  if (!MANDATE_WORD.test(text) || moneyMoved(text) || NOT_A_NOTICE.test(text)) return null;
+  const event = EVENTS.find(([, after, before]) => after.test(text) || before.test(text))?.[0];
   if (!event) return null;
 
   let merchant: string | undefined;
   find: for (const re of MERCHANT_PATTERNS) {
     // matchAll copies the regex, so the shared pattern keeps no lastIndex between calls.
     for (const m of text.matchAll(re)) {
-      merchant = cleanMerchant(m[1]);
+      // A UPI id runs on past its dots ("john.doe.98@okicici"): take it whole, then judge it.
+      const after = text.slice((m.index ?? 0) + m[0].length);
+      const vpaTail = /^\.[\w.-]{0,40}@[a-z][\w-]{1,20}/i.exec(after)?.[0] ?? "";
+      merchant = cleanMerchant(m[1] + vpaTail);
       if (merchant) break find;
     }
   }
@@ -111,26 +133,31 @@ export function parseMandateNotice(raw: string): MandateParse | null {
   };
 }
 
-// A fund house's words: the fund, a folio, a NAV, an AMC.
-const FUND_SIGNAL = /\b(?:mutual\s+funds?|folio|NAV|fund|AMC|units?\s+allott?ed)\b/i;
+// A fund house's own words: a folio, a NAV, units allotted or redeemed, a mutual fund or an AMC. A bare "fund"
+// ("Relief Fund", "fund transfer") is never enough.
+const FUND_SIGNAL = /\b(?:folio|NAV|mutual\s+funds?|AMC|units?\s+(?:allott?ed|redeemed|switched|purchased)|(?:allott?ed|redeemed)\s+[\d,.]{1,14}\s*units)\b/i;
+// The figures only a fund house prints: with them, "purchase" names the fund event, not a spend.
+const FUND_FIGURES = /\b(?:folio|NAV)\b|\bunits?\s+(?:allott?ed|redeemed|switched|purchased)\b|\b[\d,]{1,12}\.\d{1,4}\s*units\b/i;
 const FUND_EVENT =
-  /\b(?:SIP|purchases?|purchased|allot(?:ted|ment)?|alloted|redeem(?:ed)?|redemption|switch(?:ed)?|lump\s?sum|subscription)\b/i;
+  /\b(?:SIP|purchases?|purchased|allot(?:ted|ment)?|alloted|redeem(?:ed)?|redemption|switch(?:ed)?|lump\s?sum)\b/i;
 const FUND_DONE =
-  /\b(?:processed|allott?ed|confirmed|received|successful(?:ly)?|registered|redeemed|switched|executed|purchased|accepted|completed|(?:has|have)\s+been)\b/i;
-// Not a settled fund event: a failure, a due or upcoming instalment, an advert, a NAV update.
+  /\b(?:processed|allott?ed|confirmed|registered|redeemed|switched|executed|accepted|completed|(?:has|have)\s+been)\b/i;
+// Not a settled fund event: a failure, a due or upcoming instalment, an advert.
 const NOT_FUND_EVENT =
-  /\b(?:failed|declined|unsuccessful|rejected|could\s+not\s+be|insufficient|bounced|due\s+(?:on|date|by)|upcoming|scheduled|reminder|will\s+be\s+(?:debited|deducted|presented|auto-?debited)|start\s+(?:a|your)\s+SIP|invest\s+now|click|apply|download|offer|why\s+wait)\b/i;
-// The bank's own message about the person's account: that one is the money, and stays a normal parse.
-const BANK_MOVE = [
-  /(?<!\b(?:will|to|shall)\s+be\s+)\b(?:debited|credited|charged)\s+(?:from|to|in|into|on)\s+(?:your\s+)?(?:bank\s+|savings\s+|credit\s+|debit\s+)?(?:a\/c|acct|account|card)\b/i,
-  // Spent or charged on the person's card or account: that is the money too.
-  /(?<!\b(?:will|to|shall)\s+be\s+)\b(?:spent|withdrawn)\b/i,
-  /\b(?:a\/c|acct|account|card)\s?(?:no\.?)?\s?[x*]{1,12}\d{3,4}\s(?:is\s|has\sbeen\s|was\s)?(?:debited|credited|charged)\b/i,
-  /\b(?:debited|credited)\s+(?:from|to)\s+(?:a\/c|acct|account)\s?(?:no\.?)?\s?[x*]{1,12}\d{3,4}\b/i,
-];
+  /\b(?:failed|declined|unsuccessful|rejected|could\s+not\s+be|insufficient|bounced|due\s+(?:on|date|by)|upcoming|scheduled|reminder|will\s+be\s+(?:debited|deducted|presented|auto-?debited)|start\s+(?:a|your)\s+SIP|invest\s+now|click|apply|download|offer|why\s+wait|IPO|refund(?:ed)?)\b/i;
+// Money that moved on the person's own account or card in this message: that one is the money, so the message stays a
+// money parse (booked or in Review). "purchase" alone is a fund word when the fund's own figures are printed.
+const MONEY_HERE =
+  /(?<!\b(?:will|to|shall|would)\s+be\s+)\b(?:debited|credited|debit|dr|cr|spent|paid|sent|received|deposited|withdrawn|transferred|deducted|charged|used|wdl|txn|refund(?:ed)?|reversed|payment\s+(?:of|successful))\b/i;
+const FOLIO_FIGURE = /\bfolio\s*(?:no\.?|number|#)?\s*[:\-]?\s*[x*]{0,12}\d{4,20}(?:\/\d{1,4})?/gi;
 
-const FUND_NAME =
-  /\b(?:in|of|for|from|into|to|under)\s+((?:[A-Za-z0-9][\w&'-]{0,30}\s){0,8}?(?:Fund|FoF|ETF)\b(?:\s(?:-\s)?(?:Direct|Regular|Growth|IDCW|DG|RG|Dir|Gr|Plan|Option)\b){0,4})/i;
+// A fund's name: up to eight words ending in Fund, FoF or ETF, never a folio, a PAN, an amount or an account.
+const NAME_WORD = String.raw`(?!(?:folio|pan|rs|inr|a\/c|acct|account|units?|sip|nav)\b)(?:[A-Za-z][\w&'-]{0,30}|\d{1,3})`;
+const FUND_NAME = new RegExp(
+  String.raw`\b(?:in|of|for|from|into|to|under)\s+((?:${NAME_WORD}\s){0,8}?(?:Fund|FoF|ETF)\b(?:\s(?:-\s)?(?:Direct|Regular|Growth|IDCW|DG|RG|Dir|Gr|Plan|Option)\b){0,4})`,
+  "gi"
+);
+const UNSAFE_NAME = /\d{5,}|[A-Z]{5}\d{4}[A-Z]|\b(?:folio|pan|rs|inr|a\/c)\b|[x*]{2,}\d/i;
 const UNITS =
   /\b(?:units?\s*(?:allott?ed|redeemed|purchased|switched)?\s*(?:is|are|:|-|of)?\s*([\d,]{1,12}\.\d{1,4})\b|([\d,]{1,12}\.\d{1,4})\s*units\b)/i;
 const NAV = /\bNAV\s*(?:of|:|is|@|at)?\s*(?:Rs\.?|INR|₹)?\s*([\d,]{1,8}\.\d{1,4})\b/i;
@@ -140,15 +167,27 @@ function fundEvent(text: string): InvestmentParse["event"] {
   if (/\bredeem(?:ed)?\b|\bredemption\b/i.test(text)) return "redemption";
   if (/\bswitch(?:ed)?\b/i.test(text)) return "switch";
   if (/\bSIP\b/i.test(text)) return "sip";
-  if (/\bpurchases?\b|\bpurchased\b|\blump\s?sum\b|\bsubscription\b/i.test(text)) return "purchase";
+  if (/\bpurchases?\b|\bpurchased\b|\blump\s?sum\b/i.test(text)) return "purchase";
   return "allotment";
 }
 
-/** A fund house's or registrar's note about a SIP, purchase, allotment, redemption or switch. */
+function fundName(text: string): string | undefined {
+  for (const m of text.matchAll(FUND_NAME)) {
+    const name = m[1].trim();
+    if (!UNSAFE_NAME.test(name)) return name.slice(0, 80);
+  }
+  return undefined;
+}
+
+/** A fund house's or registrar's note about a SIP, purchase, allotment, redemption or switch. Only when it has the
+ * fund's own shape and nothing says money moved on the person's account or card; otherwise it stays money. */
 export function parseInvestment(raw: string, receivedAt: Date): InvestmentParse | null {
   const text = raw.replace(/\s+/g, " ").trim();
-  if (!FUND_SIGNAL.test(text) || !FUND_EVENT.test(text) || !FUND_DONE.test(text)) return null;
-  if (NOT_FUND_EVENT.test(text) || BANK_MOVE.some((re) => re.test(text))) return null;
+  if (!FUND_SIGNAL.test(text) || !FUND_EVENT.test(text) || !FUND_DONE.test(text) || NOT_FUND_EVENT.test(text)) return null;
+  // Money moved: any money word, a "purchase" without the fund's own figures, or the person's account or card named.
+  if (MONEY_HERE.test(text) || CREDIT_WORDS.test(text)) return null;
+  if (DEBIT_WORDS.test(text.replace(/\bpurchases?\b/gi, " ")) || (/\bpurchases?\b/i.test(text) && !FUND_FIGURES.test(text))) return null;
+  if (findLast4(text.replace(FOLIO_FIGURE, " "))) return null;
 
   const amount = findAmount(text);
   const units = UNITS.exec(text);
@@ -158,7 +197,7 @@ export function parseInvestment(raw: string, receivedAt: Date): InvestmentParse 
     parserId: "investment",
     confidence: 0.9,
     event: fundEvent(text),
-    fundName: FUND_NAME.exec(text)?.[1].trim().slice(0, 80),
+    fundName: fundName(text),
     amountMinor: amount?.currency === "INR" ? amount.minor : undefined,
     units: (units?.[1] ?? units?.[2])?.replace(/,/g, ""),
     nav: NAV.exec(text)?.[1].replace(/,/g, ""),
