@@ -7,6 +7,7 @@ import { findAmount, type FoundAmount } from "./extract/amount";
 import { findBankName, findLast4, findPaidCard, type FoundAccount } from "./extract/account";
 import { findDirection, isAtmWithdrawal, isCardPayment, type FoundDirection } from "./extract/direction";
 import { findMerchant, findRef } from "./extract/merchant";
+import { normaliseSender } from "./sender";
 import type { MoneyParse } from "./types";
 
 /** A sender as the registry compares it: the DLT header in upper case and the app package in lower case. */
@@ -24,14 +25,21 @@ export abstract class BankParser {
   readonly senderIds: readonly string[] = [];
   /** Android packages of the bank's apps, for notification captures. */
   readonly packageNames: readonly string[] = [];
-  /** Added to the score when this parser reads a message: a known bank's wording is surer than the generic guess. */
+  /** Added to the score when this parser reads a message: a known bank's wording is surer than the generic guess.
+   * The sender is what the phone reports, not proof, so a bank parser that sets a bonus should earn it from its own
+   * wording (override the steps), never from the sender alone. The foreign-currency and bill-payment caps still apply. */
   protected readonly confidenceBonus: number = 0;
 
+  /** Whether this bank sent the message. The lists are normalised here, so "VM-HDFCBK" or a mixed-case package in a
+   * subclass still matches. */
   canHandle(source: NormalisedSource): boolean {
-    if (source.header && this.senderIds.includes(source.header)) return true;
-    return !!source.packageName && this.packageNames.includes(source.packageName);
+    if (source.header && this.senderIds.some((id) => normaliseSender(id) === source.header)) return true;
+    return !!source.packageName && this.packageNames.some((p) => p.trim().toLowerCase() === source.packageName);
   }
 
+  /** The money in a message, or null when this parser cannot read it. Null means "not mine": the next parser (the
+   * generic one) still tries, so a bank parser cannot veto a message; anything that must never be booked belongs in
+   * ignore.ts. */
   parse(text: string, receivedAt: Date): MoneyParse | null {
     const amount = this.amount(text);
     const cardPayment = this.cardPayment(text);
@@ -39,7 +47,7 @@ export abstract class BankParser {
     if (!amount || !direction) return null;
 
     // A card bill payment names the card it paid; otherwise the account the money moved on.
-    const account = (cardPayment ? findPaidCard(text) : null) ?? this.account(text, direction.type);
+    const account = (cardPayment ? this.paidCard(text) : null) ?? this.account(text, direction.type);
     const parsedDate = this.date(text, receivedAt);
     const ref = this.ref(text);
     const merchant = this.merchant(text, direction.type);
@@ -90,6 +98,11 @@ export abstract class BankParser {
 
   protected account(text: string, type: "income" | "expense"): FoundAccount | null {
     return findLast4(text, type);
+  }
+
+  /** The card a bill payment went to. */
+  protected paidCard(text: string): FoundAccount | null {
+    return findPaidCard(text);
   }
 
   protected date(text: string, receivedAt: Date): ParsedDate | null {

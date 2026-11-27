@@ -15,11 +15,11 @@ import type { FoundAccount } from "@/lib/capture/parsers/extract/account";
 const RECEIVED = new Date("2026-11-12T06:30:00Z"); // 12:00 IST, 12 Nov 2026
 
 class TestBankParser extends BankParser {
-  readonly id = "testbank";
+  readonly id: string = "testbank";
   readonly bankName = "Test Bank";
   override readonly senderIds = ["TSTBNK"];
   override readonly packageNames = ["com.testbank.mobile"];
-  protected override readonly confidenceBonus = 0.05;
+  protected override readonly confidenceBonus: number = 0.05;
 
   // Test Bank writes its account as "Acct:1234" with no mask, which the shared rule does not read.
   protected override account(text: string, type: "income" | "expense"): FoundAccount | null {
@@ -60,6 +60,26 @@ describe("findBankParser", () => {
     expect(findBankParser({ sender: "Test Bank", packageName: "com.testbank.mobile" }, parsers)?.id).toBe("testbank");
   });
 
+  it("matches a subclass that lists its sender with a prefix or its package in mixed case", () => {
+    class Loose extends TestBankParser {
+      override readonly senderIds = ["VM-LOOSBK-S"];
+      override readonly packageNames = ["Com.Loose.App"];
+    }
+    expect(findBankParser({ sender: "AD-LOOSBK" }, [new Loose()])).not.toBeNull();
+    expect(findBankParser({ sender: "Loose", packageName: "com.loose.app" }, [new Loose()])).not.toBeNull();
+  });
+
+  it("matches a notification by its package only, never by a label that looks like a bank header", () => {
+    expect(findBankParser({ sender: "AB-TSTBNK", packageName: "com.some.game" }, parsers)).toBeNull();
+  });
+
+  it("takes the first parser that claims a sender", () => {
+    class Second extends TestBankParser {
+      override readonly id = "second";
+    }
+    expect(findBankParser({ sender: "VM-TSTBNK" }, [new TestBankParser(), new Second()])?.id).toBe("testbank");
+  });
+
   it("finds nothing for another sender or no sender at all", () => {
     expect(findBankParser({ sender: "VM-OTHRBK" }, parsers)).toBeNull();
     expect(findBankParser({}, parsers)).toBeNull();
@@ -97,6 +117,61 @@ describe("createCaptureParser", () => {
     );
     expect(emi).toMatchObject({ kind: "loan_emi_payment", parserId: "navi_emi" });
     expect(parse("Your statement is ready to view.", RECEIVED, { sender: "VM-TSTBNK" }).kind).toBe("unknown");
+  });
+
+  it("hands a message the bank parser cannot read on to the generic parser", () => {
+    class Picky extends TestBankParser {
+      override parse(): null {
+        return null;
+      }
+    }
+    const p = money(createCaptureParser([new Picky()])(SPEND, RECEIVED, { sender: "VM-TSTBNK" }));
+    expect(p.parserId).toBe("generic");
+  });
+
+  it("uses the bank's own rule for the card a bill payment went to", () => {
+    class CardBank extends TestBankParser {
+      protected override paidCard(text: string): FoundAccount | null {
+        const m = text.match(/\bCard:(\d{4})\b/);
+        return m ? { last4: m[1], instrument: "card" } : null;
+      }
+    }
+    const bill = money(
+      createCaptureParser([new CardBank()])("Payment of Rs 900.00 received towards your credit card Card:4455.", RECEIVED, {
+        sender: "VM-TSTBNK",
+      })
+    );
+    expect(bill).toMatchObject({ cardPayment: true, last4: "4455" });
+  });
+
+  it("never lets a bonus lift a spend abroad or a bill payment over its cap", () => {
+    class Eager extends TestBankParser {
+      protected override readonly confidenceBonus = 0.5;
+    }
+    const eager = createCaptureParser([new Eager()]);
+    const abroad = money(eager("USD 25.00 spent on card XX7788 at STEAM on 12-11-26", RECEIVED, { sender: "VM-TSTBNK" }));
+    expect(abroad.confidence).toBe(0.6);
+    const bill = money(eager("Payment of Rs 5,000.00 received towards your credit card XX7788.", RECEIVED, { sender: "VM-TSTBNK" }));
+    expect(bill.confidence).toBe(0.5);
+  });
+
+  it("reads every kind of message the same with or without a sender while no bank parser is registered", () => {
+    const messages = [
+      SPEND,
+      "INR 1,200.00 credited to your A/c No XX5678 on 12 Nov 2026 by NEFT from ACME PVT LTD",
+      "Rs.5,000.00 withdrawn from A/c XX1234 at ATM on 12-11-26",
+      "Payment of Rs 5,000.00 received towards your credit card XX7788. Thank you.",
+      "USD 25.00 spent on card XX7788 at STEAM on 12-11-26",
+      "Payment Successful: Advance EMI of Rs.3,980/- received towards Navi Finserv loan account 010000000001 for October 2026.",
+      "Happy Shopping! INR 896.15 spent on your IDFC FIRST Bank Credit Card ending XX1832 at PAYPAL *SHOP on 12 NOV 2026 at 04:04 PM",
+      "482913 is your OTP. Do not share.",
+      "Your statement is ready to view.",
+    ];
+    for (const text of messages) {
+      const plain = parseCapture(text, RECEIVED);
+      expect(parseCapture(text, RECEIVED, { sender: "VM-HDFCBK-S" })).toEqual(plain);
+      expect(parseCapture(text, RECEIVED, { sender: "HDFC Bank", packageName: "com.snapwork.hdfc" })).toEqual(plain);
+    }
   });
 
   it("keeps the shared caps: a spend abroad and a card bill payment always go to review", () => {
