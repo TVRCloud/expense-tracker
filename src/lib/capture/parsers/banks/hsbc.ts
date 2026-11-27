@@ -15,11 +15,15 @@ const SAME_SENTENCE = String.raw`(?:[^.]|\.(?=\d))`;
 const OWN_ACCOUNT = /\bA\/c\s\d{2,4}-\d{2,4}\*{2,6}-(\d{3,4})\b(?!\sof\s)/i;
 // Words that say money came back or a transfer did not go through. When one of them appears anywhere in the message
 // (a shop or payee name included), the read is held in Review rather than trusted either way (ticket 174 review).
-const MONEY_BACK =
-  /\b(?:revers(?:ed|als?)|refund(?:s|ed)?|credited\sback|failed|unsuccessful|returned|rejected|declined|could\snot\sbe\s(?:processed|completed)|not\sprocessed)\b/i;
-// The same for a card alert: only words that say the money came back to the card.
+// Shared by both lists: reversals, refunds, reimbursements, chargebacks, cancellations, voids, bounces, roll-backs and
+// any credit (never "Credit Card" or "creditcard", which every card alert names).
+const BACK_WORDS = String.raw`revers\w*|refund\w*|reimburs\w*|charge-?back|cancel(?:l?ed|lation)|void(?:ed)?|bounced|rolled\sback|adjusted\sback|re-?credited|credited\sback|credit(?!\s?card)|cr`;
+const MONEY_BACK = new RegExp(
+  String.raw`\b(?:${BACK_WORDS}|failed|unsuccessful|returned|rejected|declined|could\snot\sbe\s(?:processed|completed)|not\sprocessed)\b`,
+  "i"
+);
 // The same for a card alert, plus "credited": on a card alert any credit is money back or a promo.
-const CARD_BACK = /\b(?:revers(?:ed|als?)|refund(?:s|ed)?|credited|returned|failed)\b/i;
+const CARD_BACK = new RegExp(String.raw`\b(?:${BACK_WORDS}|credited|returned|failed|declined)\b`, "i");
 // "has been credited to the A/c 118-402***-731": credited back to the person's own account, never money out. Not when
 // "of NAME" follows: that is someone else's account in the same format.
 const BACK_TO_OWN = /\bhas\s(?:now\s)?been\scredited\sto\s(?:the|your)\sA\/c\s\d{2,4}-\d{2,4}\*{2,6}-\d{3,4}\b(?!\sof\s)/i;
@@ -37,7 +41,7 @@ const CARD_PARTIAL = /\bHSBC\s(?:debit|credit)\s?card\s[x*]{2,12}\d{1,3}[x*]{1,4
 const TIME_FIRST = /^\d{1,2}[.:]\d{2}(?:[.:]\d{2})?\b/;
 // What is left of "towards NACH mandate verification" once the mandate words go: a step, never a payee.
 // "ORCHID MART reversed", "ORCHID MART - REVERSED", "SUNIL BHAT, returned": the status, never part of the name.
-const STATUS_TAIL = /[\s,;-]{1,4}(?:(?:stands|got|was|has\sbeen|is)\s)?(?:revers(?:ed|al)|refund(?:s|ed)?|returned|failed)\b.{0,80}$/i;
+const STATUS_TAIL = /[\s,;-]{1,4}(?:(?:stands|got|was|has\sbeen|is)\s)?(?:revers\w*|refund\w*|returned|failed|cancel\w*|voided|bounced)\b.{0,80}$/i;
 const MANDATE_STEP = /^(?:verification|registration|set\s?-?up|creation)$/i;
 /** "UPI mandate set up for TUNEWAVE" -> "TUNEWAVE", "NACH mandate verification" -> "". */
 function dropMandateWords(name: string | undefined): string | undefined {

@@ -16,10 +16,11 @@ banks' apps is on the phone's known list.
   the beneficiary's account is never last4, the person's own "A/c ...***-731" is kept when printed, and with none it
   goes to Review. Only an HSBC-format account after "credited to" with no "of NAME" after it (the person's own) makes
   it money back (income). An HSBC-format account followed by "of NAME" is someone else's and is never last4. Any
-  failure or money-back word anywhere (the payee's name included) keeps it money out, held in Review (at most 0.75),
+  failure or money-back word anywhere (the same list, the payee's name included) keeps it money out, held in Review (at most 0.75),
   without the beneficiary's digits.
 - Card alerts ("Thank you for using HSBC ... Card"): line breaks end sentences. With no money-back word anywhere
-  (reversed, reversal, refund, refunds, refunded, credited, returned, failed) it is a spend at its normal score. With
+  (any form of reverse or refund, reimbursed, chargeback, cancelled, voided, bounced, rolled back, adjusted back,
+  re-credited, credited, a credit or Cr other than "Credit Card", returned, failed, declined) it is a spend at its normal score. With
   any, anywhere (a shop name, a help line or a promo included), the shared reading is kept but held in Review (at most
   0.75): never booked either way. A shop called "REFUND KITCHEN" and a cashback line therefore send a spend to Review
   (accepted noise). A status word after the shop ("ORCHID MART - REVERSED") is not part of the merchant.
