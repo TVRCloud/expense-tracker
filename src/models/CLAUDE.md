@@ -29,5 +29,6 @@ Purpose: Mongoose schemas, one file per collection. Field tables: [docs/database
 - Exercised through `src/test/integrations.test.ts`.
 
 ## Last changed
+- Phase 8 final pass: CapturedMessage reasons `foreign_currency`, `card_payment` and `rate_unavailable` added to the enum (ingest already set them)
 - Ticket 157: CapturedMessage reasons `mandate` and `investment`
 - 52f3dea feat(capture): match bank SMS to an account by bank when no digits are saved
