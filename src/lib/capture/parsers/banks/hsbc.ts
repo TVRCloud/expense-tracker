@@ -13,17 +13,18 @@ import type { MoneyParse } from "../types";
 const SAME_SENTENCE = String.raw`(?:[^.]|\.(?=\d))`;
 // The person's own account. One followed by "of NAME" is someone else's.
 const OWN_ACCOUNT = /\bA\/c\s\d{2,4}-\d{2,4}\*{2,6}-(\d{3,4})\b(?!\sof\s)/i;
-// Words that say money came back or a transfer did not go through. When one of them appears, the read is held in
-// Review rather than trusted either way (ticket 174 review, round 3).
+// Words that say money came back or a transfer did not go through. When one of them appears anywhere in the message
+// (a shop or payee name included), the read is held in Review rather than trusted either way (ticket 174 review).
 const MONEY_BACK =
   /\b(?:revers(?:ed|als?)|refund(?:s|ed)?|credited\sback|failed|unsuccessful|returned|rejected|declined|could\snot\sbe\s(?:processed|completed)|not\sprocessed)\b/i;
 // The same for a card alert: only words that say the money came back to the card.
-const CARD_BACK = /\b(?:revers(?:ed|als?)|refund(?:s|ed)?|credited\sback|returned)\b/i;
+// The same for a card alert, plus "credited": on a card alert any credit is money back or a promo.
+const CARD_BACK = /\b(?:revers(?:ed|als?)|refund(?:s|ed)?|credited|returned|failed)\b/i;
 // "has been credited to the A/c 118-402***-731": credited back to the person's own account, never money out. Not when
 // "of NAME" follows: that is someone else's account in the same format.
 const BACK_TO_OWN = /\bhas\s(?:now\s)?been\scredited\sto\s(?:the|your)\sA\/c\s\d{2,4}-\d{2,4}\*{2,6}-\d{3,4}\b(?!\sof\s)/i;
 // The shop a card alert names: "at ORCHID MART ." / "at ORCHID MART has been reversed" / "at X on 07-Nov-26".
-const SHOP = /\b(?:used\s)?at\s(?!\d{1,2}[.:]\d{2})(\S[^.;]{0,58}?)(?=\s(?:(?:has|have|was|is)\b|for\sINR\b|on\s\d)|\s?\.(?:\s|$)|$)/i;
+const SHOP = /\b(?:used\s)?at\s(?!\d{1,2}[.:]\d{2})(\S(?:[^.;]|\.(?=\S)){0,58}?)(?=\s(?:(?:has|have|was|is)\b|for\sINR\b|on\s\d)|\s?\.(?:\s|$)|$)/i;
 // The payee of an outgoing transfer: "A/c XXXXXXXX4407 of SUNIL BHAT".
 const PAYEE = /\bA\/c\s[\dX*-]{4,20}\sof\s(\S[^.;]{0,58}?)(?=\son\s\d|\s?\.(?:\s|$)|$)/i;
 const OUTWARD = new RegExp(String.raw`\byour\s(?:NEFT|IMPS|RTGS)\stransaction\b${SAME_SENTENCE}{0,120}?\bhas\s(?:now\s)?been\scredited\sto\sthe\s`, "i");
@@ -35,6 +36,8 @@ const CARD_PARTIAL = /\bHSBC\s(?:debit|credit)\s?card\s[x*]{2,12}\d{1,3}[x*]{1,4
 // A time of day a bank writes where a name could sit ("at 10.02.11", "at 18:42").
 const TIME_FIRST = /^\d{1,2}[.:]\d{2}(?:[.:]\d{2})?\b/;
 // What is left of "towards NACH mandate verification" once the mandate words go: a step, never a payee.
+// "ORCHID MART reversed", "ORCHID MART - REVERSED", "SUNIL BHAT, returned": the status, never part of the name.
+const STATUS_TAIL = /[\s,;-]{1,4}(?:(?:stands|got|was|has\sbeen|is)\s)?(?:revers(?:ed|al)|refund(?:s|ed)?|returned|failed)\b.{0,80}$/i;
 const MANDATE_STEP = /^(?:verification|registration|set\s?-?up|creation)$/i;
 /** "UPI mandate set up for TUNEWAVE" -> "TUNEWAVE", "NACH mandate verification" -> "". */
 function dropMandateWords(name: string | undefined): string | undefined {
@@ -68,21 +71,18 @@ export class HsbcParser extends KnownBankParser {
     const parse = super.parse(lined, receivedAt);
     if (!parse) return null;
     const flat = lined.replace(/\s+/g, " ").trim();
-    // A card alert or an outgoing transfer that also says money came back (anywhere, once the shop or payee name is
-    // taken out) is never trusted either way: Review.
-    const held =
-      (CARD_THANKS.test(flat) && CARD_BACK.test(without(flat, flat.match(SHOP)?.[1]))) ||
-      (this.outward(flat) && MONEY_BACK.test(without(flat, flat.match(PAYEE)?.[1])));
+    // A card alert or an outgoing transfer that says anything of money coming back, anywhere, shop and payee names
+    // included, is never trusted either way: Review. A shop called "REFUND KITCHEN" goes to Review too (accepted).
+    const held = (CARD_THANKS.test(flat) && CARD_BACK.test(flat)) || (this.outward(flat) && MONEY_BACK.test(flat));
     return held && parse.confidence > REVIEW_CEILING ? { ...parse, confidence: REVIEW_CEILING } : parse;
   }
 
   protected override direction(text: string): FoundDirection | null {
     // Money that left, whatever "credited" says: it was credited to someone else's account.
     if (this.outward(text)) return { type: "expense", ambiguous: false };
-    // A card used, unless a money-back word is left once the shop name is taken out: then the shared reading, held in
-    // Review by \`parse\`.
+    // A card used, unless any money-back word appears: then the shared reading, held in Review by \`parse\`.
     if (CARD_THANKS.test(text)) {
-      if (!CARD_BACK.test(without(text, text.match(SHOP)?.[1]))) return { type: "expense", ambiguous: false };
+      if (!CARD_BACK.test(text)) return { type: "expense", ambiguous: false };
       // A money-back word the shared reader cannot place ("will be reversed in 7 days"): the card was used; Review.
       return super.direction(text) ?? { type: "expense", ambiguous: true };
     }
@@ -127,8 +127,9 @@ export class HsbcParser extends KnownBankParser {
       // verification" names none.
       const raw = dropMandateWords(m?.[1]);
       const name = raw && MANDATE_STEP.test(raw) ? undefined : cleanParty(raw);
-      // A time of day or a cash deposit is never a payee.
-      if (name && !TIME_FIRST.test(name) && !/^cash\s/i.test(name)) return name;
+      // A time of day or a cash deposit is never a payee; a status word after the name is not part of it.
+      const trimmed = name ? cleanParty(name.replace(STATUS_TAIL, "")) : undefined;
+      if (trimmed && !TIME_FIRST.test(trimmed) && !/^cash\s/i.test(trimmed)) return trimmed;
     }
     const vpa = vpaAfter(type === "expense" ? "to" : "from", text);
     if (vpa) return vpa;
@@ -138,10 +139,4 @@ export class HsbcParser extends KnownBankParser {
     const rest = dropMandateWords(shared);
     return shared && rest && !TIME_FIRST.test(shared) && !MANDATE_STEP.test(rest) ? shared : undefined;
   }
-}
-
-/** The text with every copy of a name taken out, so a shop or payee called "REFUND KITCHEN" says nothing. */
-function without(text: string, name: string | undefined): string {
-  const n = name?.trim();
-  return n && n.length > 1 ? text.split(n).join(" ") : text;
 }
