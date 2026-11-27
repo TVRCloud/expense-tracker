@@ -3,7 +3,9 @@
 One section per parser: SMS headers it claims, the message shapes it reads (described in words, never a real
 message), what it overrides, and anything left to the generic parser. No app packages are claimed: none of these
 banks' apps is on the phone's known list, so only SMS routes here. Shared readers for this group are in
-`src/lib/capture/parsers/banks/small-finance-helpers.ts` (`upiPath`, which keeps a reference's digits only and drops a leading D or C; `cleanVpa`, which drops a label glued after a UPI id, "swiggy@ybl.Avl"; `maskOrNumber`, which rejects a payee that is a mask, a number or an account). Tests:
+`src/lib/capture/parsers/banks/small-finance-helpers.ts` (`upiPath`, which keeps a reference's digits only and drops a leading D or C; `cleanVpa`, which drops a label glued after a UPI id, "swiggy@ybl.Avl"; `maskOrNumber`, which rejects a payee that is a mask, a number or an account) and `SmallFinanceParser`, the base
+every parser here extends: a debit or credit whose own sentence (`moneySentence`, never a help or promo line) also says
+refund, refunded, reversed or reversal is never auto-booked either way; it waits in Review. Tests:
 `src/test/capture-banks/small-finance/`.
 
 ## AU Small Finance Bank (`au`, `au.ts`)
@@ -31,13 +33,17 @@ banks' apps is on the phone's known list, so only SMS routes here. Shared reader
   read only after "-Ref:<ref> [on <date>] to" (a payer after "from"): the shared reader took "Equitas-4419" or the help
   line's number. A deposit, RD or loan credited by a debit from the account ("credited to … RD A/c … by debit to
   Equitas A/c …") is a move between the person's own accounts: always Review. A message without the bank's own wording
-  falls back to the shared readers.
+  falls back to the shared readers. "via UPI/IMPS/NEFT/RTGS" may sit before "from"/"to". Two different Equitas accounts in
+  one message is a move between the person's own accounts: Review. A shared-shape loan EMI ("loan a/c … credited … by
+  debit to A/c XX…") is not capped (the shared loan rule books it as an expense). A payee loses a trailing "is
+  reversed" / "has failed".
 
 ## Utkarsh Small Finance Bank SuperCard (`utkarsh`, `utkarsh.ts`)
 - Headers: `UTKSPR`, `UTKSFB`.
 - Shapes: "Rs. … spent on your Utkarsh SuperCard XX1234 for UPI - <UPI id> on <date>" or "… for <shop> on <date>".
 - Overrides: the card's last four, taken only in the spend shape "spent on your Utkarsh SuperCard XX1234"; the payee
-  after "for UPI -" or "for". Money paid to the card ("paid to your Utkarsh SuperCard", "for … SuperCard XX1234
+  after "for UPI -" or "for"; also "debited on your Utkarsh SuperCard XX1234" (an EMI on the card). A UPI id containing
+  "supercard" is a payee, not the card. Money paid to the card ("paid to your Utkarsh SuperCard", "for … SuperCard XX1234
   repayment", "towards … SuperCard … bill payment") is a card bill payment: Review, with the card's own digits.
 
 ## Jana Small Finance Bank (`jana`, `jana.ts`)
@@ -50,7 +56,9 @@ banks' apps is on the phone's known list, so only SMS routes here. Shared reader
 ## Suryoday Small Finance Bank credit card (`suryoday`, `suryoday.ts`)
 - Headers: `SSFBNK`.
 - Shapes: "Rs … spent on [<card name>] Suryoday SFB CC 1234 on <date> at <time>. Avlb Rs …".
-- Overrides: the card's last four, taken only in the spend shape; the available limit after "Avlb"; no merchant (no
+- Overrides: the card's last four, taken only in the spend shape ("spent on … Suryoday SFB CC 1234" or "spent at <shop>
+  using Suryoday SFB CC 1234", whose shop is the merchant), decided on the money sentence only so a promo line naming
+  the card changes nothing; the available limit after "Avlb"; no merchant (no
   shop is printed; the "to 9000…" in the help line is a phone number). The "Avlb Rs …" figure is removed before the
   amount is read, so a spend abroad ("USD 12.40 spent on …") reads its own amount and stays in Review. Money paid to
   the card ("paid towards / credited to / payment of / towards … Suryoday SFB CC 1234") is a card bill payment: Review,
@@ -59,8 +67,10 @@ banks' apps is on the phone's known list, so only SMS routes here. Shared reader
 ## Airtel Payments Bank (`airtel_pb`, `airtel-pb.ts`)
 - Headers: `AIRBNK`.
 - Shapes: "Airtel Payments Bank a/c is credited with Rs. …", "Rs. … debited from Airtel Payments Bank a/c Txn ID …".
-- Overrides: the account. In the bank's own wording only digits printed as its own account ("Airtel Payments Bank a/c
-  XX1234") count, never another party's ("to RAVI KUMAR A/c XX9911"). Its usual alerts print no account digits, so a
+- Overrides: the account. Only masked digits printed as its own account ("Airtel Payments Bank a/c XX1234") count, in
+  any message from its header; never another party's ("to RAVI KUMAR A/c XX9911", "debited from your a/c XX9911"),
+  never a bare number ("a/c 2026"). So, unlike the rest of the group, a message in another bank's wording keeps no
+  account and goes to Review. Its usual alerts print no account digits, so a
   read goes to Review for the person to pick the account.
   Its balance ("Bal:212.40") has no currency, so it is not read.
 
@@ -69,15 +79,16 @@ banks' apps is on the phone's known list, so only SMS routes here. Shared reader
 - Shapes: "A/C X1234 Debit Rs. … for UPI to <UPI id>", "You have received a payment of Rs. … in a/c X1234 … from <name>
   thru IPPB. Info: UPI/CREDIT/<ref>".
 - Overrides: direction ("Debit" or "Credit" before the amount; "received a payment", which the shared rule reads as
-  both a debit and a credit word; a refund or reversal is left to the shared rule, so "… Debit … is reversed" is money
-  back), the payer before "thru IPPB", the reference after "Info: UPI/CREDIT/".
+  both a debit and a credit word); a "Debit" whose own sentence says reversed is an unsure read and waits in Review, a
+  help line about refunds does not count; the payer before "thru IPPB", the reference after "Info: UPI/CREDIT/".
 
 ## Jio Payments Bank (`jio_pb`, `jio-pb.ts`)
 - Headers: `JIOPBS`.
 - Shapes: "Your JPB A/c x1234 is debited with / credited with Rs. … UPI/DR/<ref>/<payee>.", "Rs. … Sent from x1234 to
   <UPI id>".
 - Overrides: the account masked with a single "x" (after "JPB A/c" or "Sent from"), merchant and reference from the
-  UPI path. A payee written as a mask ("to x4471", "to A/c x4471") or a phone number is no merchant.
+  UPI path. A payee written as a mask ("to x4471", "to A/c x4471", "UPI/DR/<ref>/X4471") or a phone number is no
+  merchant (the same check applies to AU's and Bandhan's UPI paths).
 
 ## NSDL Payments Bank (`nsdl_pb`, `nsdl-pb.ts`)
 - Headers: `NSDLPB`.

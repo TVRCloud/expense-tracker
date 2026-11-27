@@ -51,5 +51,29 @@ describe("Equitas Small Finance Bank parser", () => {
       want: { parserId: "equitas", amountMinor: 203500, last4: undefined },
       auto: false,
     },
+    {
+      name: "an IMPS debit keeps the account",
+      text: "INR 4,985.00 debited via IMPS from Equitas A/c 7302 -Ref:639011220081 on 15-11-26 to MOHIT RAO. Avl Bal is INR 1,230.40.",
+      want: { parserId: "equitas", type: "expense", amountMinor: 498500, last4: "7302", merchant: "MOHIT RAO" },
+      auto: true,
+    },
+    {
+      name: "money between two Equitas accounts waits in Review",
+      text: "INR 6,015.00 credited to Equitas A/c 5521 by transfer from Equitas A/c 7302 on 15-11-26",
+      want: { parserId: "equitas", type: "income", amountMinor: 601500 },
+      auto: false,
+    },
+    {
+      name: "a reversed debit waits in Review and keeps a clean payee",
+      text: "INR 905.00 debited via UPI from Equitas A/c 7302 -Ref:639011220082 on 15-11-26 to CHAI POINT is reversed. Avl Bal is INR 2,135.40",
+      want: { parserId: "equitas", merchant: "CHAI POINT" },
+      auto: false,
+    },
+    {
+      name: "a loan EMI in the shared wording is booked as an expense",
+      text: "Your loan a/c no XX6618 is credited with Rs 2,318.00 by debit to A/c XX7305 on 15-11-26.",
+      want: { parserId: "equitas", type: "expense", amountMinor: 231800, last4: "7305" },
+      auto: true,
+    },
   ]);
 });

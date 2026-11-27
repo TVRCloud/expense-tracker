@@ -8,14 +8,19 @@ import type { FoundAccount } from "../extract/account";
 import type { FoundAmount } from "../extract/amount";
 import type { FoundFigure } from "../extract/balance";
 import { toMinorUnits } from "../extract/amount";
-import { KnownBankParser } from "./known";
+import { cleanParty, moneySentence } from "./known";
+import { SmallFinanceParser } from "./small-finance-helpers";
 
-const SPEND_CARD = /\bspent\son\s(?:[A-Za-z]{1,20}\s){0,3}Suryoday\sSFB\sCC\s(\d{4})\b/i;
+/** The sentence holding the amount: a promo or help line naming the card never decides anything. */
+const money = (text: string) => moneySentence(text.replace(/\s+/g, " ").trim().replace(AVLB, " "));
+
+const SPEND_CARD =
+  /\bspent\s(?:on\s(?:[A-Za-z]{1,20}\s){0,3}|at\s[^.]{1,60}?\susing\s(?:your\s)?)Suryoday\sSFB\sCC\s(\d{4})\b/i;
 const ANY_CARD = /\bSuryoday\sSFB\sCC\s(\d{4})\b/i;
 const PAID_TO_CARD = /\b(?:paid|payment|repayment|credited|received|towards)\b[^.]{0,60}?\bSuryoday\sSFB\sCC\s\d{4}\b/i;
 const AVLB = /\bAvlb\.?\s(?:Rs\.?|INR)\s?(\d{1,3}(?:,\d{2,3}){0,5}(?:\.\d{1,2})?|\d{1,13}(?:\.\d{1,2})?)(?![\d,])/i;
 
-export class SuryodayParser extends KnownBankParser {
+export class SuryodayParser extends SmallFinanceParser {
   readonly id = "suryoday";
   readonly bankName = "Suryoday Small Finance Bank";
   override readonly senderIds = ["SSFBNK"];
@@ -27,7 +32,8 @@ export class SuryodayParser extends KnownBankParser {
   }
 
   protected override cardPayment(text: string): boolean {
-    return (!SPEND_CARD.test(text) && PAID_TO_CARD.test(text)) || super.cardPayment(text);
+    const sentence = money(text);
+    return (!SPEND_CARD.test(sentence) && PAID_TO_CARD.test(sentence)) || super.cardPayment(text);
   }
 
   protected override paidCard(text: string): FoundAccount | null {
@@ -36,15 +42,19 @@ export class SuryodayParser extends KnownBankParser {
   }
 
   protected override account(text: string, type: "income" | "expense"): FoundAccount | null {
-    const card = text.match(SPEND_CARD);
+    const sentence = money(text);
+    const card = sentence.match(SPEND_CARD);
     if (card) return { last4: card[1], instrument: "card" };
-    // A message naming the card outside its spend shape never lends the card's digits to a bank account read.
-    return ANY_CARD.test(text) ? null : super.account(text, type);
+    // A money sentence naming the card outside its spend shape never lends the card's digits to a bank account read.
+    return ANY_CARD.test(sentence) ? null : super.account(text, type);
   }
 
   protected override merchant(text: string, type: "income" | "expense"): string | undefined {
     // Its card messages name no shop; anything the shared reader finds is the help line.
-    return ANY_CARD.test(text) ? undefined : super.merchant(text, type);
+    const sentence = money(text);
+    const at = sentence.match(/\bspent\sat\s([^.]{1,60}?)\susing\s(?:your\s)?Suryoday\sSFB\sCC\s\d{4}\b/i);
+    if (at) return cleanParty(at[1]);
+    return ANY_CARD.test(sentence) ? undefined : super.merchant(text, type);
   }
 
   protected override availableLimit(text: string): FoundFigure | undefined {

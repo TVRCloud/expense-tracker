@@ -7,18 +7,20 @@
 
 import type { FoundAccount } from "../extract/account";
 import type { MoneyParse } from "../types";
-import { KnownBankParser, NAME, REVIEW_CEILING, sharedParty } from "./known";
-import { maskOrNumber } from "./small-finance-helpers";
+import { NAME, REVIEW_CEILING, sharedParty } from "./known";
+import { maskOrNumber, SmallFinanceParser } from "./small-finance-helpers";
 
 const PLAIN = /\bEquitas(?:-|\s(?:Loan\s)?A\/c\s)\d{4}(?![.,]?\d)/i;
-const DEBITED = /\bdebited\s(?:via\sUPI\s)?from\sEquitas(?:-|\sA\/c\s)(\d{4})(?![.,]?\d)/i;
-const CREDITED = /\bcredited\s(?:via\sUPI\s)?to\sEquitas\sA\/c\s(\d{4})(?![.,]?\d)|\bEquitas\sA\/c\s(\d{4})\s(?:is\s|has\sbeen\s)?credited\b/i;
+const PLAIN_ALL = /\bEquitas(?:-|\s(?:Loan\s|FD\s|RD\s)?A\/c\s)(\d{4})(?![.,]?\d)/gi;
+const DEBITED = /\bdebited\s(?:via\s(?:UPI|IMPS|NEFT|RTGS)\s)?from\sEquitas(?:-|\sA\/c\s)(\d{4})(?![.,]?\d)/i;
+const CREDITED =
+  /\bcredited\s(?:via\s(?:UPI|IMPS|NEFT|RTGS)\s)?to\sEquitas\sA\/c\s(\d{4})(?![.,]?\d)|\bEquitas\sA\/c\s(\d{4})\s(?:is\s|has\sbeen\s)?credited\b/i;
 const PAYEE = new RegExp(String.raw`-Ref:\s?\w{6,22}\s(?:on\s\S{1,12}\s)?to\s${NAME}(?=\son\b|\.(?:\s|$|[A-Z])|$)`, "i");
 const PAYER = new RegExp(String.raw`-Ref:\s?\w{6,22}\s(?:on\s\S{1,12}\s)?from\s${NAME}(?=\son\b|\.(?:\s|$|[A-Z])|$)`, "i");
 const OWN_TRANSFER =
   /\bby\sdebit\s(?:to|from)\b|\bcredited\sto\s(?:your\s)?(?:Equitas\s)?(?:RD|FD|recurring\sdeposit|fixed\sdeposit|deposit|loan|PPF)\b/i;
 
-export class EquitasParser extends KnownBankParser {
+export class EquitasParser extends SmallFinanceParser {
   readonly id = "equitas";
   readonly bankName = "Equitas Small Finance Bank";
   override readonly senderIds = ["EQUTAS", "EQUITA"];
@@ -30,7 +32,13 @@ export class EquitasParser extends KnownBankParser {
 
   override parse(text: string, receivedAt: Date): MoneyParse | null {
     const parse = super.parse(text, receivedAt);
-    if (parse && OWN_TRANSFER.test(text.replace(/\s+/g, " ")) && parse.confidence > REVIEW_CEILING) {
+    // Only in the bank's own wording: a shared-shape loan EMI ("loan a/c … credited … by debit to A/c XX7305") is read
+    // by the shared loan rule as an expense and keeps its score.
+    const flat = text.replace(/\s+/g, " ");
+    // Two different Equitas accounts in one message ("from Equitas A/c 4419 … to Equitas A/c 5521") is a move between
+    // the person's own accounts too.
+    const own = new Set([...flat.matchAll(PLAIN_ALL)].map((m) => m[1]));
+    if (parse && PLAIN.test(flat) && (OWN_TRANSFER.test(flat) || own.size > 1) && parse.confidence > REVIEW_CEILING) {
       return { ...parse, confidence: REVIEW_CEILING };
     }
     return parse;
@@ -49,7 +57,9 @@ export class EquitasParser extends KnownBankParser {
     // In the bank's own wording the payee sits only after the reference; the shared reader would take "Equitas-4419"
     // or the help line's number. Elsewhere the shared reader runs, minus masks and numbers.
     const own = PLAIN.test(text) || /-Ref:\s?\w{6,22}\b/i.test(text);
-    const v = own ? text.match(type === "expense" ? PAYEE : PAYER)?.[1]?.trim() : sharedParty(super.merchant(text, type));
+    const v = (own ? text.match(type === "expense" ? PAYEE : PAYER)?.[1] : sharedParty(super.merchant(text, type)))
+      ?.replace(/\s(?:is|has\sbeen|has|was)\s(?:reversed|failed|declined|refunded)\b.{0,80}$/i, "")
+      .trim();
     return v && /[A-Za-z]/.test(v) && !maskOrNumber(v) ? v.slice(0, 60) : undefined;
   }
 }

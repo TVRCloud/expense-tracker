@@ -4,11 +4,11 @@
 // same as ICICI). Ticket 173.
 
 import type { FoundAccount } from "../extract/account";
-import { KnownBankParser } from "./known";
+import { SmallFinanceParser } from "./small-finance-helpers";
 
 const ACCT = /(?<!\b(?:loan|card)\s)\bacct\sXX(\d{3,4})\sis\s(debited|credited)\b/i;
 
-export class JanaParser extends KnownBankParser {
+export class JanaParser extends SmallFinanceParser {
   readonly id = "jana";
   readonly bankName = "Jana Small Finance Bank";
   override readonly senderIds = ["JANABK"];

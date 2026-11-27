@@ -2,10 +2,10 @@
 // after "Debited INR … from A/c X1234", "Dr INR … - AU A/c X1234" or "Cr INR … to A/c X1234"; a credit card spend
 // reads "INR … spent at <shop> on AU Bank Credit Card x1234". Ticket 173.
 
-import { KnownBankParser, sharedParty } from "./known";
-import { upiPath } from "./small-finance-helpers";
+import { sharedParty } from "./known";
+import { maskOrNumber, SmallFinanceParser, upiPath } from "./small-finance-helpers";
 
-export class AuParser extends KnownBankParser {
+export class AuParser extends SmallFinanceParser {
   readonly id = "au";
   readonly bankName = "AU Small Finance Bank";
   override readonly senderIds = ["AUBANK"];
@@ -20,7 +20,7 @@ export class AuParser extends KnownBankParser {
     const path = upiPath(text);
     // A UPI path names the party; when it names none (a bank account), there is no merchant rather than a guess
     // from the help line ("SMS BLOCK UPI to 56…").
-    if (path) return path.party;
+    if (path) return path.party && !maskOrNumber(path.party) ? path.party : undefined;
     return sharedParty(super.merchant(text, type));
   }
 

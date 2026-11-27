@@ -65,6 +65,11 @@ describe("Jio Payments Bank parser", () => {
       text: "Rs. 515.00 Sent from x8820 to A/c x4471 on 15-Nov-26. UPI Ref 639011220035",
       want: { parserId: "jio_pb", type: "expense", amountMinor: 51500, last4: "8820", merchant: undefined },
     },
+    {
+      name: "a UPI path naming a masked account gives no merchant",
+      text: "Your JPB A/c x8820 is debited with Rs. 318.00 on 15-Nov-26. UPI/DR/639033440041/X4471. Avl. Bal: Rs. 1,201.00",
+      want: { parserId: "jio_pb", type: "expense", amountMinor: 31800, last4: "8820", merchant: undefined },
+    },
   ]);
 });
 
@@ -100,6 +105,18 @@ describe("Airtel Payments Bank parser", () => {
       text: "639014 is your OTP to send Rs.265.00 from your Airtel Payments Bank a/c. Do not share.",
       want: { kind: "ignored", reason: "otp" },
     },
+    {
+      name: "a payee's account sent through the bank never becomes the account",
+      text: "Rs.265.00 sent to RAVI A/c XX9911 via Airtel Payments Bank. Txn ID 639055660042",
+      want: { parserId: "airtel_pb", type: "expense", amountMinor: 26500, last4: undefined },
+      auto: false,
+    },
+    {
+      name: "a year after a/c is never the account",
+      text: "Rs.265.00 received in Airtel Payments Bank a/c 2026 from RAVI on 15-11-26",
+      want: { parserId: "airtel_pb", type: "income", last4: undefined },
+      auto: false,
+    },
   ]);
 });
 
@@ -124,14 +141,27 @@ describe("India Post Payments Bank parser", () => {
       auto: true,
     },
     {
-      name: "a reversed debit is money back, not a debit",
+      name: "a reversed debit is never auto-booked either way",
       text: "A/C X7741 Debit Rs.645.00 for UPI to sunita.k@ybl on 15-11-26 is reversed",
-      want: { parserId: "ippb", type: "income", amountMinor: 64500 },
+      want: { parserId: "ippb", amountMinor: 64500 },
+      auto: false,
     },
     {
       name: "a UPI id with a balance label glued to it",
       text: "A/C X7741 Debit Rs.146.00 for UPI to dosa.hut@ybl.Avl Bal Rs.1,067.40",
       want: { parserId: "ippb", type: "expense", merchant: "dosa.hut@ybl" },
+    },
+    {
+      name: "a help line about refunds does not change a debit",
+      text: "A/C X7741 Debit Rs.186.00 for UPI to chai.stop@ybl on 15-11-26 Ref 639022330041. Avl Bal Rs.1,027.40. For refund queries call 1552xx",
+      want: { parserId: "ippb", type: "expense", amountMinor: 18600, merchant: "chai.stop@ybl" },
+      auto: true,
+    },
+    {
+      name: "a credit for a reversal is money back, checked in Review",
+      text: "A/C X7741 Credit Rs.186.00 for UPI reversal on 15-11-26 Ref 639022330042. Avl Bal Rs.1,213.40",
+      want: { parserId: "ippb", type: "income", amountMinor: 18600, last4: "7741" },
+      auto: false,
     },
   ]);
 });
@@ -168,6 +198,19 @@ describe("Utkarsh Small Finance Bank SuperCard parser", () => {
       text: "Rs.5,035.00 debited from A/c XX1177 towards Utkarsh SuperCard XX4410 bill payment",
       want: { parserId: "utkarsh", cardPayment: true, last4: "4410" },
       auto: false,
+    },
+    {
+      name: "a UPI id with supercard in it is a payee, not the card",
+      text: "Rs.391.00 debited from your Utkarsh A/c XX1177 for UPI payment to supercard.store@ybl. Avl Bal Rs.1,003.00",
+      source: { sender: "AD-UTKSFB-S" },
+      want: { parserId: "utkarsh", type: "expense", amountMinor: 39100, last4: "1177", merchant: "supercard.store@ybl" },
+      auto: true,
+    },
+    {
+      name: "an EMI taken on the card keeps the card",
+      text: "EMI of Rs.505.00 debited on your Utkarsh SuperCard XX4410 on 15-11-26",
+      want: { parserId: "utkarsh", type: "expense", amountMinor: 50500, last4: "4410", instrument: "card" },
+      auto: true,
     },
   ]);
 });

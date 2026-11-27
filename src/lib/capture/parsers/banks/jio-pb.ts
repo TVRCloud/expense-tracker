@@ -3,12 +3,12 @@
 // shared reader does not take after "from". Ticket 173.
 
 import type { FoundAccount } from "../extract/account";
-import { KnownBankParser, sharedParty } from "./known";
-import { cleanVpa, maskOrNumber, upiPath } from "./small-finance-helpers";
+import { sharedParty } from "./known";
+import { cleanVpa, maskOrNumber, SmallFinanceParser, upiPath } from "./small-finance-helpers";
 
 const OWN = /(?<!\b(?:loan|card)\s)\b(?:JPB\sA\/c\s|Sent\sfrom\s)x(\d{4})\b/i;
 
-export class JioPbParser extends KnownBankParser {
+export class JioPbParser extends SmallFinanceParser {
   readonly id = "jio_pb";
   readonly bankName = "Jio Payments Bank";
   override readonly senderIds = ["JIOPBS"];
@@ -25,7 +25,7 @@ export class JioPbParser extends KnownBankParser {
 
   protected override merchant(text: string, type: "income" | "expense"): string | undefined {
     const path = upiPath(text);
-    if (path) return path.party;
+    if (path) return path.party && !maskOrNumber(path.party) ? path.party : undefined;
     // A payee written as a single-x mask, a phone number or an account is never a merchant ("to x4471").
     const v = cleanVpa(sharedParty(super.merchant(text, type)));
     return v && !maskOrNumber(v) ? v : undefined;

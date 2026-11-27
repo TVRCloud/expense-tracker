@@ -11,7 +11,8 @@ const BANKS = [
   { id: "utkarsh", sender: "VM-UTKSPR-S", name: "Utkarsh SFB" },
   { id: "jana", sender: "JM-JANABK-S", name: "JANA SFB" },
   { id: "suryoday", sender: "JM-SSFBNK-T", name: "Suryoday SFB" },
-  { id: "airtel_pb", sender: "AD-AIRBNK-S", name: "Airtel Payments Bank" },
+  // Airtel Payments Bank takes only its own masked "Airtel Payments Bank a/c XX1234", never other digits.
+  { id: "airtel_pb", sender: "AD-AIRBNK-S", name: "Airtel Payments Bank", ownAccountOnly: true },
   { id: "ippb", sender: "VM-IPBMSG-S", name: "IPPB" },
   { id: "jio_pb", sender: "JD-JIOPBS-S", name: "Jio Payments Bank" },
   { id: "nsdl_pb", sender: "AD-NSDLPB-S", name: "NSDL Payments Bank" },
@@ -38,7 +39,7 @@ function tricky(bank: string): { name: string; text: string; ok?: "income" }[] {
   ];
 }
 
-describe.each(BANKS)("$id: safety", ({ id, sender, name }) => {
+describe.each(BANKS)("$id: safety", ({ id, sender, name, ownAccountOnly }) => {
   it.each(tricky(name))("$name is never booked as the wrong type", ({ text, ok }) => {
     const p = parseCapture(text, RECEIVED, { sender });
     if (booked(p) && p.kind === "money") expect(p.type).toBe(ok);
@@ -49,7 +50,9 @@ describe.each(BANKS)("$id: safety", ({ id, sender, name }) => {
     const text = "Rs.198.00 debited from A/c XX2241 to VPA corner.store@ybl.";
     const own = parseCapture(text, RECEIVED, { sender });
     expect(own.parserId).toBe(id);
-    expect(own.confidence).toBe(generic(text, RECEIVED, { sender }).confidence);
+    const plain = generic(text, RECEIVED, { sender }).confidence;
+    if (ownAccountOnly) expect(own.confidence).toBeLessThanOrEqual(plain);
+    else expect(own.confidence).toBe(plain);
   });
 
   it("takes the payer's account on a two-account debit and never a loan account", () => {
@@ -58,13 +61,13 @@ describe.each(BANKS)("$id: safety", ({ id, sender, name }) => {
       RECEIVED,
       { sender }
     );
-    expect(two.kind === "money" && two.last4).toBe("2241");
+    expect(two.kind === "money" && two.last4).toBe(ownAccountOnly ? undefined : "2241");
     for (const text of [
       "Rs 2,140.00 debited from your A/c XX2241 for loan a/c no XX8803 EMI on 14-11-26.",
       "Your loan a/c no XX8803 is credited with Rs 2,140.00 by debit to A/c XX2241 on 14-11-26.",
     ]) {
       const p = parseCapture(text, RECEIVED, { sender });
-      expect(p.kind === "money" && p.last4, text).toBe("2241");
+      expect(p.kind === "money" && p.last4, text).toBe(ownAccountOnly ? undefined : "2241");
     }
   });
 

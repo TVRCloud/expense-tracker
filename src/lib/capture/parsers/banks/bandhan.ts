@@ -2,10 +2,10 @@
 // Clear Bal is INR …" (credits: "deposited to A/c … towards UPI/CR/C<ref>/<payer>/u on <date>"); interest reads
 // "your account XXXX1234 is credited with INR … towards interest". Ticket 173.
 
-import { KnownBankParser, sharedParty } from "./known";
-import { upiPath } from "./small-finance-helpers";
+import { sharedParty } from "./known";
+import { maskOrNumber, SmallFinanceParser, upiPath } from "./small-finance-helpers";
 
-export class BandhanParser extends KnownBankParser {
+export class BandhanParser extends SmallFinanceParser {
   readonly id = "bandhan";
   readonly bankName = "Bandhan Bank";
   override readonly senderIds = ["BDNSMS", "BANDHN"];
@@ -17,7 +17,7 @@ export class BandhanParser extends KnownBankParser {
 
   protected override merchant(text: string, type: "income" | "expense"): string | undefined {
     const path = upiPath(text);
-    if (path) return path.party;
+    if (path) return path.party && !maskOrNumber(path.party) ? path.party : undefined;
     return sharedParty(super.merchant(text, type));
   }
 

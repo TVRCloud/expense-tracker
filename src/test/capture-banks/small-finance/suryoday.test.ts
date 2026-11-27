@@ -51,5 +51,17 @@ describe("Suryoday Small Finance Bank parser", () => {
       want: { parserId: "suryoday", amountMinor: 935, currency: "EUR" },
       auto: false,
     },
+    {
+      name: "a spend at a shop whose name says payment is a spend",
+      text: "Rs 715.40 spent at PAYMENT HUB using Suryoday SFB CC 3906 on 15-11-2026. Avlb Rs 30,104.60",
+      want: { parserId: "suryoday", type: "expense", amountMinor: 71540, last4: "3906", merchant: "PAYMENT HUB" },
+      auto: true,
+    },
+    {
+      name: "a promo line naming the card keeps the spend's card",
+      text: "Rs 715.40 spent on Suryoday SFB CC 3906 on 15-11-2026 at 18:02:11. Avlb Rs 30,104.60 Pay your Suryoday SFB CC 3906 bill on time. SSFBNK-T",
+      want: { parserId: "suryoday", type: "expense", last4: "3906" },
+      auto: true,
+    },
   ]);
 });

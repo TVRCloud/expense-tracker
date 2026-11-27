@@ -4,15 +4,20 @@
 // SuperCard … bill payment") is a card bill payment, kept in Review with the card's own digits. Ticket 173.
 
 import type { FoundAccount } from "../extract/account";
-import { cleanParty, KnownBankParser, NAME, sharedParty } from "./known";
-import { cleanVpa } from "./small-finance-helpers";
+import { cleanParty, NAME, sharedParty } from "./known";
+import { cleanVpa, SmallFinanceParser } from "./small-finance-helpers";
 
 const SPEND_CARD = /\bspent\son\syour\sUtkarsh\sSuperCard\s[x*]{0,8}(\d{4})\b/i;
+// Money taken on the card itself ("EMI of Rs … debited on your Utkarsh SuperCard XX1234").
+const ON_CARD = /\b(?:debited|charged)\son\syour\s(?:Utkarsh\s)?SuperCard\s[x*]{0,8}(\d{4})\b/i;
 const ANY_CARD = /\bSuperCard\s[x*]{0,8}(\d{4})\b/i;
-const PAID_TO_CARD =
-  /\b(?:paid|payment|repayment|repaid|credited|received|towards)\b[^.]{0,60}?\bSuperCard\b|\bSuperCard\s[x*]{0,8}\d{4}\s(?:bill\s)?(?:repayment|payment)\b/i;
+const CARD_NAME = String.raw`(?:Utkarsh\sSuperCard\b|\bSuperCard\s[x*]{0,8}\d{4}\b)`;
+const PAID_TO_CARD = new RegExp(
+  String.raw`\b(?:paid|payment|repayment|repaid|credited|received|towards)\b[^.]{0,60}?${CARD_NAME}|\bSuperCard\s[x*]{0,8}\d{4}\s(?:bill\s)?(?:repayment|payment)\b`,
+  "i"
+);
 
-export class UtkarshParser extends KnownBankParser {
+export class UtkarshParser extends SmallFinanceParser {
   readonly id = "utkarsh";
   readonly bankName = "Utkarsh Small Finance Bank";
   override readonly senderIds = ["UTKSPR", "UTKSFB"];
@@ -29,7 +34,7 @@ export class UtkarshParser extends KnownBankParser {
   }
 
   protected override account(text: string, type: "income" | "expense"): FoundAccount | null {
-    const card = text.match(SPEND_CARD);
+    const card = text.match(SPEND_CARD) ?? text.match(ON_CARD);
     if (card) return { last4: card[1], instrument: "card" };
     return ANY_CARD.test(text) ? null : super.account(text, type);
   }
