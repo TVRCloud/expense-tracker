@@ -14,11 +14,14 @@ banks' apps is on the phone's known list.
   the other party's account at their bank ("as NEFT from|to UTIB A/c ***2271 of NAME"): never last4.
 - An outgoing NEFT reads "your NEFT transaction ... has been credited to the <bank> A/c XX<4> of NAME": an expense;
   the beneficiary's account is never last4, the person's own "A/c ...***-731" is kept when printed, and with none it
-  goes to Review. Only an HSBC-format account of the person's own after "credited to" makes it money back (income);
-  any other mention of a failure or a return keeps it money out, held in Review, without the beneficiary's digits.
-- "Money back" words (reversed, refunded, returned, failed, ...) count only in what the message says happened: never
-  inside a payee or shop name, a condition ("If it has failed ..."), a help line, a promo, cashback or reward points,
-  or something still to come ("will be reversed").
+  goes to Review. Only an HSBC-format account after "credited to" with no "of NAME" after it (the person's own) makes
+  it money back (income). An HSBC-format account followed by "of NAME" is someone else's and is never last4. Any
+  failure or money-back word anywhere else (once the payee's name is taken out) keeps it money out, held in Review
+  (at most 0.75), without the beneficiary's digits.
+- Card alerts ("Thank you for using HSBC ... Card"): line breaks end sentences, and the shop's name, exactly as read,
+  is taken out. With no money-back word left (reversed, reversal, refund, refunded, credited back, returned) it is a
+  spend at its normal score. With any left, anywhere, the shared reading is kept but held in Review (at most 0.75):
+  never booked either way. A help line that mentions refunds therefore sends a spend to Review.
 - A card is read with four digits ("Credit Card XXXX6603", "creditcard xxxxx6603"); one masked to fewer
   ("XXXXX58xx"), or a card alert naming no card, gives no last4 (never digits from a ref). "Thank you for using HSBC ... Card" is money out unless the message says it was
   reversed, refunded or credited back. "Your HSBC creditcard ... payment of INR ... has been received" is a card bill

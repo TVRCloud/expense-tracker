@@ -11,17 +11,21 @@ import type { MoneyParse } from "../types";
 
 // Characters that may sit inside an amount ("42,500.00") without ending a sentence.
 const SAME_SENTENCE = String.raw`(?:[^.]|\.(?=\d))`;
-const OWN_ACCOUNT = /\bA\/c\s\d{2,4}-\d{2,4}\*{2,6}-(\d{3,4})\b/i;
-// Words that say money came back or a transfer did not go through. Only tested on what the message says happened
-// (`statedBack`): never inside a payee or shop name, a condition ("If it has failed ..."), a help line or a promo.
+// The person's own account. One followed by "of NAME" is someone else's.
+const OWN_ACCOUNT = /\bA\/c\s\d{2,4}-\d{2,4}\*{2,6}-(\d{3,4})\b(?!\sof\s)/i;
+// Words that say money came back or a transfer did not go through. When one of them appears, the read is held in
+// Review rather than trusted either way (ticket 174 review, round 3).
 const MONEY_BACK =
-  /\b(?:revers(?:ed|al)|refund(?:ed)?|credited\sback|failed|unsuccessful|returned|rejected|declined|could\snot\sbe\s(?:processed|completed)|not\sprocessed)\b/i;
-// A sentence that is not about what happened: a condition, a help line, a promo, cashback or reward points, or
-// something still to come ("The amount will be reversed in 7 days").
-const NOT_WHAT_HAPPENED =
-  /^(?:If|Report|Call|SMS|Never|Do\snot|Don't|To\s|For\s(?:help|queries|assistance)|Get|Earn|Pay|Use|Click|Download|Visit|Know|T&C)\b|\b(?:cashback|reward|points?|offer|eligible|will|shall)\b/i;
-// "has been credited to the A/c 118-402***-731": credited back to the person's own account, never money out.
-const BACK_TO_OWN = /\bhas\s(?:now\s)?been\scredited\sto\s(?:the|your)\sA\/c\s\d{2,4}-\d{2,4}\*{2,6}-\d{3,4}\b/i;
+  /\b(?:revers(?:ed|als?)|refund(?:s|ed)?|credited\sback|failed|unsuccessful|returned|rejected|declined|could\snot\sbe\s(?:processed|completed)|not\sprocessed)\b/i;
+// The same for a card alert: only words that say the money came back to the card.
+const CARD_BACK = /\b(?:revers(?:ed|als?)|refund(?:s|ed)?|credited\sback|returned)\b/i;
+// "has been credited to the A/c 118-402***-731": credited back to the person's own account, never money out. Not when
+// "of NAME" follows: that is someone else's account in the same format.
+const BACK_TO_OWN = /\bhas\s(?:now\s)?been\scredited\sto\s(?:the|your)\sA\/c\s\d{2,4}-\d{2,4}\*{2,6}-\d{3,4}\b(?!\sof\s)/i;
+// The shop a card alert names: "at ORCHID MART ." / "at ORCHID MART has been reversed" / "at X on 07-Nov-26".
+const SHOP = /\b(?:used\s)?at\s(?!\d{1,2}[.:]\d{2})(\S[^.;]{0,58}?)(?=\s(?:(?:has|have|was|is)\b|for\sINR\b|on\s\d)|\s?\.(?:\s|$)|$)/i;
+// The payee of an outgoing transfer: "A/c XXXXXXXX4407 of SUNIL BHAT".
+const PAYEE = /\bA\/c\s[\dX*-]{4,20}\sof\s(\S[^.;]{0,58}?)(?=\son\s\d|\s?\.(?:\s|$)|$)/i;
 const OUTWARD = new RegExp(String.raw`\byour\s(?:NEFT|IMPS|RTGS)\stransaction\b${SAME_SENTENCE}{0,120}?\bhas\s(?:now\s)?been\scredited\sto\sthe\s`, "i");
 const CARD_THANKS = /\bThank\syou\sfor\susing\s(?:your\s)?HSBC\s(?:Debit|Credit)\sCard\b/i;
 // "Credit Card XXXX6603", "creditcard xxxxx5832": a card with its last four digits.
@@ -58,32 +62,30 @@ export class HsbcParser extends KnownBankParser {
     return OUTWARD.test(text) && !BACK_TO_OWN.test(text);
   }
 
-  /** Whether the message itself says money came back: names (after "of", "at", "used at") and sentences that are
-   * conditions, help lines, promos, cashback or points are taken out first. */
-  private statedBack(text: string): boolean {
-    const scrubbed = text
-      .replace(/\bof\s[^.]{1,60}?(?=\son\s\d|\s?\.(?:\s|$)|$)/gi, "of <name>")
-      .replace(/\b(?:used\s)?at\s(?!\d{1,2}[.:]\d{2})[^.]{1,60}?(?=\sfor\sINR\b|\son\s\d|\s?\.(?:\s|$)|$)/gi, "at <shop>")
-      .replace(/\btowards\s[^.]{1,60}?(?=\s?\.(?:\s|$)|$)/gi, "towards <payee>");
-    return scrubbed
-      .split(/(?<!\b(?:Rs|no|Avl|Bal|Txn|INR))\.\s+(?=[A-Z])/)
-      .some((sentence) => !NOT_WHAT_HAPPENED.test(sentence.trim()) && MONEY_BACK.test(sentence));
-  }
-
   override parse(text: string, receivedAt: Date): MoneyParse | null {
-    const parse = super.parse(text, receivedAt);
+    // A line break ends a sentence ("...\nat ORCHID MART\nTransaction reversed") before whitespace is collapsed.
+    const lined = text.replace(/\.?[ \t]*(?:\r?\n)+[ \t]*/g, ". ");
+    const parse = super.parse(lined, receivedAt);
     if (!parse) return null;
-    const flat = text.replace(/\s+/g, " ").trim();
-    // Money sent out that the message also says failed or came back, without naming the person's own account: Review.
-    if (this.outward(flat) && this.statedBack(flat) && parse.confidence > REVIEW_CEILING) return { ...parse, confidence: REVIEW_CEILING };
-    return parse;
+    const flat = lined.replace(/\s+/g, " ").trim();
+    // A card alert or an outgoing transfer that also says money came back (anywhere, once the shop or payee name is
+    // taken out) is never trusted either way: Review.
+    const held =
+      (CARD_THANKS.test(flat) && CARD_BACK.test(without(flat, flat.match(SHOP)?.[1]))) ||
+      (this.outward(flat) && MONEY_BACK.test(without(flat, flat.match(PAYEE)?.[1])));
+    return held && parse.confidence > REVIEW_CEILING ? { ...parse, confidence: REVIEW_CEILING } : parse;
   }
 
   protected override direction(text: string): FoundDirection | null {
     // Money that left, whatever "credited" says: it was credited to someone else's account.
     if (this.outward(text)) return { type: "expense", ambiguous: false };
-    // A card used, unless the message itself says the money came back ("The transaction has been reversed.").
-    if (CARD_THANKS.test(text)) return this.statedBack(text) ? { type: "income", ambiguous: false } : { type: "expense", ambiguous: false };
+    // A card used, unless a money-back word is left once the shop name is taken out: then the shared reading, held in
+    // Review by \`parse\`.
+    if (CARD_THANKS.test(text)) {
+      if (!CARD_BACK.test(without(text, text.match(SHOP)?.[1]))) return { type: "expense", ambiguous: false };
+      // A money-back word the shared reader cannot place ("will be reversed in 7 days"): the card was used; Review.
+      return super.direction(text) ?? { type: "expense", ambiguous: true };
+    }
     return super.direction(text);
   }
 
@@ -116,7 +118,8 @@ export class HsbcParser extends KnownBankParser {
       new RegExp(String.raw`\bused\sat\s${NAME}\sfor\sINR\b`, "i"),
       new RegExp(String.raw`\bpaid\sfrom\s(?:your\s)?(?:A\/c|account)\s[\dX*-]{4,20}\sto\s${NAME}\son\s\d`, "i"),
       new RegExp(String.raw`\btowards\s${NAME}\s?(?:\.\s|\.$|$)`, "i"),
-      CARD_THANKS.test(text) ? new RegExp(String.raw`\bat\s(?!\d{1,2}[.:]\d{2})${NAME}\s?(?:\.|\son\s\d|$)`, "i") : null,
+      CARD_THANKS.test(text) ? SHOP : null,
+      PAYEE,
     ];
     for (const re of patterns) {
       const m = re ? text.match(re) : null;
@@ -135,4 +138,10 @@ export class HsbcParser extends KnownBankParser {
     const rest = dropMandateWords(shared);
     return shared && rest && !TIME_FIRST.test(shared) && !MANDATE_STEP.test(rest) ? shared : undefined;
   }
+}
+
+/** The text with every copy of a name taken out, so a shop or payee called "REFUND KITCHEN" says nothing. */
+function without(text: string, name: string | undefined): string {
+  const n = name?.trim();
+  return n && n.length > 1 ? text.split(n).join(" ") : text;
 }
