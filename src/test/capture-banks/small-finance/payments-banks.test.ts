@@ -22,6 +22,16 @@ describe("NSDL Payments Bank parser", () => {
       want: { parserId: "nsdl_pb", type: "income", amountMinor: 26300, last4: "6672", ref: "638266770012" },
       auto: true,
     },
+    {
+      name: "a UPI id with a balance label glued to it",
+      text: "A/c XX6672 debited Rs 146.00 on 15-Nov-26 for linked chaat.point@ybl.Avl Bal Rs 2,014.30",
+      want: { parserId: "nsdl_pb", type: "expense", amountMinor: 14600, merchant: "chaat.point@ybl" },
+    },
+    {
+      name: "a payment request is not money",
+      text: "chaat.point@ybl has requested Rs 146.00 from your NSDL Payments Bank A/c XX6672. Ignore if not you - NSDLPB",
+      want: { kind: "ignored" },
+    },
   ]);
 });
 
@@ -45,6 +55,16 @@ describe("Jio Payments Bank parser", () => {
       want: { parserId: "jio_pb", type: "expense", amountMinor: 23000, last4: "5530", merchant: "dosa.point@ybl" },
       auto: true,
     },
+    {
+      name: "a payee written as a phone number is no merchant",
+      text: "Rs. 515.00 Sent from x8820 to 9876500021 on 15-Nov-26. UPI Ref 639011220033",
+      want: { parserId: "jio_pb", type: "expense", amountMinor: 51500, last4: "8820", merchant: undefined },
+    },
+    {
+      name: "a payee written as a single-x mask is no merchant",
+      text: "Rs. 515.00 Sent from x8820 to A/c x4471 on 15-Nov-26. UPI Ref 639011220035",
+      want: { parserId: "jio_pb", type: "expense", amountMinor: 51500, last4: "8820", merchant: undefined },
+    },
   ]);
 });
 
@@ -53,8 +73,8 @@ describe("Airtel Payments Bank parser", () => {
   readsAll({ sender: "AD-AIRBNK-S" }, [
     {
       name: "credit with no account digits goes to Review",
-      text: "Airtel Payments Bank a/c is credited with Rs.76.00. Txn ID: 638299001122. Call 1800xxxx for help",
-      want: { parserId: "airtel_pb", type: "income", amountMinor: 7600, last4: undefined, ref: "638299001122" },
+      text: "Airtel Payments Bank a/c is credited with Rs.76.45. Txn ID: 638299001122. Call 1800xxxx for help",
+      want: { parserId: "airtel_pb", type: "income", amountMinor: 7645, last4: undefined, ref: "638299001122" },
       auto: false,
     },
     {
@@ -62,6 +82,23 @@ describe("Airtel Payments Bank parser", () => {
       text: "Rs. 48.00 debited from Airtel Payments Bank a/c Txn ID 638299001123 Bal:212.40 Call 1800xxxx for help",
       want: { parserId: "airtel_pb", type: "expense", amountMinor: 4800, last4: undefined },
       auto: false,
+    },
+    {
+      name: "another party's account digits never become the account",
+      text: "Money sent! Rs.265.00 to RAVI KUMAR A/c XX9911 from your Airtel Payments Bank a/c. Txn ID 639011220040",
+      want: { parserId: "airtel_pb", type: "expense", amountMinor: 26500, last4: undefined },
+      auto: false,
+    },
+    {
+      name: "money from another account keeps no digits",
+      text: "Rs.265.00 received from a/c XX9911 in your Airtel Payments Bank a/c. Txn ID 639011220041",
+      want: { parserId: "airtel_pb", type: "income", amountMinor: 26500, last4: undefined },
+      auto: false,
+    },
+    {
+      name: "an OTP stays ignored",
+      text: "639014 is your OTP to send Rs.265.00 from your Airtel Payments Bank a/c. Do not share.",
+      want: { kind: "ignored", reason: "otp" },
     },
   ]);
 });
@@ -80,6 +117,22 @@ describe("India Post Payments Bank parser", () => {
       want: { parserId: "ippb", type: "income", amountMinor: 93700, last4: "7741", merchant: "MOHAN LAL", ref: "638288990012" },
       auto: true,
     },
+    {
+      name: "credit written Credit Rs",
+      text: "A/C X7741 Credit Rs.418.00 for UPI from tea.stall@ybl on 15-11-26 Ref 639011220036. Avl Bal Rs.1,213.40",
+      want: { parserId: "ippb", type: "income", amountMinor: 41800, last4: "7741", merchant: "tea.stall@ybl" },
+      auto: true,
+    },
+    {
+      name: "a reversed debit is money back, not a debit",
+      text: "A/C X7741 Debit Rs.645.00 for UPI to sunita.k@ybl on 15-11-26 is reversed",
+      want: { parserId: "ippb", type: "income", amountMinor: 64500 },
+    },
+    {
+      name: "a UPI id with a balance label glued to it",
+      text: "A/C X7741 Debit Rs.146.00 for UPI to dosa.hut@ybl.Avl Bal Rs.1,067.40",
+      want: { parserId: "ippb", type: "expense", merchant: "dosa.hut@ybl" },
+    },
   ]);
 });
 
@@ -97,6 +150,24 @@ describe("Utkarsh Small Finance Bank SuperCard parser", () => {
       source: { sender: "AD-UTKSFB-S" },
       want: { parserId: "utkarsh", type: "expense", amountMinor: 132000, last4: "4410", merchant: "PETROMART" },
       auto: true,
+    },
+    {
+      name: "repayment from a bank account is a card payment on the card",
+      text: "Rs.5,035.00 debited from A/c XX1177 for Utkarsh SuperCard XX4410 repayment",
+      want: { parserId: "utkarsh", cardPayment: true, last4: "4410", instrument: "card", amountMinor: 503500 },
+      auto: false,
+    },
+    {
+      name: "money paid to the card is a card payment",
+      text: "Rs.5,035.00 paid to your Utkarsh SuperCard XX4410 from A/c XX1177",
+      want: { parserId: "utkarsh", cardPayment: true, last4: "4410" },
+      auto: false,
+    },
+    {
+      name: "a bill payment towards the card is a card payment",
+      text: "Rs.5,035.00 debited from A/c XX1177 towards Utkarsh SuperCard XX4410 bill payment",
+      want: { parserId: "utkarsh", cardPayment: true, last4: "4410" },
+      auto: false,
     },
   ]);
 });

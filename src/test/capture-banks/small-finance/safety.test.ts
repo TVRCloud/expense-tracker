@@ -70,8 +70,8 @@ describe.each(BANKS)("$id: safety", ({ id, sender, name }) => {
 
   it("a long, padded message parses quickly", () => {
     const pads = [
-      `Debited INR 5 from A/c X2241 on x UPI/DR/123456/${"a ".repeat(2500)}`,
-      `INR 5 debited from A/c XX2241 towards UPI/DR/D123456/${" ".repeat(5000)}Value`,
+      `Debited INR 5 from A/c X2241 on x UPI/DR/908172/${"a ".repeat(2500)}`,
+      `INR 5 debited from A/c XX2241 towards UPI/DR/D908172/${" ".repeat(5000)}Value`,
       `INR 5 debited via UPI from Equitas A/c 2241 ${"-".repeat(5000)} to x`,
       `Rs 5 spent on ${"Big ".repeat(1200)}Suryoday SFB CC 2241 Avlb Rs ${"1".repeat(3000)}`,
       `Your acct XX224 is debited with INR 5 on x to ${"a.".repeat(2500)}@ybl`,

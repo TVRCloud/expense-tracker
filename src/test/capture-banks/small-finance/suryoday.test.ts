@@ -21,5 +21,35 @@ describe("Suryoday Small Finance Bank parser", () => {
       text: "882641 is the OTP for your Suryoday SFB CC 3906 transaction of Rs 845.00. Do not share it with anyone. SSFBNK-T",
       want: { kind: "ignored", reason: "otp" },
     },
+    {
+      name: "bill paid from a bank account is a card payment on the card",
+      text: "Rs 5,035.00 debited from your Suryoday SFB A/c XX5581 towards Suryoday SFB CC 3906 on 15-11-2026",
+      want: { parserId: "suryoday", cardPayment: true, last4: "3906", instrument: "card", amountMinor: 503500 },
+      auto: false,
+    },
+    {
+      name: "bill paid towards the card is a card payment",
+      text: "Rs 5,035.00 paid towards Suryoday SFB CC 3906 on 15-11-2026. Avlb Rs 57,175.30",
+      want: { parserId: "suryoday", cardPayment: true, last4: "3906", amountMinor: 503500 },
+      auto: false,
+    },
+    {
+      name: "money credited to the card is a card payment",
+      text: "Rs 5,035.00 credited to Suryoday SFB CC 3906 on 15-11-2026",
+      want: { parserId: "suryoday", cardPayment: true, last4: "3906" },
+      auto: false,
+    },
+    {
+      name: "a spend abroad reads its own amount, never the limit",
+      text: "USD 12.35 spent on Suryoday SFB CC 3906 on 15-11-2026 at 18:02:11. Avlb Rs 30,127.60",
+      want: { parserId: "suryoday", type: "expense", amountMinor: 1235, currency: "USD", last4: "3906" },
+      auto: false,
+    },
+    {
+      name: "a spend in euro also reads its own amount",
+      text: "EUR 9.35 spent on Suryoday SFB CC 3906 on 15-11-2026 at 18:04:40. Avlb Rs 30,118.25",
+      want: { parserId: "suryoday", amountMinor: 935, currency: "EUR" },
+      auto: false,
+    },
   ]);
 });

@@ -2,6 +2,7 @@
 // "for linked <bank> PPI A/c XX9999 to <UPI id>": the payee is the UPI id after "linked" or after "to". Ticket 173.
 
 import { KnownBankParser, sharedParty, vpaAfter } from "./known";
+import { cleanVpa } from "./small-finance-helpers";
 
 const LINKED_VPA = /\bfor\slinked\s([\w.\-]{1,60}@[A-Za-z][\w\-]{0,30})(?![\w@])/i;
 
@@ -14,10 +15,10 @@ export class NsdlPbParser extends KnownBankParser {
 
   protected override merchant(text: string, type: "income" | "expense"): string | undefined {
     if (type === "expense") {
-      const linked = text.match(LINKED_VPA)?.[1];
+      const linked = cleanVpa(text.match(LINKED_VPA)?.[1]);
       if (linked) return linked;
       // "for linked <bank> PPI A/c XX9999 to <UPI id>": the payee is after "to", never the wallet account.
-      const to = vpaAfter("to", text);
+      const to = cleanVpa(vpaAfter("to", text));
       if (to) return to;
     }
     return sharedParty(super.merchant(text, type));

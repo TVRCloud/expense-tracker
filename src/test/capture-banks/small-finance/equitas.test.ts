@@ -23,5 +23,33 @@ describe("Equitas Small Finance Bank parser", () => {
       want: { parserId: "equitas", type: "income", amountMinor: 310000, last4: "7302", merchant: "KAVYA ROY" },
       auto: true,
     },
+    {
+      name: "the payee is read only after the reference: no payee, no merchant",
+      text: "INR 7,215.00 debited from Equitas-4419 via UPI -Ref:639011220031 on 15-11-26.Bal INR 3,410.00.Not U?SMS BLOCK UPI to 7012345991",
+      want: { parserId: "equitas", type: "expense", amountMinor: 721500, last4: "4419", merchant: undefined },
+    },
+    {
+      name: "a payee that is an account is no merchant",
+      text: "INR 2,415.00 debited from Equitas-4419 via UPI -Ref:639011220037 to A/c 1234 of RAVI on 15-11-26.Bal INR 995.00",
+      want: { parserId: "equitas", type: "expense", amountMinor: 241500, last4: "4419", merchant: undefined },
+    },
+    {
+      name: "a shop whose name starts with Block keeps it",
+      text: "INR 215.00 debited from Equitas-4419 via UPI -Ref:639011220032 to BLOCK C STATIONERS on 15-11-26.Bal INR 3,195.00",
+      want: { parserId: "equitas", type: "expense", amountMinor: 21500, last4: "4419", merchant: "BLOCK C STATIONERS" },
+      auto: true,
+    },
+    {
+      name: "a loan credited by a debit from the account goes to Review on no account",
+      text: "INR 3,265.00 credited to Equitas Loan A/c 7788 by debit to Equitas A/c 4419 on 15-11-26",
+      want: { parserId: "equitas", amountMinor: 326500, last4: undefined },
+      auto: false,
+    },
+    {
+      name: "money into an RD from the account goes to Review",
+      text: "Equitas A/c 4419: INR 2,035.00 credited to RD A/c 9922",
+      want: { parserId: "equitas", amountMinor: 203500, last4: undefined },
+      auto: false,
+    },
   ]);
 });

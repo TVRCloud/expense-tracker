@@ -3,7 +3,7 @@
 One section per parser: SMS headers it claims, the message shapes it reads (described in words, never a real
 message), what it overrides, and anything left to the generic parser. No app packages are claimed: none of these
 banks' apps is on the phone's known list, so only SMS routes here. Shared readers for this group are in
-`src/lib/capture/parsers/banks/small-finance-helpers.ts` (`upiPath`, `plainAccount`). Tests:
+`src/lib/capture/parsers/banks/small-finance-helpers.ts` (`upiPath`, which keeps a reference's digits only and drops a leading D or C; `cleanVpa`, which drops a label glued after a UPI id, "swiggy@ybl.Avl"; `maskOrNumber`, which rejects a payee that is a mask, a number or an account). Tests:
 `src/test/capture-banks/small-finance/`.
 
 ## AU Small Finance Bank (`au`, `au.ts`)
@@ -25,44 +25,59 @@ banks' apps is on the phone's known list, so only SMS routes here. Shared reader
 - Headers: `EQUTAS`, `EQUITA`. Not `EQUITS`: that header belongs to Equity Bank (Kenya).
 - Shapes: "INR … debited via UPI from Equitas A/c 1234 -Ref:<ref> … to <payee>", "… credited via UPI to Equitas A/c 1234
   … from <payer>", "INR … debited from Equitas-1234 via UPI …".
-- Overrides: the account, written with plain last four digits after the bank's name (the shared reader needs a mask).
+- Overrides: the account, written with plain last four digits after the bank's name (the shared reader needs a mask),
+  taken only beside the verb that matches the direction ("debited (via UPI) from Equitas-1234 / Equitas A/c 1234",
+  "credited (via UPI) to Equitas A/c 1234", "Equitas A/c 1234 is credited"), never after "by debit to". The payee is
+  read only after "-Ref:<ref> [on <date>] to" (a payer after "from"): the shared reader took "Equitas-4419" or the help
+  line's number. A deposit, RD or loan credited by a debit from the account ("credited to … RD A/c … by debit to
+  Equitas A/c …") is a move between the person's own accounts: always Review. A message without the bank's own wording
+  falls back to the shared readers.
 
 ## Utkarsh Small Finance Bank SuperCard (`utkarsh`, `utkarsh.ts`)
 - Headers: `UTKSPR`, `UTKSFB`.
 - Shapes: "Rs. … spent on your Utkarsh SuperCard XX1234 for UPI - <UPI id> on <date>" or "… for <shop> on <date>".
-- Overrides: the card's last four after "SuperCard" (a card), the payee after "for UPI -" or "for".
+- Overrides: the card's last four, taken only in the spend shape "spent on your Utkarsh SuperCard XX1234"; the payee
+  after "for UPI -" or "for". Money paid to the card ("paid to your Utkarsh SuperCard", "for … SuperCard XX1234
+  repayment", "towards … SuperCard … bill payment") is a card bill payment: Review, with the card's own digits.
 
 ## Jana Small Finance Bank (`jana`, `jana.ts`)
 - Headers: `JANABK`.
 - Shapes: "Your acct XX123 is debited with INR … to <UPI id>" / "is credited with INR … from <name>".
-- Overrides: the account, masked to three digits, taken only next to the verb that matches the direction. Three digits
-  never match a saved four-digit account, so account matching falls back to the bank guess (same as ICICI).
+- Overrides: the account, masked to three digits, taken only next to the verb that matches the direction.
+- Known gap: three digits never match a saved four-digit account today, so these alerts are matched by the bank guess
+  only (the same as ICICI); account matching by suffix is a separate fix.
 
 ## Suryoday Small Finance Bank credit card (`suryoday`, `suryoday.ts`)
 - Headers: `SSFBNK`.
 - Shapes: "Rs … spent on [<card name>] Suryoday SFB CC 1234 on <date> at <time>. Avlb Rs …".
-- Overrides: the card's last four after "CC", the available limit after "Avlb", and no merchant (no shop is printed;
-  the "to 9000…" in the help line is a phone number).
+- Overrides: the card's last four, taken only in the spend shape; the available limit after "Avlb"; no merchant (no
+  shop is printed; the "to 9000…" in the help line is a phone number). The "Avlb Rs …" figure is removed before the
+  amount is read, so a spend abroad ("USD 12.40 spent on …") reads its own amount and stays in Review. Money paid to
+  the card ("paid towards / credited to / payment of / towards … Suryoday SFB CC 1234") is a card bill payment: Review,
+  with the card's own digits.
 
 ## Airtel Payments Bank (`airtel_pb`, `airtel-pb.ts`)
 - Headers: `AIRBNK`.
 - Shapes: "Airtel Payments Bank a/c is credited with Rs. …", "Rs. … debited from Airtel Payments Bank a/c Txn ID …".
-- No overrides. Its alerts print no account digits, so a read always goes to Review for the person to pick the account.
+- Overrides: the account. In the bank's own wording only digits printed as its own account ("Airtel Payments Bank a/c
+  XX1234") count, never another party's ("to RAVI KUMAR A/c XX9911"). Its usual alerts print no account digits, so a
+  read goes to Review for the person to pick the account.
   Its balance ("Bal:212.40") has no currency, so it is not read.
 
 ## India Post Payments Bank (`ippb`, `ippb.ts`)
 - Headers: `IPBMSG`.
 - Shapes: "A/C X1234 Debit Rs. … for UPI to <UPI id>", "You have received a payment of Rs. … in a/c X1234 … from <name>
   thru IPPB. Info: UPI/CREDIT/<ref>".
-- Overrides: direction ("Debit" before the amount; "received a payment", which the shared rule reads as both a debit
-  and a credit word), the payer before "thru IPPB", the reference after "Info: UPI/CREDIT/".
+- Overrides: direction ("Debit" or "Credit" before the amount; "received a payment", which the shared rule reads as
+  both a debit and a credit word; a refund or reversal is left to the shared rule, so "… Debit … is reversed" is money
+  back), the payer before "thru IPPB", the reference after "Info: UPI/CREDIT/".
 
 ## Jio Payments Bank (`jio_pb`, `jio-pb.ts`)
 - Headers: `JIOPBS`.
 - Shapes: "Your JPB A/c x1234 is debited with / credited with Rs. … UPI/DR/<ref>/<payee>.", "Rs. … Sent from x1234 to
   <UPI id>".
 - Overrides: the account masked with a single "x" (after "JPB A/c" or "Sent from"), merchant and reference from the
-  UPI path.
+  UPI path. A payee written as a mask ("to x4471", "to A/c x4471") or a phone number is no merchant.
 
 ## NSDL Payments Bank (`nsdl_pb`, `nsdl-pb.ts`)
 - Headers: `NSDLPB`.

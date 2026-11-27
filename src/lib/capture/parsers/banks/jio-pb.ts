@@ -4,7 +4,7 @@
 
 import type { FoundAccount } from "../extract/account";
 import { KnownBankParser, sharedParty } from "./known";
-import { upiPath } from "./small-finance-helpers";
+import { cleanVpa, maskOrNumber, upiPath } from "./small-finance-helpers";
 
 const OWN = /(?<!\b(?:loan|card)\s)\b(?:JPB\sA\/c\s|Sent\sfrom\s)x(\d{4})\b/i;
 
@@ -26,7 +26,9 @@ export class JioPbParser extends KnownBankParser {
   protected override merchant(text: string, type: "income" | "expense"): string | undefined {
     const path = upiPath(text);
     if (path) return path.party;
-    return sharedParty(super.merchant(text, type));
+    // A payee written as a single-x mask, a phone number or an account is never a merchant ("to x4471").
+    const v = cleanVpa(sharedParty(super.merchant(text, type)));
+    return v && !maskOrNumber(v) ? v : undefined;
   }
 
   protected override ref(text: string): string | undefined {

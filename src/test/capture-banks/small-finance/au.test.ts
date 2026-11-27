@@ -33,5 +33,17 @@ describe("AU Small Finance Bank parser", () => {
       want: { parserId: "au", type: "expense", amountMinor: 61840, last4: "5527", instrument: "card", merchant: "CLOUDNOTE APP" },
       auto: true,
     },
+    {
+      name: "a reference written with a D before its digits keeps the digits only",
+      text: "Debited INR 87.65 from A/c X6083 on 14-NOV-2026\nUPI/DR/D638211907749/PAAN CORNER/YESB/40011\nBal INR 12,318.55\n-AU Bank",
+      want: { parserId: "au", type: "expense", amountMinor: 8765, merchant: "PAAN CORNER", ref: "638211907749" },
+      auto: true,
+    },
+    {
+      name: "card spend abroad stays in Review",
+      text: "USD 14.25 spent at TYPEFORGE on AU Bank Credit Card x5527 14-11-2026 06:40:12 AM. Not you? Call 1800xxxx",
+      want: { parserId: "au", type: "expense", amountMinor: 1425, currency: "USD", last4: "5527" },
+      auto: false,
+    },
   ]);
 });
