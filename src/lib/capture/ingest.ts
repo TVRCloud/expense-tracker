@@ -550,7 +550,7 @@ export async function ingestCapture(input: IngestInput): Promise<IngestResult> {
     logger.error({ err, userId: input.user.id }, "lazy pending-SMS promotion failed")
   );
 
-  const parse = parseCapture(input.text, input.receivedAt);
+  const parse = parseCapture(input.text, input.receivedAt, { sender: input.sender, packageName: input.packageName });
   const money = parse.kind === "money" ? parse : null;
   if (money) textOfParse.set(money, input.text);
   const match = money
