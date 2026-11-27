@@ -35,7 +35,7 @@ export class SbiParser extends KnownBankParser {
     // verb that matches the direction, never simply the first glued mask.
     const moved = verbAccount(text, type);
     if (moved) return moved;
-    const glued = text.match(/\bA\/c\s?[X*]{1,8}(\d{4})\b/i);
+    const glued = text.match(/(?<!\b(?:loan|card)\s)\bA\/c\s?[X*]{1,8}(\d{4})\b/i);
     if (glued) return { last4: glued[1], instrument: "account" };
     const card = text.match(/\b(?:Debit|Credit)\sCard\s(?:ending\s(?:with\s)?)?[x*]{0,8}(\d{4})\b/i);
     if (card) return { last4: card[1], instrument: "card" };

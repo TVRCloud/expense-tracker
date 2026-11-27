@@ -403,6 +403,18 @@ describe("review of ticket 156, round 2", () => {
     for (const sender of SENDERS) expect(read(text, { sender }).last4).not.toBe("6618");
   });
 
+  it.each([
+    "Rs 2,315.00 debited from your A/c XX7305 for loan a/c no XX6618 EMI on 08-11-26.",
+    "Your loan a/c no XX6618 is credited with Rs 2,315.00 by debit to A/c XX7305 on 08-11-26.",
+    "Rs 2,315.00 auto-debited for EMI of loan a/c XXXX6618 from your a/c XXXX7305.",
+  ])("every bank reads the person's account, not the loan's, in %s", (text) => {
+    for (const sender of SENDERS) expect(read(text, { sender }).last4, String(sender)).toBe("7305");
+  });
+
+  it("a card account is never read as a bank account (ICICI)", () => {
+    expect(read("Rs 615.00 debited from A/c XX7305 to card account XX4417.", { sender: "AX-ICICIT-S" }).last4).not.toBe("4417");
+  });
+
   // 4-7
   it.each([
     ["Avl Bal Rs 6,140.00 due to a reversal", 614000],
