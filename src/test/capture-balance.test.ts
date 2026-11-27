@@ -182,7 +182,7 @@ describe("parse: balance and limit per bank, never the amount", () => {
   it("leaves out an overdrawn balance and a masked one", () => {
     expect(read("Rs 310.00 debited from A/c XX4821 on 08-11-26 to VPA bus.pass@ybl. Avl Bal INR 1,260.00 Dr", {}).balanceMinor).toBeUndefined();
     expect(
-      read("INR 79.00 debited\nA/c no. XX660314\n08-11-26, 10:14:02\nUPI/P2M/631800557700/KIOSK\nAvl bal: INR xxxxxx", {
+      read("INR 83.00 debited\nA/c no. XX660314\n08-11-26, 10:14:02\nUPI/P2M/631800557700/KIOSK\nAvl bal: INR xxxxxx", {
         sender: "AX-AXISBK-S",
       }).balanceMinor
     ).toBeUndefined();
@@ -227,5 +227,104 @@ describe("parse: balance and limit per bank, never the amount", () => {
         expect(performance.now() - start).toBeLessThan(250);
       }
     }
+  });
+});
+
+describe("review of ticket 156: figures that are not this account's money", () => {
+  // 1: a figure printed next to other digits, or on a card bill payment, is not the account in last4's.
+  it("leaves out a balance on a card bill payment (it could be either account's)", () => {
+    const p = read(
+      "Rs 4,180.00 debited from A/c XX7305 on 03-11-26 towards HDFC Bank Credit Card XX2614. Avl Bal Rs 18,306.00",
+      { sender: "VM-HDFCBK-S" }
+    );
+    expect(p).toMatchObject({ cardPayment: true });
+    expect(p.balanceMinor).toBeUndefined();
+  });
+
+  it("leaves out a balance printed next to another account's digits", () => {
+    const p = read("Rs 615.00 transferred from A/c XX7305 to A/c XX8842 on 08-11-26. A/c XX8842 Avl Bal Rs 340.00", {
+      sender: "VM-OTHRBK",
+    });
+    expect(p.last4).toBe("7305");
+    expect(p.balanceMinor).toBeUndefined();
+  });
+
+  it("keeps a balance printed next to the account's own digits, and a 3-digit mask that ends the same", () => {
+    expect(read("Rs 615.00 debited from A/c XX7305 on 08-11-26 to VPA fruit.cart@ybl. A/c XX7305 Avl Bal Rs 340.00", {}).balanceMinor).toBe(34000);
+    expect(
+      read("ICICI Bank Acct XX305 debited for Rs 615.00 on 08-Nov-26; FRUIT CART credited. Acct XX7305 Avl Bal Rs 340.00", {
+        sender: "AX-ICICIT-S",
+      }).balanceMinor
+    ).toBe(34000);
+  });
+
+  it("keeps a limit only for a card, and only that card's", () => {
+    expect(read("Rs 615.00 debited from A/c XX7305 on 08-11-26 to VPA fruit.cart@ybl. Avl Lmt Rs 40,250.00", {}).availableLimitMinor).toBeUndefined();
+    expect(
+      read("Rs 615.00 spent on card XX2614 at FRUIT CART on 08-11-26. Card XX9930 Avl Lmt Rs 40,250.00", {}).availableLimitMinor
+    ).toBeUndefined();
+    expect(read("Rs 615.00 spent on card XX2614 at FRUIT CART on 08-11-26. Avl Lmt Rs 40,250.00", {}).availableLimitMinor).toBe(4025000);
+  });
+
+  it.each([
+    // 2: a rule or warning with a word before "Bal".
+    "Min Avl Bal Rs 12,250.00 not maintained",
+    "Min. Avl Bal Rs 12,250.00",
+    "Insufficient Avl Bal Rs 14.00",
+    "Low Avl Bal Rs 86.00 - top up",
+    // 3: not the account's own money, or money still to move.
+    "Outstanding Bal Rs 11,640.00",
+    "Total outstanding balance Rs 11,640.00",
+    "Total Bal Rs 11,640.00",
+    "Current Bal Rs 11,640.00",
+    "Loan Bal Rs 1,18,300.00",
+    "Principal Balance Rs 1,18,300.00",
+    "Cashback balance Rs 236.00",
+    "Wallet Bal Rs 236.00",
+    "FASTag Bal Rs 236.00",
+    "NCMC card bal Rs 82.00",
+    "Reward points balance: 1,348.00",
+    "Loyalty points bal 1,348.50",
+    "Bal of Rs 1,060.00 will be debited on 15-11",
+    "Balance Rs 1,060.00 to be paid",
+    "Balance Rs 1,060.00 due",
+    "Bal Rs 1,060.00 payable",
+    // 4: overdrawn written after the figure.
+    "Avl Bal: Rs 236.00 (Dr)",
+    "Avl Bal: Rs.236.00(-)",
+    "Avl Bal Rs 236.00-",
+    // 6: a bare "Bal" with no currency (a shop name).
+    "spent at GLOBAL BAL 13.70 on card",
+    // 7: too large to be a balance.
+    "Avl Bal Rs 999999999999999.99",
+    // garbled grouping
+    "Avl Bal Rs 2,36.00",
+  ])("leaves out the balance in %s", (text) => {
+    expect(findBalance(text)).toBeUndefined();
+  });
+
+  it.each(["Daily Avl Limit Rs 9,615.00 on Debit Card", "ATM Avl Lmt Rs 9,615.00", "Avl Cash Limit Rs 9,615.00", "UPI Avl Limit Rs 9,615.00"])(
+    // 5: a daily, cash, ATM or UPI limit is not the card's credit limit.
+    "leaves out the limit in %s",
+    (text) => {
+      expect(findAvailableLimit(text)).toBeUndefined();
+    }
+  );
+
+  it.each([
+    // 4: ":-" is a separator, and "-SBI" after the figure is a signature, not a minus.
+    ["Avl Bal:-Rs 236.00", 23600],
+    ["Avl Bal Rs 236.00-SBI", 23600],
+    // 8: "is now".
+    ["Available balance is now Rs 1,060.00", 106000],
+    // A later real balance after a rule is still read.
+    ["Min Bal charges of Rs 515.00 debited. Avl Bal Rs 2,318.00", 231800],
+    ["Bal Rs 236, thanks", 23600],
+  ])("still reads %s", (text, minor) => {
+    expect(findBalance(text)).toBe(minor);
+  });
+
+  it("reads the credit limit, not a cash limit printed first", () => {
+    expect(findAvailableLimit("Available Cash Limit: Rs 8,150.00; Available Credit Limit: Rs 41,300.00")).toBe(4130000);
   });
 });

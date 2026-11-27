@@ -1,7 +1,7 @@
 // Shapes every capture parser returns. Kept apart from the parsers so a bank
 // parser, the generic fallback and ingest all share one definition.
 
-export const PARSER_VERSION = 4;
+export const PARSER_VERSION = 5;
 export const CONFIDENCE_AUTO_CREATE = 0.8;
 
 /** Where a message came from: the SMS sender id ("VM-HDFCBK") or, for a notification, the app label and package. */

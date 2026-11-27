@@ -74,6 +74,8 @@ export abstract class KnownBankParser extends BankParser {
       const own = debited?.instrument === "card" ? debited : card && card.last4 !== debited?.last4 ? card : null;
       parse.last4 = own?.last4;
       parse.instrument = own ? "card" : undefined;
+      // A limit with no card to belong to is nobody's (ticket 156).
+      if (!own) delete parse.availableLimitMinor;
     }
     const shaped = this.hasShape(flat);
     // Unsure reads stay in Review: money not moved yet, a mandate, or a message with both a debit and a credit word
