@@ -6,7 +6,7 @@
 
 import type { FoundAccount } from "../extract/account";
 import type { FoundDirection } from "../extract/direction";
-import { cleanParty, NAME, sharedParty, verbAccount } from "./known";
+import { cleanParty, moneySentence, NAME, sharedParty, verbAccount } from "./known";
 import { nameOnly, PublicSectorParser } from "./public-sector-base";
 
 /** "Dr."/"Cr." right after the message's first amount, which must not be a balance or an available amount. */
@@ -15,7 +15,7 @@ const FIRST_AMOUNT_DR_CR = /^(?:ALERT:\s)?(?:Rs\.?|INR|₹)\s?[\d,]{1,12}(?:\.\d
 const LOAN = /\bloan\s(?:a\/c|acct|account)\b/i;
 /** Money into or for a BOBCARD (a credit card): its bill, never spending or income. */
 const BOBCARD_PAID =
-  /\b(?:payment\sof\s(?:Rs\.?|INR|₹)\s?[\d,.]{1,15}\s(?:on|towards|to|for)\s(?:your\s)?BOBCARD|credited\sto\s(?:your\s)?BOBCARD|BOBCARD\s(?:bill\s)?payment|to:\s?BOBCARD\b|towards\s(?:your\s)?BOBCARD\b|payment\s(?:of\s(?:Rs\.?|INR|₹)\s?[\d,.]{1,15}\s)?received\stowards\s(?:your\s)?BOBCARD|BOBCARD\s(?:ending\s)?\d{4}\spayment\sof\s(?:Rs\.?|INR|₹)\s?[\d,.]{1,15}\s(?:has\sbeen\s)?(?:received|credited))/i;
+  /\b(?:payment\sof\s(?:Rs\.?|INR|₹)\s?[\d,.]{1,15}\s(?:on|towards|to|for)\s(?:your\s)?BOBCARD|credited\sto\s(?:your\s)?BOBCARD|BOBCARD\s(?:bill\s)?payment|to:\s?BOBCARD(?:\s(?:ending\s)?[x*]{0,4}\d{4})?(?=\.|,|$|\s(?:Total|on|Ref)\b)|towards\s(?:your\s)?BOBCARD\b|payment\s(?:of\s(?:Rs\.?|INR|₹)\s?[\d,.]{1,15}\s)?received\stowards\s(?:your\s)?BOBCARD|BOBCARD\s(?:ending\s)?\d{4}\spayment\sof\s(?:Rs\.?|INR|₹)\s?[\d,.]{1,15}\s(?:has\sbeen\s)?(?:received|credited))/i;
 
 export class BobParser extends PublicSectorParser {
   readonly id = "bob";
@@ -31,7 +31,10 @@ export class BobParser extends PublicSectorParser {
   ];
 
   protected override cardPayment(text: string): boolean {
-    return BOBCARD_PAID.test(text) || super.cardPayment(text);
+    // A spend or a refund on the card is never its bill payment, whatever a promo line after it says ("Make your BOBCARD
+    // payment on time"): only the sentence holding the amount is read.
+    if (/\b(?:spent|refund(?:ed)?)\b/i.test(text)) return super.cardPayment(text);
+    return BOBCARD_PAID.test(moneySentence(text)) || super.cardPayment(text);
   }
 
   protected override paidCard(text: string): FoundAccount | null {
@@ -62,8 +65,8 @@ export class BobParser extends PublicSectorParser {
     const toColon = text.match(new RegExp(String.raw`\bto:\s?${NAME}\.(?:\s|$)`, "i"));
     const crTo = text.match(/\bCr\.\sto\s([\w.\-]{1,60}@[A-Za-z][\w\-]{0,30})(?![\w@])/i);
     const name = cleanParty(toColon?.[1]) ?? crTo?.[1] ?? sharedParty(super.merchant(text, type));
-    // A card's own name and digits are never the other party ("to:BOBCARD 3381").
-    return name && !/\bBOBCARD\b/i.test(name) ? name : undefined;
+    // A card's own name and digits are never the other party ("to:BOBCARD 3381"); a shop called "BOBCARD STATIONERS" is.
+    return name && !/^BOBCARD(?:\s(?:ending\s)?[x*]{0,4}\d{4})?$/i.test(name) ? nameOnly(name) ?? name : undefined;
   }
 
   protected override ref(text: string): string | undefined {

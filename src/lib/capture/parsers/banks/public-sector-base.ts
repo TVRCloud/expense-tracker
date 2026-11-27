@@ -4,10 +4,13 @@
 import type { MoneyParse } from "../types";
 import { cleanParty, KnownBankParser, REVIEW_CEILING } from "./known";
 
-/** A debit that was taken back ("… reversed", "cash not dispensed"): not settled spending. */
-const DEBIT_UNDONE = /\b(?:revers(?:al|ed)|not\sdispensed|refund(?:ed)?)\b/i;
-/** Money into a loan or towards an EMI: a repayment, never income of the person's own account. */
-const INTO_LOAN = /\b(?:loan|EMI)\b/i;
+/** A debit that was taken back: the verb, never a payee's name ("REFUND CORNER") or a help line ("Cash not dispensed?
+ * Call …", "For refunds call …"). */
+const DEBIT_UNDONE = /\b(?:reversed|refunded|not\sdispensed(?!\s?\?))\b/i;
+/** Money into a loan or towards an EMI as what was credited: a repayment, never income of the person's own account.
+ * A promo ("Apply for a Home Loan") or a payer's name ("EMI STORE", "LOAN STAR FOODS") is not one. */
+const INTO_LOAN =
+  /\b(?:(?:credited|cr)\b[^.]{0,40}?\b(?:to|towards|in)\s(?:your\s)?(?:home\s|personal\s|car\s)?(?:loan|EMI)\b|towards\s(?:your\s)?(?:loan|EMI)\b|repayment\sof\s(?:your\s)?loan\b|loan\s(?:a\/c|acct|account)\b[^.]{0,60}?\bcredited\b|--(?:EMI|LOAN\s(?:RECOVERY|REPAYMENT))\b)/i;
 
 export abstract class PublicSectorParser extends KnownBankParser {
   override parse(text: string, receivedAt: Date): MoneyParse | null {
@@ -22,19 +25,26 @@ export abstract class PublicSectorParser extends KnownBankParser {
     // The account credited "towards Loan EMI" is most likely the loan itself: its digits, balance and a "Loan EMI"
     // merchant are dropped, so a confirm in Review can never teach a savings account the loan's number.
     const { last4: _last4, instrument: _instrument, balanceMinor: _balance, ...rest } = capped;
-    return { ...rest, merchant: parse.merchant && INTO_LOAN.test(parse.merchant) ? undefined : parse.merchant };
+    return { ...rest, merchant: parse.merchant && /^(?:loan|EMI)\b/i.test(parse.merchant) ? undefined : parse.merchant };
   }
 }
 
-/** A payee as these banks print it, minus a "Sender"/"Beneficiary" label, a "towards …" reason and any run of six or more
- * digits (a phone or account number): "Beneficiary MEHTA STEELS" is "MEHTA STEELS", "RAVI 9812345678" is "RAVI". */
+/** A reason a bank prints where a name would be ("towards refund of …", "reversal of UPI txn", a bare "REV", "Personal
+ * Loan disbursal"). Real names
+ * that start with these words ("REV MOTORS", "Towards Travels", "REFUND DESK OF KART") are kept. */
+const REASON =
+  /^(?:towards\s(?:refund|reversal|loan|EMI|your)\b|reversal\sof\b|refund\s(?:of|for|from)\b|(?:rev|reversal|refund)$|(?:\w+\s){0,2}loan\sdisburs(?:al|ement)$)/i;
+
+/** A payee as these banks print it, minus a "Sender:"/"Beneficiary:" label and any run of eight or more digits (a phone
+ * or account number): "RAVI 9812345678" is "RAVI". A UPI id made of a phone number names a person by number only, so
+ * it gives no merchant. */
 export function nameOnly(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
   const v = raw
     .slice(0, 80)
-    .replace(/^(?:Sender|Beneficiary|Remitter)\s/i, "")
-    .replace(/\s?\+?\d{6,}\b/g, "")
+    .replace(/^(?:Sender|Beneficiary|Remitter)\s?:\s?/i, "")
+    .replace(/\s?\+?\d{8,}(?=\b|@)/g, "")
     .trim();
-  if (/^(?:towards|reversal|refund|rev|REV)\b/i.test(v)) return undefined;
+  if (/^@/.test(v) || REASON.test(v)) return undefined;
   return cleanParty(v);
 }

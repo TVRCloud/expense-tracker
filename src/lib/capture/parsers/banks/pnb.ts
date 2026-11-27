@@ -43,9 +43,14 @@ export class PnbParser extends PublicSectorParser {
 
   protected override atm(text: string): boolean {
     if (super.atm(text)) return true;
-    // Cash taken "at PNB ATM" with the card; never a charge or fee at an ATM, a shop near one, or a reversal.
-    if (/\b(?:charges?|fees?|enquiry|revers(?:al|ed)|not\sdispensed|refund)\b/i.test(text)) return false;
-    // "at PNB ATM", "at SBI ATM": cash from an ATM; never "at non-PNB ATM" (a fee) or a shop "near" one.
-    return /\bdebited\b[^]{0,80}?\bthru\scard\s[X*]{0,8}\d{4}\b[^]{0,40}?\bat\s(?!non-)(?:[A-Za-z]{2,12}\s)?ATM\b/i.test(text);
+    // A fee charged at an ATM ("balance enquiry charges at non-PNB ATM") or a debit that was reversed is not cash. A
+    // charge line after the ATM sentence ("at SBI ATM. Charges apply beyond 5 free txns.") does not change that.
+    if (/\b(?:charges?|fees?|enquiry)\b[^.]{0,30}?\bat\s(?:non-)?[A-Za-z-]{0,12}\s?ATM\b/i.test(text)) return false;
+    if (/\b(?:reversed|refunded|not\sdispensed(?!\s?\?))\b/i.test(text)) return false;
+    const card = /\bdebited\b[^]{0,80}?\bthru\scard\s[X*]{0,8}\d{4}\b/i.test(text);
+    // "at PNB ATM", "at SBI ATM", never "at ATM STORES …" (a shop) or "near … ATM"; or the bank's free-use count line.
+    const atAtm = /\bat\s(?!non-)(?:[A-Za-z]{2,12}\s)?ATM(?!\s[A-Za-z])/i.test(text);
+    const freeTxn = /\bfree\stxns?\son\s[A-Za-z]{2,12}\sATM\b/i.test(text);
+    return card && (atAtm || freeTxn);
   }
 }

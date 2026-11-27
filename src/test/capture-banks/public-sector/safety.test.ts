@@ -195,3 +195,54 @@ describe.each(Object.entries(OWN))("%s: tricky messages in the bank's own shapes
     if (p.kind === "money" && /\bloan\b/i.test(text)) expect(["9917", "9910", "9921", "6610", "1177"]).not.toContain(p.last4);
   });
 });
+
+// Ticket 171 review, round 2: the guards above must not cost good messages their booking or their payee. Words like
+// "loan", "EMI", "refund" or "REV" inside a payee's name, a promo line or a help line change nothing.
+const GOOD: { sender: string; text: string; type: "income" | "expense"; merchant?: string; atm?: true }[] = [
+  { sender: "VM-CANBNK-S", text: "Dear Customer, Acct XXX482 Dr. INR 342.60 on 05/11/26 to REVERSAL ARCADE STUDIO; UPI: 631702491001; Bal INR 7,872.06-CanaraBank", type: "expense", merchant: "REVERSAL ARCADE STUDIO" },
+  { sender: "VM-CANBNK-S", text: "Dear Customer, Acct XXX482 Dr. INR 342.60 on 05/11/26 to REV AUTOWORKS; UPI: 631702491002; Bal INR 7,872.06-CanaraBank", type: "expense", merchant: "REV AUTOWORKS" },
+  { sender: "VM-CANBNK-S", text: "An amount of INR 9,125.00 has been debited from XXXX3917 on 05/11/2026 towards RTGS to Beneficiary JOSHI LOAN TRADERS, IFSC SBIN0004321, Beneficiary A/c XXXX7781 - Canara Bank", type: "expense", merchant: "JOSHI LOAN TRADERS" },
+  { sender: "VM-CANBNK-S", text: "An amount of INR 2,145.00 has been credited to XXXX3917 on 05/11/2026 towards NEFT by Sender LOAN LEAF FOODS, IFSC HDFC0001234, Sender A/c XXXX5521 - Canara Bank", type: "income", merchant: "LOAN LEAF FOODS" },
+  { sender: "VM-PNBSMS-S", text: "A/c X6731 debited INR 1,965.00 Dt 05-11-26 08:40:12 to EMI MART thru UPI:631845001101.Bal INR 10,569.25-PNB", type: "expense", merchant: "EMI MART" },
+  { sender: "VM-PNBSMS-S", text: "Ac XX6731 Credited with Rs.86,400.00 05-11-2026 11:02:09 being Salary Nov. Aval Bal Rs.96,969.25 CR. Apply for a Home Loan at 8.4% -PNB", type: "income" },
+  { sender: "VM-PNBSMS-S", text: "Ac XX6731 Debited with Rs.1,870.00, 05-11-2026 09:12:47. Aval Bal Rs.95,099.25 CR. For refunds or disputes call 18001234-PNB", type: "expense" },
+  { sender: "VM-PNBSMS-S", text: "A/c XX6731 debited with Rs.4,150.00, 05-11-2026 18:01:33 thru card XX5108 at PNB ATM. Bal 90,949.25 CR. Cash not dispensed? Call 18001234 -PNB", type: "expense", atm: true },
+  { sender: "VM-PNBSMS-S", text: "A/c XX6731 debited with Rs.4,150.00, 05-11-2026 18:01:33 thru card XX5108 . Out of 5 free txn on PNB ATM, you have used 2. Bal 86,799.25 CR -PNB", type: "expense", atm: true },
+  { sender: "VM-PNBSMS-S", text: "A/c XX6731 debited with Rs.4,150.00, 05-11-2026 18:01:33 thru card XX5108 at SBI ATM. Charges apply beyond 5 free txns. -PNB", type: "expense", atm: true },
+  { sender: "AD-BOBCRD-S", text: "ALERT: INR 2,345.75 is spent on your BOBCARD ending 3381 at CROMA ONLINE on 05-11-2026. Make your BOBCARD payment on time to avoid charges. -Bank of Baroda", type: "expense", merchant: "CROMA ONLINE" },
+  { sender: "AD-BOBCRD-S", text: "ALERT: INR 2,345.75 is spent on your BOBCARD ending 3381 at BOBCARD LOUNGE CAFE on 05-11-2026. -Bank of Baroda", type: "expense", merchant: "BOBCARD LOUNGE CAFE" },
+  { sender: "AD-BOBCRD-S", text: "ALERT: INR 655.00 is credited to your BOBCARD ending 3381 as refund from SHOPKART on 05-11-2026. -Bank of Baroda", type: "income", merchant: "SHOPKART" },
+  { sender: "AD-BOBSMS-S", text: "Rs.326.00 Dr. from A/c XX719628 to:BOBCARD STATIONERS. Ref:631902111001 -Bank of Baroda", type: "expense", merchant: "BOBCARD STATIONERS" },
+  { sender: "AD-BOBSMS-S", text: "Rs.86,400.00 Cr. to A/c XX719628 on 05-11-2026 Salary from ACME LOANS PVT LTD. AvlBal:Rs96,400.00 -Bank of Baroda", type: "income" },
+  { sender: "BZ-BOIIND-S", text: "Rs.426.00 debited A/cXX2846 and credited to REVATHI STORES via UPI Ref No 631922331101 on 05Nov26. -BOI", type: "expense", merchant: "REVATHI STORES" },
+  { sender: "BZ-BOIIND-S", text: "Rs.426.00 debited A/cXX2846 and credited to SHOP 247365 via UPI Ref No 631922331102 on 05Nov26. -BOI", type: "expense", merchant: "SHOP 247365" },
+  { sender: "AD-INDBNK-S", text: "Sent Rs.624.00 from A/c *6614 on 05-11-26 to Towards Travels.RRN 631944551101.-Indian Bank", type: "expense", merchant: "Towards Travels" },
+  { sender: "AD-INDBNK-S", text: "Sent Rs.624.00 from A/c *6614 on 05-11-26 to Refund Kart.RRN 631944551102.-Indian Bank", type: "expense", merchant: "Refund Kart" },
+  { sender: "AD-INDBNK-S", text: "Rs. 18,725 credited to A/c XX6614 on 05/11/2026 UTR:SBIN0631955/NEFT/SENDER ENTERPRISES / -Indian Bank", type: "income", merchant: "SENDER ENTERPRISES" },
+  { sender: "CP-CENTBK-S", text: "Rs. 547.00 debited from your A/c xxxxxx7719 on 05/11/2026 through UPI vide Ref No. 631933441101 To.REFUND DESK OF KART-CBoI", type: "expense", merchant: "REFUND DESK OF KART" },
+  { sender: "CP-CENTBK-S", text: "Rs. 1,655.00 credited to your A/c xxxxxx7719 on 05/11/2026 through NEFT vide Ref No./N308261101 By.EMI FINANCE LTD-CBoI", type: "income", merchant: "EMI FINANCE LTD" },
+  { sender: "VK-UCOBNK-S", text: "A/c XX8840 Credited with Rs.5,445.00 on 05-11-2026 by NEFT from EMIRATES TRADING.Avl Bal Rs.8,367.90", type: "income", merchant: "EMIRATES TRADING" },
+  { sender: "JD-PSBANK-S", text: "PSB000000781934540 A/c No **7326 Credited with Rs 662--UPI/CR/631955661101/LOANWALA SERVICES/SBIN/U (CLR BAL 7246.75CR)(05-11-2026)-Punjab&Sind Bank", type: "income", merchant: "LOANWALA SERVICES" },
+  { sender: "JM-UNIONB-S", text: "Union Bank of India A/c*5093 Cr Rs1,195.00 on 05-11-26 10:07 by MB 6601234679 EMI HUB, Bal Rs4,300.80", type: "income", merchant: "EMI HUB" },
+  { sender: "VM-IOBCHN-S", text: "Your a/c no. XXXXX4417 is debited for Rs.872.00 on 05-11-26 towards REVERSE OSMOSIS SERVICE by UPI ref 631966771101. -IOB", type: "expense" },
+];
+
+describe("good messages keep their booking and their payee", () => {
+  it.each(GOOD)("$sender $text", ({ sender, text, type, merchant, atm }) => {
+    const p = parseCapture(text, RECEIVED, { sender });
+    expect(p).toMatchObject({ kind: "money", type });
+    expect(p.confidence).toBeGreaterThanOrEqual(CONFIDENCE_AUTO_CREATE);
+    if (merchant) expect(p.kind === "money" && p.merchant).toBe(merchant);
+    if (atm) expect(p.kind === "money" && p.atm).toBe(true);
+    else expect(p.kind === "money" && p.atm).toBeFalsy();
+  });
+
+  it("a shop called ATM STORES is not cash, and a disbursal reason is not a payee", () => {
+    const shop = parseCapture("A/c XX6731 debited with Rs.1,215.00, 05-11-2026 thru card XX5108 at ATM STORES LAJPAT NAGAR -PNB", RECEIVED, { sender: "VM-PNBSMS-S" });
+    expect(shop.kind === "money" && shop.atm).toBeFalsy();
+    const loan = parseCapture("Dear Customer, Acct XXX482 credited with INR 52,500.00 on 05-11-26 from Personal Loan disbursal; Bal INR 60,372.06-CanaraBank", RECEIVED, { sender: "VM-CANBNK-S" });
+    expect(loan).toMatchObject({ kind: "money", type: "income", merchant: undefined });
+    const phoneVpa = parseCapture("Sent Rs.624.00 from A/c *6614 on 05-11-26 to 98123456789@ybl.RRN 631944551103.-Indian Bank", RECEIVED, { sender: "AD-INDBNK-S" });
+    expect(phoneVpa.kind === "money" && phoneVpa.merchant).toBeUndefined();
+  });
+});

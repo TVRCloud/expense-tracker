@@ -15,7 +15,8 @@ export class CentralParser extends PublicSectorParser {
   protected override merchant(text: string, type: "income" | "expense"): string | undefined {
     const party = text.match(/\b(?:By|To)\.\s?([^.;]{1,60}?)\s?-\s?CBoI\b/i);
     // "By.REFUND SHOPKART will be credited in 5 days": the name only, without the refund word or the promise.
-    const name = party?.[1].replace(/^(?:REFUND|REV(?:ERSAL)?)\s(?:FROM\s)?/i, "").replace(/\s(?:will\b|in\s\d)[^]{0,60}$/i, "");
+    const toCome = party && /\s(?:will\b|in\s\d)/i.test(party[1]);
+    const name = toCome ? party[1].replace(/^(?:REFUND|REV(?:ERSAL)?)\s(?:FROM\s)?/i, "").replace(/\s(?:will\b|in\s\d)[^]{0,60}$/i, "") : party?.[1];
     if (party) return nameOnly(name);
     return nameOnly(sharedParty(super.merchant(text, type)));
   }

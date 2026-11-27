@@ -6,11 +6,14 @@ tests: `src/test/capture-banks/public-sector/`. Every parser takes the account n
 names two accounts, and never a loan or card account's mask.
 
 All ten extend `PublicSectorParser` (`banks/public-sector-base.ts`), which keeps two reads in Review whatever shape
-matched: a debit that was reversed, refunded or not dispensed, and a credit into a loan or towards an EMI (that one also
-drops its account digits, balance and a "Loan EMI" merchant, so a confirm can never teach a savings account the loan's
-number). Its `nameOnly` cleans a payee: no "Sender"/"Beneficiary" label, no "towards …"/"reversal"/"refund" reason, no
-run of six or more digits (a phone or account number). When a bank's own payee field matches but holds no name, the
-parser gives no merchant rather than the shared guess.
+matched: a debit that was reversed, refunded or not dispensed (the verb only: a payee called "REFUND CORNER" or a help
+line "Cash not dispensed? Call …" changes nothing), and a credit into a loan or towards an EMI as what was credited
+("towards Loan EMI", "loan a/c … credited", "--LOAN RECOVERY"; a promo "Apply for a Home Loan" or a payer "EMI STORE"
+does not count). That credit also drops its account digits, balance and a "Loan EMI" merchant, so a confirm can never
+teach a savings account the loan's number. Its `nameOnly` cleans a payee: no "Sender:"/"Beneficiary:" label, no
+"towards refund…"/"reversal of…"/bare "REV"/"…Loan disbursal" reason (real names such as "REV MOTORS", "Towards
+Travels", "SENDER ENTERPRISES" stay), no run of eight or more digits, and no UPI id made of a phone number. When a
+bank's own payee field matches but holds no name, the parser gives no merchant rather than the shared guess.
 
 ## Canara Bank (`canara.ts`)
 - Headers `CANBNK`, `CANARA`. No app package.
@@ -18,14 +21,15 @@ parser gives no merchant rather than the shared guess.
 - Reads a three- or four-digit account after "Acct" (a three-digit last4 matches a saved account only by the bank
   guess); on a NEFT/RTGS credit, the account credited, never "Sender A/c"; the sender after "by Sender" or the payee
   after "to Beneficiary"; the UPI ref. Money "towards your Loan A/c from SB A/c …" takes the savings account, never the
-  loan's.
+  loan's (only for a loan account or repayment, never a payee called "… LOAN TRADERS").
 
 ## Punjab National Bank (`pnb.ts`)
 - Headers `PNBSMS`, `PNBBNK`, `PNBCCD` (credit cards). No app package.
 - Shapes: "Ac/A/c XX… Debited/Credited with Rs.…"; "A/c X… debited INR … Dt …"; "PNB Credit Card 1234 debited with
   Rs.…"; "Your a/c no XX… is debited for Rs …" (two accounts).
-- Reads the card's plain digits, the payee before "thru UPI", the UPI ref; a debit "thru card … at <bank> ATM" is cash
-  from an ATM, never a charge or fee ("at non-PNB ATM"), a shop "near" one, or a reversal. A help line ("report it to
+- Reads the card's plain digits, the payee before "thru UPI", the UPI ref; a debit "thru card … at <bank> ATM" or with
+  the "free txn on PNB ATM" line is cash from an ATM, never a charge or fee at one ("at non-PNB ATM"), a shop ("at ATM
+  STORES", "near … ATM") or a reversal; a charge line after the ATM sentence does not undo it. A help line ("report it to
   the bank") or an ATM is never the payee.
 
 ## Bank of Baroda (`bob.ts`)
@@ -36,8 +40,9 @@ parser gives no merchant rather than the shared guess.
   id); a "Cr"/"Dr" after a balance is only the balance's sign. A message naming a loan account goes to the shared rules.
   A dotted mask or a six-digit account ("XX123456") gives its last four; the payee after "to:"; no merchant on a cash
   deposit.
-- BOBCARD is a credit card: paying it (from the account, "to:BOBCARD", "towards BOBCARD", a payment received on it) is
-  a card bill payment in Review with the card's own digits, and the card is never the payee.
+- BOBCARD is a credit card: paying it (from the account, "to:BOBCARD 3381", "towards BOBCARD", a payment received on
+  it) is a card bill payment in Review with the card's own digits, read only in the sentence holding the amount and
+  never on a spend or a refund; the card is never the payee, but a shop named "BOBCARD STATIONERS" is.
 
 ## Union Bank of India (`union.ts`)
 - Header `UNIONB`. No app package.

@@ -25,7 +25,7 @@ export class CanaraParser extends PublicSectorParser {
     if (acct) return { last4: acct[1], instrument: "account" };
     // Money into a loan from the savings account ("credited to XXXX6610 … towards your Loan A/c from SB A/c XXXX3917"):
     // the person's account is the savings one; the loan's digits are never taken.
-    if (/\bloan\b/i.test(text)) {
+    if (/\bLoan\sA\/c\b|\btowards\s(?:your\s)?Loan\b|\brepayment\sof\s(?:your\s)?Loan\b/i.test(text)) {
       const from = text.match(/\bfrom\s(?:SB\s)?A\/c\sX{2,8}(\d{4})\b/i);
       return from ? { last4: from[1], instrument: "account" } : null;
     }
@@ -38,9 +38,8 @@ export class CanaraParser extends PublicSectorParser {
     const party = text.match(/\b(?:by\sSender|to\sBeneficiary)\s([^,;.]{1,60}),/i);
     // A sender or beneficiary field is the only name such a message has: no guess when it holds no name.
     if (party) return nameOnly(party[1]);
-    const name = nameOnly(sharedParty(super.merchant(text, type)));
-    // "towards reversal of UPI txn", "refund from …, will be credited": a reason, never the other party.
-    return name && !/^(?:reversal|refund|rev)\b/i.test(name) ? name : undefined;
+    // "towards reversal of UPI txn", "refund from …, will be credited": a reason, never the other party (nameOnly).
+    return nameOnly(sharedParty(super.merchant(text, type)));
   }
 
   protected override ref(text: string): string | undefined {
