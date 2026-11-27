@@ -37,8 +37,11 @@ const PAID_TO_CARD = [
   new RegExp(String.raw`\bcard\b${SAME_SENTENCE}{0,40}?\bpayment\s+of\b${SAME_SENTENCE}{0,40}?\b(?:received|credited)\b`, "i"),
 ];
 const AMOUNT_TOKEN = /(?:Rs\.?|INR|₹)\s?\d/i;
-// Paid with a card ("... to Airtel using credit card XX4321", "using your HDFC Bank Credit Card"), never a bill payment.
-const SPEND_WITH_CARD = /\busing\s+(?:your\s+)?(?:[A-Za-z]+\s+){0,3}?(?:credit\s*|debit\s*)?card\b/i;
+// Paid with a credit card ("... to Airtel using credit card XX4321", "using your HDFC Bank Credit Card"), never a bill
+// payment. A debit card is how a card bill is often paid, so it is no sign of a spend (ticket 177).
+const SPEND_WITH_CARD = /\busing\s+(?:your\s+)?(?:[A-Za-z]+\s+){0,3}?credit\s*card\b/i;
+// Money going to a credit card ("towards your SBI Credit Card XX5678", "to your Credit Card XX5678"): a bill payment.
+const TO_A_CREDIT_CARD = /\b(?:to|towards)\s+(?:your\s+)?(?:(?!using\b|via\b|with\b|by\b)[A-Za-z]+\s+){0,3}?credit\s*card\b/i;
 
 // A sentence that sells or helps ("Pay your bill ...", "Earn 5% back ..."), never what happened.
 const PROMO_START = /^(?:Pay|Earn|Convert|Use|Get|Click|Download)\b/i;
@@ -118,7 +121,7 @@ export abstract class KnownBankParser extends BankParser {
     // A spend with a card, or money coming back, is never a bill payment, whatever promo text follows it.
     if (/\b(?:spent|refund(?:ed)?|cashback|reversal|reversed)\b/i.test(text)) return false;
     // "Thank you for your payment of Rs 799 to Airtel using credit card XX4321": paid WITH the card, not to it (ticket 177).
-    if (SPEND_WITH_CARD.test(text)) return false;
+    if (SPEND_WITH_CARD.test(text) && !TO_A_CREDIT_CARD.test(moneySentence(text))) return false;
     const sentence = moneySentence(text);
     return PAID_TO_CARD.some((re) => re.test(sentence));
   }
@@ -130,7 +133,7 @@ const NOT_A_PARTY =
 /** A masked number or an account, never a payee ("XX4410", "A/c 5150"). */
 const ACCOUNT_LIKE = new RegExp(
   // Single-X masks ("X7781") and masks inside a number ("410***551203") too (ticket 177).
-  String.raw`(?:^|\s)[x*]{2,}\d+\b|\bx\d{4}\b|\d[x*]{2,}\d|\bac\s?x+\d|\b(?:a\/c|acct|account)\b|\b${CARD}\b|\b(?:rs|inr)\.?\s?\d|^[\d\s.,-]+$`,
+  String.raw`(?:^|\s)[x*]{2,}\d+\b|^x\d{3,4}\b|\d[x*]{2,}\d|\bac\s?x+\d|\b(?:a\/c|acct|account)\b|\b${CARD}\b|\b(?:rs|inr)\.?\s?\d|^[\d\s.,-]+$`,
   "i"
 );
 

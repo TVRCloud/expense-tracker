@@ -1,15 +1,13 @@
 // Messages that must never become transactions (OTPs, offers, due reminders, failed payments). Runs before any
 // parser, so a bank parser never has to repeat these checks.
 
-import { CARD_USE, CREDIT_WORDS, DEBIT_WORDS } from "./extract/direction";
+import { CREDIT_WORDS, DEBIT_WORDS, isCardUse, txnDidNotGoThrough } from "./extract/direction";
 import type { IgnoredParse } from "./types";
 
 /** A fraud warning many alerts end with ("Never share OTP/PIN with anyone"). Removed before the OTP check, so a
  * real debit that carries it is not thrown away as an OTP. Same rule as the phone's `CaptureFilter.OTP_WARNING`. */
 const OTP_WARNING =
   /(?:\bdo\s*n[o'’]?t|\bdon[’']t|\bnever|\bnot|\bbeware|\bbanks?\s+never)\s+(?:to\s+)?(?:share|ask|disclose|reveal|give|tell)[^.\n\d]*/gi;
-
-const AMOUNT_HERE = /(?:Rs\.?|INR|₹|USD|EUR|GBP|AED|\$)\s?\d/i;
 
 export function ignoreReason(text: string): IgnoredParse["reason"] | null {
   // The warning is cut only up to the first digit, and a 4 to 8 digit code right after "OTP" (or "123456 is your
@@ -31,31 +29,25 @@ export function ignoreReason(text: string): IgnoredParse["reason"] | null {
       text
     );
   // A card spend written with no money verb ("Thank you for using … Card … for INR 845.00") moved money too, so a help
-  // line ("SMS BLOCK … to get any failed or disputed txn checked") or a refund still to come never drops it (ticket 177).
-  const moved = movedVerb || CARD_USE.test(text);
+  // line ("SMS BLOCK … to get any failed or disputed txn checked") or a refund still to come never drops it, unless
+  // the message says the transaction itself did not go through (ticket 177).
+  const moved = movedVerb || (isCardUse(text) && !txnDidNotGoThrough(text));
   // A notice before a debit (RBI pre-debit and mandate alerts), or a debit that could not happen, moved nothing.
   // A pre-debit notification never moves money, whatever else it says ("mandate received on ...").
   if (/\bpre-?debit\b/i.test(text)) return "reminder";
-  if (
-    /\b(scheduled|(?:will|to) be (?:debited|credited|processed|deducted|charged|presented)|upcoming|insufficient (?:balance|funds))\b/i.test(text) &&
-    !moved
-  ) {
-    return "reminder";
-  }
+  // "Scheduled" and "upcoming" are a reminder unless a money verb says otherwise; a card spend whose refund "will be
+  // credited" is not (ticket 177).
+  if (/\b(scheduled|upcoming|insufficient (?:balance|funds))\b/i.test(text) && !movedVerb) return "reminder";
+  if (/\b(?:will|to) be (?:debited|credited|processed|deducted|charged|presented)\b/i.test(text) && !moved) return "reminder";
   // A payment that did not go through moved no money. Only when nothing says money moved: "Rs 500 debited ...
   // UPI txn failed? Call 1800" is a real debit with a help line, and "Rs 799 reversed ... for failed UPI txn" a credit.
   if (/\b(failed|declined|unsuccessful|could not be (?:processed|completed)|has been rejected)\b/i.test(text) && !moved) {
     return "not_financial";
   }
-  // The transaction itself was declined ("Rs 63 debited to your card ... has been declined"): "debited" there names the
-  // attempt, not money that moved. Money that came back is still read (ticket 177).
-  // Only the sentence holding the amount counts: "Card has been declined earlier? Ignore." after a real spend does not.
-  const amountSentence = text.split(/(?<!\b(?:Rs|no|Avl|Bal|Txn|Trxn))[.?!]\s+(?=[A-Z])/).find((x) => AMOUNT_HERE.test(x));
-  if (
-    amountSentence &&
-    /\b(?:has\s+been|is|was|got)\s+declined\b|\b(?:txn|transaction|payment)\s+declined\b/i.test(amountSentence) &&
-    !/\b(?:reversed|refund(?:ed)?|credited\s+back|reversal)\b/i.test(text)
-  ) {
+  // The transaction itself was declined and no money verb says anything moved: nothing to read. With a money verb
+  // ("Rs 540 debited … Txn declined? Call …", "… your previous attempt was declined") the read goes to Review at 0.5
+  // instead (base.ts), never dropped (ticket 177).
+  if (!movedVerb && txnDidNotGoThrough(text) && !/\b(?:reversed|refund(?:ed)?|credited\s+back|reversal)\b/i.test(text)) {
     return "not_financial";
   }
   const hasMovement = DEBIT_WORDS.test(text) || CREDIT_WORDS.test(text);

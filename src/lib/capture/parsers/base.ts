@@ -6,7 +6,15 @@ import { parseMessageDate, type ParsedDate } from "./dates";
 import { findAmount, type FoundAmount } from "./extract/amount";
 import { findBankName, findLast4, findPaidCard, type FoundAccount } from "./extract/account";
 import { readAvailableLimit, readBalance, type FoundFigure } from "./extract/balance";
-import { findDirection, isAtmWithdrawal, isCardPayment, MONEY_UNDONE, type FoundDirection } from "./extract/direction";
+import {
+  findDirection,
+  isAtmWithdrawal,
+  isCardPayment,
+  isCardUse,
+  MONEY_UNDONE,
+  txnDidNotGoThrough,
+  type FoundDirection,
+} from "./extract/direction";
 import { findMerchant, findRef } from "./extract/merchant";
 import { normaliseSender } from "./sender";
 import type { MoneyParse } from "./types";
@@ -16,6 +24,10 @@ export interface NormalisedSource {
   header?: string;
   packageName?: string;
 }
+
+/** On a card spend message, money back written as a posted credit ("A credit of INR 913.00 has been posted to your
+ * card", "INR 913.00 Cr to card"). Ticket 177. */
+const CREDIT_POSTED = /\bcredit\b(?:[^.]|\.(?=\d)){0,40}?\bposted\b|\bCr\.?\s+(?:to|on)\s+(?:your\s+)?card\b/i;
 
 export abstract class BankParser {
   /** Stored as the parse's `parserId` ("hdfc", "generic"). */
@@ -48,7 +60,10 @@ export abstract class BankParser {
     if (!amount || !direction) return null;
 
     // A card bill payment names the card it paid; otherwise the account the money moved on.
-    const account = (cardPayment ? this.paidCard(text) : null) ?? this.account(text, direction.type);
+    // A card bill payment carries only a card's own digits: the card it paid, or a card read as the account ("Your
+    // Credit Card 5150 payment of …"), never the bank account it was paid from (ticket 177).
+    const read = this.account(text, direction.type);
+    const account = cardPayment ? (this.paidCard(text) ?? (read?.instrument === "card" ? read : null)) : read;
     const parsedDate = this.date(text, receivedAt);
     const ref = this.ref(text);
     const merchant = this.merchant(text, direction.type);
@@ -78,7 +93,12 @@ export abstract class BankParser {
     // the money finally went is for the person to confirm, never booked either way. The word counts anywhere, even
     // inside a shop's name: a captured name can swallow the word ("at ORCHID MART reversed"), so nothing is stripped
     // first and a shop called "REFUND KITCHEN" goes to Review too. A refund credit on its own is still booked (ticket 177).
-    if (direction.type === "expense" && MONEY_UNDONE.test(text)) confidence = Math.min(confidence, 0.75);
+    if (direction.type === "expense" && (MONEY_UNDONE.test(text) || (isCardUse(text) && CREDIT_POSTED.test(text)))) {
+      confidence = Math.min(confidence, 0.75);
+    }
+    // The message also says the attempt was declined or failed but names a money verb ("Rs 540 debited … your previous
+    // attempt was declined"): which happened is for the person to confirm, at the card-payment level (ticket 177).
+    if (txnDidNotGoThrough(text)) confidence = Math.min(confidence, 0.5);
 
     return {
       kind: "money",
@@ -88,7 +108,7 @@ export abstract class BankParser {
       amountMinor: amount.minor,
       currency: amount.currency,
       last4: account?.last4,
-      instrument: cardPayment ? "card" : account?.instrument,
+      instrument: cardPayment ? (account ? "card" : undefined) : account?.instrument,
       merchant,
       ref,
       bankName: this.bankName ?? findBankName(text),

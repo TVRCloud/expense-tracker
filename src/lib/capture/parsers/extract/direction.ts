@@ -9,15 +9,33 @@ export const CREDIT_WORDS =
   /(?<!\b(?:will|to|shall)\s+be\s+)\b(credited|(?<!\b(?:request|mandate)\s+(?:has\s+been\s+|is\s+|was\s+)?)received|deposited|refund(?:ed)?|reversed|cashback of|cr(?=\.?\s*(?:Rs|INR|₹|\d)))\b/i;
 
 /** A card spend written with no money verb (ticket 177): "Thank you for using HSBC Credit Card XXXX6603 for INR 845.00
- * … at SHOP", "You have used your card XX1234 for Rs 500 at …". Money moved, out of the card. */
-export const CARD_USE =
-  /\b(?:thank\s*you\s+for\s+using|(?:have|has)\s+used|used)\s+(?:your\s+)?(?:[A-Za-z&]{1,15}\s+){0,4}?(?:(?:credit|debit)\s+)?card\b[^.\n]{0,40}?\bfor\s+(?:INR|Rs\.?|₹)\s?\d/i;
+ * … at SHOP", "You have used your card XX1234 for Rs 500 at …". Needs a card mask with digits or an "at <shop>", so a
+ * promo ("Thank you for using your Credit Card for Rs 1,00,000 worth of spends this year!") is not one. */
+const CARD_USE_SHAPE =
+  /\b(?:thank\s*you\s+for\s+using|(?:have|has)\s+used|used)\s+(?:your\s+)?(?:[A-Za-z&]{1,15}\s+){0,4}?(?:(?:credit|debit)\s+)?card\b([^.\n]{0,40}?)\bfor\s+(?:INR|Rs\.?|₹)\s?[\d,]+(?:\.\d{1,2})?([^.\n]{0,60})/i;
+const CARD_MASK = /(?:[x*]{2,}\s?\d{3,4}|\b\d{2}[x*]{2}\b|\bending\s+(?:with\s+)?[x*]*\d{4}|\b\d{4}\b)/i;
+export function isCardUse(text: string): boolean {
+  const m = CARD_USE_SHAPE.exec(text);
+  if (!m) return false;
+  if (/\bworth\s+of\s+spends?\b|\bthis\s+(?:year|month)\b/i.test(m[2])) return false;
+  return CARD_MASK.test(m[1]) || /\bat\s+\S/i.test(m[2]);
+}
 
-/** Money that moved and then came back or was undone (ticket 177): a reversal, refund, reimbursement, chargeback,
- * cancellation, void, bounce, return, roll-back, adjustment back or re-credit. A debit that names one of these is
- * for the person to confirm (base.ts caps it); bare "credit"/"Cr" is left out on purpose, it is in every message. */
 export const MONEY_UNDONE =
-  /\b(?:revers\w*|refund\w*|reimburs\w*|charge-?back\w*|charged\s+back|cancel(?:l?ed|lation)|void(?:ed)?|bounced|returned|rolled\s+back|adjusted\s+back|re-?credited|credited\s+back)\b/i;
+  /\b(?:revers\w*|revert(?:ed)?|refund\w*|reimburs\w*|charge-?back\w*|charged\s+back|cancel(?:l?ed|lation)|void(?:ed)?|bounced|returned|rolled\s+back|adjusted\s+back|re-?credited|credited\s+back)\b/i;
+
+/** The attempt itself did not go through, said in the sentence holding the amount or as a sentence about the
+ * transaction ("… has been declined.", "Txn declined due to incorrect PIN.", "Txn unsuccessful."). A help line ("to get
+ * any failed or disputed txn checked", "Txn declined? Call 1800…") is not one. Ticket 177. */
+export function txnDidNotGoThrough(text: string): boolean {
+  const sentences = text.split(/(?<!\b(?:Rs|no|Avl|Bal|Txn|Trxn))[.!]\s+|[\n]/);
+  return sentences.some(
+    (x) =>
+      !/\?/.test(x) &&
+      (/\b(?:txn|transaction|payment|attempt)\b[^.?!]{0,60}?\b(?:(?:was|has\s+been|is|got)\s+)?(?:declined|failed|unsuccessful|not\s+successful)\b/i.test(x) ||
+        (/(?:Rs\.?|INR|₹)\s?\d/i.test(x) && /\b(?:was|has\s+been|is|got)\s+declined\b/i.test(x)))
+  );
+}
 
 export interface FoundDirection {
   type: "income" | "expense";
@@ -56,7 +74,8 @@ export function findDirection(text: string): FoundDirection | null {
   // Unsure which account paid unless the message says it was debited: then it is checked in Review.
   if (LOAN_CREDITED.test(text) && !notARepayment(text)) return { type: "expense", ambiguous: !DEBIT_FROM_ACCOUNT.test(text) };
   // A card used for an amount is a spend; a refund named in the same message makes it one to check (ambiguous).
-  if (CARD_USE.test(text)) return { type: "expense", ambiguous: CREDIT_WORDS.test(text) };
+  // Only money that came back makes it unsure; a cashback promo or a shop named "CREDITED BAKEHOUSE" does not.
+  if (isCardUse(text)) return { type: "expense", ambiguous: MONEY_UNDONE.test(text) };
   const debit = text.search(DEBIT_WORDS);
   const credit = text.search(CREDIT_WORDS);
   if (debit === -1 && credit === -1) return null;
@@ -81,6 +100,15 @@ export function isCardPayment(text: string): boolean {
     String.raw`\bpayment\b${any}{0,100}?\b(?:received|credited)\b${any}{0,40}?\b(?:towards|to|on|in)\b${any}{0,30}?${card}`,
     String.raw`\breceived\s+(?:a\s+|your\s+|the\s+)?payment\b${any}{0,60}?\btowards\b${any}{0,30}?${card}`,
     String.raw`\bcredited\s+to\s+your\s+credit\s*card\b`,
+    // "Payment of Rs 12,000 towards your SBI Credit Card XX5678 using your Debit Card", "… for Rs 12,000 payment towards
+    // Credit Card XX5678": money to a card's bill, whatever card or account paid it (ticket 177).
+    String.raw`\bpayment\b${any}{0,60}?\b(?:to|towards)\s+(?:your\s+)?(?:(?!using\b|via\b|with\b|by\b)[A-Za-z]+\s+){0,3}?credit\s*card\s+(?:no\.?\s*)?(?:[x*]{2,8}\s?\d{4}|ending)`,
+    String.raw`\b(?:to|towards)\s+(?:your\s+)?(?:(?!using\b|via\b|with\b|by\b)[A-Za-z]+\s+){0,3}?credit\s*card\s+(?:no\.?\s*)?(?:[x*]{2,8}\s?\d{4}|ending)${any}{0,40}?\bpayment\b`,
+    // "Rs 4,180 debited from A/c XX7305 towards HDFC Bank Credit Card XX2614", "… towards credit card bill", "Paid to Axis
+    // Bank Credit Card XX2208": money from the person's account to a card's bill (ticket 177).
+    String.raw`\b(?:debited|paid|transferred|sent|debit)\b${any}{0,100}?\b(?:to|towards)\s+(?:your\s+)?(?:(?!using\b|via\b|with\b|by\b)[A-Za-z]+\s+){0,3}?credit\s*card\s+(?:no\.?\s*)?(?:[x*]{2,8}\s?\d{4}|ending|bill)`,
+    String.raw`\bcredit\s*card\s+(?:bill\s+)?payment\s+(?:[x*]{2,8}\s?\d{4})`,
+    String.raw`(?:^|[.;]\s)(?:(?:paid|payment)\s+(?:to|towards)|towards)\s+(?:your\s+)?(?:(?!using\b|via\b|with\b|by\b)[A-Za-z]+\s+){0,3}?credit\s*card\s+(?:no\.?\s*)?(?:[x*]{2,8}\s?\d{4}|ending|bill)`,
     // "Acct XX274 debited ...; ICICI Bank Credit Card XX3391 credited.": the bill of the person's own card (ticket 177).
     String.raw`\bcredit\s*card\s+(?:no\.?\s*)?[x*]{2,8}\s?\d{4}\s+(?:is\s+|has\s+been\s+)?credited\b`,
     spendWithCard ? null : String.raw`\bthank\s*you\s+for\s+(?:the\s+|your\s+)?payment\b${any}{0,80}?${card}`,

@@ -19,13 +19,13 @@ import logger from "@/lib/logger";
 //    in step 1.
 
 // One entry per bank: how it appears in the parsed bank name and in the account names people type, and its SMS
-// headers (the part after "VM-"). Order matters where one name sits inside another ("South Indian Bank" before
-// "Indian Bank", "Central Bank of India" and "Union Bank of India" before "Bank of India"). Ticket 177 added the
-// phase 9 banks.
+// headers (the part after "VM-"). Where one bank's name sits inside another's ("State Bank of India" holds "Bank of
+// India", "City Union Bank" holds "Union Bank", "South Indian Bank" holds "Indian Bank"), only the longer match counts
+// (`banksInName`). Ticket 177 added the phase 9 banks.
 const BANKS = [
   { key: "HDFC", name: /\bHDFC\b/, sender: /HDFC/ },
   { key: "ICICI", name: /\bICICI\b/, sender: /ICICI/ },
-  { key: "SBI", name: /\bSBI\b|\bSTATE BANK\b/, sender: /SBI/ },
+  { key: "SBI", name: /\bSBI\b|\bSTATE BANK(?: OF INDIA)?\b/, sender: /SBI/ },
   { key: "AXIS", name: /\bAXIS\b/, sender: /AXIS/ },
   { key: "KOTAK", name: /\bKOTAK\b/, sender: /KOTAK/ },
   { key: "IDFC", name: /\bIDFC\b/, sender: /IDFC/ },
@@ -35,17 +35,17 @@ const BANKS = [
   { key: "PSB", name: /\bPUNJAB ?(?:&|AND) ?SIND\b|\bP ?& ?S ?B\b/, sender: /^PSBANK/ },
   { key: "BARODA", name: /\bBOB\b|\bBARODA\b/, sender: /BOB|BARODA/ },
   { key: "CANARA", name: /\bCANARA\b/, sender: /CANBNK|CANARA/ },
-  { key: "CENTRAL", name: /\bCENTRAL BANK\b|\bCBOI\b/, sender: /^CENTBK/ },
-  { key: "UNION", name: /\bUNION BANK\b|\bUBI\b/, sender: /UBOI|UNION/ },
-  { key: "BOI", name: /\bBOI\b|(?<!\b(?:CENTRAL|UNION) )\bBANK OF INDIA\b/, sender: /^BOI(?:IND|BNK)/ },
+  { key: "CENTRAL", name: /\bCENTRAL BANK(?: OF INDIA)?\b|\bCBOI\b/, sender: /^CENTBK/ },
+  { key: "UNION", name: /\bUNION BANK(?: OF INDIA)?\b|\bUBI\b/, sender: /UBOI|UNION/ },
+  { key: "BOI", name: /\bBOI\b|\bBANK OF INDIA\b/, sender: /^BOI(?:IND|BNK)/ },
   { key: "IOB", name: /\bIOB\b|\bINDIAN OVERSEAS\b/, sender: /^IOB/ },
-  { key: "SIB", name: /\bSOUTH INDIAN\b|\bSIB\b/, sender: /^SIBSMS/ },
-  { key: "INDIAN", name: /(?<!\bSOUTH )\bINDIAN BANK\b/, sender: /^INDBNK/ },
+  { key: "SIB", name: /\bSOUTH[\s-]?INDIAN(?: BANK)?\b|\bSIB\b/, sender: /^SIBSMS/ },
+  { key: "INDIAN", name: /\bINDIAN BANK\b/, sender: /^INDBNK/ },
   { key: "UCO", name: /\bUCO\b/, sender: /^UCOBNK/ },
   { key: "FEDERAL", name: /\bFEDERAL\b|\bFI MONEY\b/, sender: /FEDBNK|FEDFIB|FEDERAL/ },
   { key: "IDBI", name: /\bIDBI\b/, sender: /^IDBIBK/ },
   { key: "KARNATAKA", name: /\bKARNATAKA BANK\b|\bKBL\b/, sender: /^KBLBNK/ },
-  { key: "CUB", name: /\bCITY UNION\b|\bCUB\b/, sender: /^CUBANK/ },
+  { key: "CUB", name: /\bCITY UNION(?: BANK)?\b|\bCUB\b/, sender: /^CUBANK/ },
   { key: "TMB", name: /\bTAMILNAD MERCANTILE\b|\bTMB\b/, sender: /^TMBANK/ },
   { key: "DHANLAXMI", name: /\bDHANLAXMI\b|\bDHANLAKSHMI\b/, sender: /^DHANBK/ },
   { key: "JK", name: /\bJ ?& ?K\b|\bJAMMU (?:&|AND) KASHMIR\b|\bJKB\b/, sender: /^JKBANK/ },
@@ -66,7 +66,7 @@ const BANKS = [
   { key: "SC", name: /\bSTANDARD CHARTERED\b|\bSCB\b|\bSC BANK\b/, sender: /^SCBANK/ },
   { key: "DBS", name: /\bDBS\b|\bDIGIBANK\b/, sender: /^DBSBNK/ },
   { key: "AMEX", name: /\bAMEX\b|\bAMERICAN EXPRESS\b/, sender: /^AMEXIN/ },
-  { key: "JUPITER", name: /\bJUPITER\b|\bCSB\b/, sender: /^JTEDGE/ },
+  { key: "JUPITER", name: /\bJUPITER\b/, sender: /^JTEDGE/ },
   { key: "SLICE", name: /\bSLICE\b/, sender: /^SLC(?:EIT|BNK)/ },
   { key: "ONECARD", name: /\bONE ?CARD\b/, sender: /^ONECRD/ },
   { key: "RBL", name: /\bRBL\b/, sender: /RBL/ },
@@ -74,15 +74,25 @@ const BANKS = [
 
 type BankKey = (typeof BANKS)[number]["key"];
 
-// How each bank appears in account names people type.
-const NAME_ALIASES = Object.fromEntries(BANKS.map((b) => [b.key, b.name])) as Record<BankKey, RegExp>;
+/** The banks a name (an account's or a parsed bank name) belongs to, longest match first. A match inside a longer
+ * bank's match ("BANK OF INDIA" inside "STATE BANK OF INDIA") does not count. */
+function banksInName(raw: string): BankKey[] {
+  const name = raw.toUpperCase();
+  const hits = BANKS.flatMap((b) => {
+    const m = b.name.exec(name);
+    return m ? [{ key: b.key as BankKey, start: m.index, end: m.index + m[0].length }] : [];
+  });
+  return hits
+    .filter((h) => !hits.some((o) => o !== h && o.end - o.start > h.end - h.start && o.start <= h.start && o.end >= h.end))
+    .sort((a, b) => b.end - b.start - (a.end - a.start))
+    .map((h) => h.key);
+}
 
-// Parsed bank name ("HDFC Bank", "Bank of Baroda", "IDFC FIRST", "South Indian Bank") to key: the first bank, in the
-// order above, whose name pattern matches.
+const namedFor = (name: string, bank: BankKey) => banksInName(name).includes(bank);
+
+// Parsed bank name ("HDFC Bank", "Bank of Baroda", "IDFC FIRST", "South Indian Bank") to key: the longest bank name in it.
 function keyFromBankName(bankName?: string): BankKey | undefined {
-  if (!bankName) return undefined;
-  const n = bankName.toUpperCase();
-  return BANKS.find((b) => b.name.test(n))?.key;
+  return bankName ? banksInName(bankName)[0] : undefined;
 }
 
 // DLT sender IDs look like "VM-HDFCBK", "AD-ICICIB", "JD-SBIINB".
@@ -137,36 +147,29 @@ export async function matchAccountForMessage(
   if (byDigits.length > 1) return none;
 
   const bank = bankKeyOf(msg.bankName, msg.sender);
-
-  // A bank that masks to three digits (ICICI "XX274", Canara, Jana, HSBC "***-731"): the saved four digits that end
-  // with them, only when exactly one of the user's accounts has such digits, and that account is not named after a
-  // different bank. Three digits are never learned (learnDigitsFromCapture keeps four). Ticket 177.
-  if (/^\d{3}$/.test(msg.last4)) {
-    const tail = new RegExp(`\\d${msg.last4}$`);
-    const bySuffix = await Account.find({
-      user: userId,
-      isArchived: { $ne: true },
-      $or: [{ smsLastFour: tail }, { "creditMeta.lastFourDigits": tail }],
-    })
-      .select("_id name")
-      .limit(2)
-      .lean<{ _id: Types.ObjectId; name: string }[]>();
-    if (bySuffix.length > 1) return none;
-    if (bySuffix.length === 1) {
-      const name = bySuffix[0].name.toUpperCase();
-      const otherBank = bank && !NAME_ALIASES[bank].test(name) && BANKS.some((b) => b.key !== bank && b.name.test(name));
-      if (!otherBank) return { accountId: bySuffix[0]._id.toString(), matchedBy: "digits", suggestedAccountId: null };
-      return none;
-    }
-  }
-
   if (!bank) return none;
   const accounts = await Account.find({ user: userId, isArchived: { $ne: true } })
     .select("_id name type smsLastFour creditMeta.lastFourDigits")
     .lean<AccountRow[]>();
-  const sameBank = accounts.filter((a) => NAME_ALIASES[bank].test(a.name.toUpperCase()));
+  const sameBank = accounts.filter((a) => namedFor(a.name, bank));
   const sameKind = sameBank.filter((a) => kindMatches(a, msg.instrument));
   const usable = sameKind.filter((a) => !hasOtherDigits(a));
+
+  // A bank that masks to three digits (ICICI "XX274", Canara, Jana, HSBC "***-731"): saved four digits that end with
+  // them. Only with a known bank, only accounts of the right kind, and an account named after this bank wins; one named
+  // after no bank counts only when the user has no account named after this bank; one named after another bank never.
+  // Exactly one such account, or nothing. Three digits are never learned (learnDigitsFromCapture keeps four). Ticket 177.
+  if (/^\d{3}$/.test(msg.last4)) {
+    const endsWith = (d?: string) => typeof d === "string" && d.length === 4 && d.endsWith(msg.last4!);
+    const bySuffix = accounts.filter(
+      (a) => kindMatches(a, msg.instrument) && ((a.smsLastFour ?? []).some(endsWith) || endsWith(a.creditMeta?.lastFourDigits))
+    );
+    const ofBank = bySuffix.filter((a) => namedFor(a.name, bank));
+    const unnamed = sameBank.length === 0 ? bySuffix.filter((a) => banksInName(a.name).length === 0) : [];
+    const pick = ofBank.length > 0 ? ofBank : unnamed;
+    if (pick.length === 1) return { accountId: pick[0]._id.toString(), matchedBy: "digits", suggestedAccountId: null };
+    if (pick.length > 1) return none;
+  }
 
   if (usable.length === 1 && sameKind.length === 1) {
     return { accountId: usable[0]._id.toString(), matchedBy: "bank", suggestedAccountId: null };

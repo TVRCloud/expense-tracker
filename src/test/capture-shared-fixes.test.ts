@@ -51,15 +51,27 @@ describe("'<bank> Credit Card XX#### credited' is a card bill payment for every 
   });
 });
 
-describe("a declined transaction moved no money", () => {
-  it.each(ALL)("%s", (sender) => {
-    expect(read("Rs.61.50 debited to your RuPay Credit Card ending 8840 on 06/11/26 has been declined.", sender)).toMatchObject({
-      kind: "ignored",
-      reason: "not_financial",
-    });
+describe("a declined transaction", () => {
+  it.each(ALL)("%s: with no money verb it moved nothing", (sender) => {
     expect(read("Your transaction of Rs 615 at LAKE VIEW on Card XX8840 is declined due to incorrect PIN.", sender)).toMatchObject({
       kind: "ignored",
     });
+  });
+
+  it.each(ALL)("%s: with a money verb it is never dropped, only checked in Review", (sender) => {
+    for (const text of [
+      "Rs.61.50 debited to your RuPay Credit Card ending 8840 on 06/11/26 has been declined.",
+      "Rs.540.00 debited from A/c XX4471 on 11-11-26 to BLUE KETTLE, your previous attempt was declined. Ref 633100778899",
+      "Txn of Rs 540 at BLUE KETTLE was declined due to wrong PIN. Rs 25.00 debited from A/c XX4471 as decline charges.",
+    ]) {
+      const p = money(read(text, sender));
+      expect(p.confidence, text).toBeLessThanOrEqual(0.5);
+    }
+  });
+
+  it("a help line asking about a declined txn is not a decline", () => {
+    const p = money(read("Rs.540.00 debited from A/c XX4471 on 11-11-26 to VPA bluekettle@okaxis.Txn declined? Call 18001234567", "VM-OTHRBK"));
+    expect(p.type).toBe("expense");
   });
 
   it("a spend followed by an unrelated line about a decline is still a spend", () => {
@@ -187,5 +199,89 @@ describe("any wording that undoes a debit sends it to Review", () => {
 
   it("an ordinary spend is still booked", () => {
     expect(money(read(SPEND, "VM-OTHRBK")).confidence).toBeGreaterThanOrEqual(CONFIDENCE_AUTO_CREATE);
+  });
+});
+
+describe("ticket 177 review, round 2", () => {
+  it.each(ALL)("%s: a card use whose transaction did not go through is dropped, a scheduled one is a reminder", (sender) => {
+    for (const text of [
+      "Thank you for using Lakeside Bank Credit Card XXXX4471 for INR 540.00 at BLUE KETTLE on 11-Nov-26. The transaction was declined due to insufficient limit.",
+      "You have used your Lakeside Bank Credit Card XX4471 for Rs 540 at BLUE KETTLE. Txn declined due to incorrect PIN.",
+      "Thank you for using your Debit Card XX4471 for Rs 540.00 at BLUE KETTLE. Txn unsuccessful.",
+      "Thank you for using Lakeside Bank Credit Card XXXX4471 for INR 540.00 on 11-Nov-26 at BIRCH STORE . Txn declined.",
+    ]) {
+      expect(read(text, sender).kind, text).toBe("ignored");
+    }
+    expect(read("Thank you for using your Lakeside Bank Credit Card XX4471 for Rs 540 at BLUE KETTLE. Your payment is scheduled for 15-11-26.", sender)).toMatchObject({
+      kind: "ignored",
+      reason: "reminder",
+    });
+  });
+
+  it.each(ALL)("%s: a card bill paid with a debit card is a card payment, never a spend", (sender) => {
+    for (const text of [
+      "Payment of Rs 12,000 towards your SBI Credit Card XX5678 using your HDFC Bank Debit Card is successful.",
+      "Thank you for your payment of Rs 12,000 to your Credit Card XX5678 using Debit Card XX4471.",
+      "Thank you for using your Debit Card XX4471 for Rs 12,000 payment towards Credit Card XX5678.",
+    ]) {
+      const p = read(text, sender);
+      if (p.kind === "money") {
+        expect(p.confidence, text).toBeLessThanOrEqual(0.5);
+        expect(p.merchant ?? "", text).not.toMatch(/credit card|5678/i);
+      }
+    }
+  });
+
+  it.each([undefined, "VM-OTHRBK"])("%s: money put back on the card goes to Review", (sender) => {
+    const SPEND = "Thank you for using Lakeside Bank Credit Card XXXX5917 for INR 913.00 on 09-Nov-26 at BIRCH STORE .";
+    for (const tail of [
+      "The amount has been reverted to your account.",
+      "A credit of INR 913.00 has been posted to your card.",
+      "INR 913.00 credit posted to card on 10-Nov-26.",
+      "INR 913.00 Cr to card on 10-Nov-26.",
+    ]) {
+      expect(money(read(`${SPEND} ${tail}`, sender)).confidence, tail).toBeLessThanOrEqual(0.75);
+    }
+  });
+
+  it("a reference written as a mask is never the card", () => {
+    const p = money(read("Thank you for using Lakeside Bank Debit Card 47xx for INR 762.00 on 08-Nov-26 at FERN MARKET ref XX5163 .", "VM-OTHRBK"));
+    expect(p.last4).toBeUndefined();
+  });
+
+  it("shops whose names start like a help line keep their name; a bank-and-digits party is never one", () => {
+    expect(money(read("INR 615.00 debited from A/c XX4419 on 06-11-26 to BLOCK C STATIONERS. Ref 633100778899", "VM-OTHRBK")).merchant).toBe("BLOCK C STATIONERS");
+    expect(money(read("Rs 615.00 debited from A/c XX4419 on 06-11-26 to Get Fit Gym. Ref 633100778899", "VM-OTHRBK")).merchant).toBe("Get Fit Gym");
+    expect(money(read("INR 615.00 debited from Equitas-4419 via UPI -Ref:633100778899 on 06-11-26.", "VM-OTHRBK")).merchant).toBeUndefined();
+  });
+
+  it("a shop named with an X and digits keeps its name", () => {
+    expect(sharedParty("STUDIO X2024")).toBe("STUDIO X2024");
+  });
+
+  it("a thank-you promo with no card digits and no shop is not a spend", () => {
+    const p = read("Thank you for using your Lakeside Bank Credit Card for Rs 1,00,000 worth of spends this year! Get 5,000 bonus points.", "VM-OTHRBK");
+    expect(p.kind === "money" && p.confidence >= CONFIDENCE_AUTO_CREATE).toBe(false);
+  });
+});
+
+describe("a card bill paid from an account, generic parser too", () => {
+  it.each([undefined, "VM-OTHRBK"])("%s", (sender) => {
+    for (const text of [
+      "Rs 4,180.00 debited from A/c XX7305 on 03-11-26 towards Lakeside Bank Credit Card XX2614. Avl Bal Rs 18,306.00",
+      "Your A/C XXXXX9283 is debited by INR 3,940.00 on 04/10/26 towards credit card bill. New Bal :INR 1,212.40",
+      "INR 7,360.00 debited from A/c no. XX441907 on 05-10-26. Paid to Lakeside Bank Credit Card XX2208.",
+      "Rs.4,780.00 debited from A/c XX5150 on 05-10-26. Towards Lakeside Bank Credit Card XX6047. Ref 604400132424.",
+      "Rs.3,975.00 debited from A/c XX5150 on 05-10-26. Info: Credit Card Payment XX6047.",
+    ]) {
+      const p = money(read(text, sender));
+      expect(p.cardPayment, text).toBe(true);
+      expect(p.confidence, text).toBeLessThanOrEqual(0.5);
+    }
+  });
+
+  it("a spend paid with a credit card stays a spend", () => {
+    expect(money(read("Rs 615 debited using credit card XX8840 at PINE GROCER on 06-11-26", "VM-OTHRBK")).cardPayment).toBeUndefined();
+    expect(money(read("Thank you for your payment of Rs 615 to Jio Fiber using credit card XX8840 on 06-11-26", "VM-OTHRBK")).type).toBe("expense");
   });
 });
