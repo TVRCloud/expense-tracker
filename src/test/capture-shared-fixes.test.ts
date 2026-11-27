@@ -285,3 +285,34 @@ describe("a card bill paid from an account, generic parser too", () => {
     expect(money(read("Thank you for your payment of Rs 615 to Jio Fiber using credit card XX8840 on 06-11-26", "VM-OTHRBK")).type).toBe("expense");
   });
 });
+
+describe("a help line never holds an ordinary debit; a reversal stated in it still does", () => {
+  const BASE = "Rs 615.00 debited from A/c XX4419 on 06-11-26 to LAKE VIEW.";
+  it.each([undefined, "VM-OTHRBK", "VM-HDFCBK-S"])("%s", (sender) => {
+    for (const tail of [
+      "For refunds or disputes call 18001234-LKB",
+      "Not you? To block and reverse call 18001234567",
+      "Know your refund status at lakeside.in/refund",
+    ]) {
+      expect(money(read(`${BASE} ${tail}`, sender)).confidence, tail).toBeGreaterThanOrEqual(CONFIDENCE_AUTO_CREATE);
+    }
+    for (const tail of ["Txn reversed. Call 1800 123 4567 for queries.", "Amount has been reversed, call 18001234567 for details"]) {
+      expect(money(read(`${BASE} ${tail}`, sender)).confidence, tail).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+    }
+  });
+
+  it("a payee written with a mobile number is no help line: its reversal is still held", () => {
+    const p = money(read("Lakeside Bank A/c*5093 Dr Rs214.00 on 04-11-26 13:43 by MB 9601234567 NAVKAR MEDICALS reversed, Bal Rs3,105.80", "VM-OTHRBK"));
+    expect(p.confidence).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+  });
+
+  it("a help line glued to the money sentence never removes its own doubt", () => {
+    const text = "Your a/c XX5832 is debited for Rs. 418.00 on 14-10-2026 18:22 and credited to a/c XX9046 (UPI Ref no 629311224455).Plz call 18004190336 if not done by you.";
+    expect(money(read(text, "VM-HDFCBK-S")).confidence).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+  });
+
+  it("a UPI path that ends in REVERSED is held even with a long reference in it", () => {
+    const p = money(read("A/c No **7326 Debited with Rs 655--UPI/DR/633100667792/GROCERY NOOK/YESB/U REVERSED (CLR BAL 7130.25CR)(04-11-2026)", "VM-OTHRBK"));
+    expect(p.confidence).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+  });
+});

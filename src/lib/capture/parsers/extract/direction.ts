@@ -24,6 +24,29 @@ export function isCardUse(text: string): boolean {
 export const MONEY_UNDONE =
   /\b(?:revers\w*|revert(?:ed)?|refund\w*|reimburs\w*|charge-?back\w*|charged\s+back|cancel(?:l?ed|lation)|void(?:ed)?|bounced|returned|rolled\s+back|adjusted\s+back|re-?credited|credited\s+back)\b/i;
 
+// A help line: who to call or where to look ("For refunds or disputes call 18001234", "Not you? To block and reverse
+// call 1800…", "Know your refund status at bank.in/refund"). A toll-free number counts; a bare mobile number does not
+// (payees are often written as one: "by MB 6601234567 NAVKAR MEDICALS"). A sentence that holds the amount is the money
+// sentence, never a help line (`isHelpLine`).
+const HELP_LINE =
+  /\b(?:call|contact|sms|visit|quer(?:y|ies)|disputes?|helpline|customer\s+care)\b|\b(?:1800|1860)[\d\s-]{4,}|https?:\/\/|\bwww\.|\b[\w-]+\.(?:in|com|co\.in)\/\S*/i;
+const AMOUNT_IN = /(?:Rs\.?|Re\.?|INR|₹|USD|EUR|GBP|AED)\s?\d|\b\d[\d,]*\.\d{2}\b/i;
+// Sentence ends, but not after a short form ("Rs. 418.00", "A/c no. 12", "Avl Bal. Rs 5").
+const SENTENCE_END = /(?<!\b(?:Rs|Re|no|No|Avl|Bal|Txn|Trxn|Ref|Dr|Cr))[.!?;](?=\s|$)|\n/;
+const SENTENCE_KEEP = /(?<=(?<!\b(?:Rs|Re|no|No|Avl|Bal|Txn|Trxn|Ref|Dr|Cr))[.!?;])(?=\s|$)|(?<=\n)/;
+const isHelpLine = (sentence: string) => HELP_LINE.test(sentence) && !AMOUNT_IN.test(sentence);
+// A sentence that says the money already came back, even inside a help line ("Amount has been reversed, call 1800").
+const UNDONE_STATED =
+  /\b(?:has\s+been|have\s+been|was|were|is|got|been)\s+(?:revers\w*|reverted|refunded|reimbursed|cancell?ed|voided|returned|re-?credited|credited\s+back|rolled\s+back|adjusted\s+back|charged\s+back)\b|\b(?:txn|transaction|amount|payment|debit)\s+(?:has\s+been\s+|was\s+|is\s+)?(?:reversed|refunded|reverted|voided|cancell?ed|returned|rolled\s+back)\b/i;
+
+/** Money that moved and then came back, said anywhere outside a help line, or stated as done inside one (ticket 177).
+ * Every other sentence counts word by word, a payee's name included, so a captured name cannot hide the word. */
+export function moneyUndone(text: string): boolean {
+  return text
+    .split(SENTENCE_END)
+    .some((x) => MONEY_UNDONE.test(x) && (!isHelpLine(x) || UNDONE_STATED.test(x)));
+}
+
 /** The attempt itself did not go through, said in the sentence holding the amount or as a sentence about the
  * transaction ("… has been declined.", "Txn declined due to incorrect PIN.", "Txn unsuccessful."). A help line ("to get
  * any failed or disputed txn checked", "Txn declined? Call 1800…") is not one. Ticket 177. */
@@ -75,15 +98,26 @@ export function findDirection(text: string): FoundDirection | null {
   if (LOAN_CREDITED.test(text) && !notARepayment(text)) return { type: "expense", ambiguous: !DEBIT_FROM_ACCOUNT.test(text) };
   // A card used for an amount is a spend; a refund named in the same message makes it one to check (ambiguous).
   // Only money that came back makes it unsure; a cashback promo or a shop named "CREDITED BAKEHOUSE" does not.
-  if (isCardUse(text)) return { type: "expense", ambiguous: MONEY_UNDONE.test(text) };
+  if (isCardUse(text)) return { type: "expense", ambiguous: moneyUndone(text) };
   const debit = text.search(DEBIT_WORDS);
   const credit = text.search(CREDIT_WORDS);
   if (debit === -1 && credit === -1) return null;
   if (debit === -1) return { type: "income", ambiguous: false };
   if (credit === -1) return { type: "expense", ambiguous: false };
   // Both appear ("debited from your a/c ... credited to VPA x"): the first
-  // verb is about the account holder's own account.
-  return { type: debit < credit ? "expense" : "income", ambiguous: true };
+  // verb is about the account holder's own account. A word that only sits in a help line ("Know your refund status at
+  // bank.in/refund", "For refunds or disputes call 1800…") does not make it unsure (ticket 177).
+  const rest = withoutHelpLines(text);
+  const unsure = DEBIT_WORDS.test(rest) && CREDIT_WORDS.test(rest);
+  return { type: debit < credit ? "expense" : "income", ambiguous: unsure };
+}
+
+/** The text minus help-line sentences that state nothing done (see `moneyUndone`). */
+function withoutHelpLines(text: string): string {
+  return text
+    .split(SENTENCE_KEEP)
+    .filter((x) => !isHelpLine(x) || UNDONE_STATED.test(x))
+    .join("");
 }
 
 /** "Payment of Rs 25,000 received towards your ICICI Bank Credit Card", "Thank you for the payment ... on your

@@ -11,7 +11,7 @@ import {
   isAtmWithdrawal,
   isCardPayment,
   isCardUse,
-  MONEY_UNDONE,
+  moneyUndone,
   txnDidNotGoThrough,
   type FoundDirection,
 } from "./extract/direction";
@@ -93,7 +93,7 @@ export abstract class BankParser {
     // the money finally went is for the person to confirm, never booked either way. The word counts anywhere, even
     // inside a shop's name: a captured name can swallow the word ("at ORCHID MART reversed"), so nothing is stripped
     // first and a shop called "REFUND KITCHEN" goes to Review too. A refund credit on its own is still booked (ticket 177).
-    if (direction.type === "expense" && (MONEY_UNDONE.test(text) || (isCardUse(text) && CREDIT_POSTED.test(text)))) {
+    if (direction.type === "expense" && (moneyUndone(text) || (isCardUse(text) && CREDIT_POSTED.test(text)))) {
       confidence = Math.min(confidence, 0.75);
     }
     // The message also says the attempt was declined or failed but names a money verb ("Rs 540 debited … your previous
