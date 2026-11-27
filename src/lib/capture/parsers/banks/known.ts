@@ -1,50 +1,110 @@
-// What every bank parser shares: the bonus it earns only for its own message shapes, and small readers for the
-// parties banks write in their own way. Written for this codebase from invented examples (ticket 155).
+// What every bank parser shares: the bonus it earns only for its own message shapes, the guards that keep an unsure
+// read in Review, and small readers for the parties banks write in their own way. Written for this codebase from
+// invented examples (ticket 155).
+//
+// Every capture group here is bounded (at most about 60 characters) and the text has its whitespace collapsed
+// first, so no pattern can backtrack badly on a long or padded message.
 
 import { BankParser } from "../base";
+import type { MoneyParse } from "../types";
 
 /** Added when a message has one of the bank's known shapes (see `KnownBankParser.shapes`). */
 export const SHAPE_BONUS = 0.05;
+/** The highest score a read can keep when it must be checked in Review. */
+export const REVIEW_CEILING = 0.75;
+
+// Money not moved yet: a refund or reversal still on its way, a credit that "will reflect".
+const NOT_YET =
+  /\b(?:refund(?:ed)?\b[^.]{0,40}?\binitiated|initiated\b[^.]{0,40}?\brefund|will\s+(?:be\s+)?(?:credited|reflect(?:ed)?|refunded|reversed|processed)|will\s+reflect|in\s+\d{1,2}(?:\s*-\s*\d{1,2})?\s+(?:working\s+)?days)\b/i;
+// A mandate (set-up, change, cancel) is not a payment; read only in Review until ticket 157.
+const MANDATE = /\bmandate\b/i;
+// Characters that may sit inside an amount ("9,125.00") without ending a sentence.
+const SAME_SENTENCE = String.raw`(?:[^.]|\.(?=\d))`;
+// Money paid to a credit card: its bill, not a spend or income.
+const PAID_TO_CARD = [
+  new RegExp(String.raw`\bto\s+(?:[A-Za-z]+\s+){0,3}credit\s*card\b`, "i"),
+  /\bcredit\s*card\s+(?:no\.?\s*)?[x*]{0,8}\d{0,4}\s+credited\b/i,
+  /\bcredit\s*card\s+bill\s+payment\b/i,
+  /\btowards\s(?:your\s)?(?:[A-Za-z]+\s){0,4}credit\s*card\b/i,
+  /\bInfo\s?BIL\*[^.*]{0,30}?\bcard\b/i,
+  new RegExp(String.raw`\bcard\b${SAME_SENTENCE}{0,40}?\bpayment\s+of\b${SAME_SENTENCE}{0,40}?\b(?:received|credited)\b`, "i"),
+];
 
 export abstract class KnownBankParser extends BankParser {
   /** Whole-message shapes this bank sends. Only a match earns the bonus, never the sender alone. */
   protected abstract readonly shapes: readonly RegExp[];
 
+  override parse(text: string, receivedAt: Date): MoneyParse | null {
+    const flat = text.replace(/\s+/g, " ").trim();
+    const parse = super.parse(flat, receivedAt);
+    if (!parse) return null;
+    // Cash from an ATM has no shop, whatever word sits after "on".
+    if (parse.atm && parse.merchant) parse.merchant = undefined;
+    const shaped = this.hasShape(flat);
+    // Unsure reads stay in Review: money not moved yet, a mandate, or a message with both a debit and a credit word
+    // that is not one of the bank's known shapes.
+    const unsure = NOT_YET.test(flat) || MANDATE.test(flat) || (!shaped && this.direction(flat)?.ambiguous === true);
+    if (unsure && parse.confidence > REVIEW_CEILING) return { ...parse, confidence: REVIEW_CEILING };
+    return parse;
+  }
+
+  protected hasShape(text: string): boolean {
+    return this.shapes.some((re) => re.test(text));
+  }
+
   protected override confidenceBonusFor(text: string): number {
-    return this.shapes.some((re) => re.test(text)) ? SHAPE_BONUS : 0;
+    return this.hasShape(text) ? SHAPE_BONUS : 0;
+  }
+
+  /** The bank's own readers run first (in the subclass); a UPI id written with digits is the last resort. */
+  protected override merchant(text: string, type: "income" | "expense"): string | undefined {
+    return sharedParty(super.merchant(text, type)) ?? vpaAfter(type === "expense" ? "to" : "from", text);
+  }
+
+  protected override cardPayment(text: string): boolean {
+    if (super.cardPayment(text)) return true;
+    if (/\b(?:refund(?:ed)?|cashback|reversal|reversed)\b/i.test(text)) return false;
+    return PAID_TO_CARD.some((re) => re.test(text));
   }
 }
 
-/** Words that start a help line, never a party ("To dispute call 1800...", "To receive your refund"). */
-const NOT_A_PARTY = /^(?:dispute|call|report|block|receive|clearing|reissue|mobile|an\s+a\/c|the\s+beneficiary)(?=[\s.,;:]|$)|^merchant$/i;
+/** Words that start a help line or a non-party, never a payee ("To dispute call 1800...", "mobile x5521"). */
+const NOT_A_PARTY =
+  /^(?:dispute|call|report|block|receive|clearing|reissue|mobile\s+x?\d+|an\s+a\/c|the\s+beneficiary|transfer\s+of|IST)(?=[\s.,;:]|$)|^merchant$/i;
+/** A masked number or an account, never a payee ("XX4410", "A/c 5150"). */
+const ACCOUNT_LIKE = /(?:^|\s)[x*]{2,}\d+\b|\b(?:a\/c|acct|account|credit\s*card)\b|\b(?:rs|inr)\.?\s?\d|^[\d\s.,-]+$/i;
 
-/** Trims dots, stars and dashes a bank pads a name with, and a trailing terminal number ("AMAZON   000"). */
+/** Trims dots, stars and dashes a bank pads a name with, and a terminal code at the end ("AMAZON 000"). */
 export function cleanParty(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
   const v = raw
+    .slice(0, 80)
     .replace(/\s+/g, " ")
     .trim()
-    .replace(/^(?:at\s+)?[.*:\-\s]+|^at\s+/i, "")
-    .replace(/[\s.*\-]+$/, "")
-    .replace(/\s+\d{2,}$/, "")
+    .replace(/^at\s+/i, "")
+    .replace(/^[.*:\- ]{1,10}/, "")
+    .replace(/[ .*\-]{1,10}$/, "")
+    // A terminal code: three or more digits starting with 0. "STORE 24" and "SHOP 247" keep their numbers.
+    .replace(/\s0\d{2,}$/, "")
     .trim();
-  if (v.length < 2 || !/[A-Za-z]/.test(v) || NOT_A_PARTY.test(v)) return undefined;
+  if (v.length < 2 || !/[A-Za-z]/.test(v) || NOT_A_PARTY.test(v) || ACCOUNT_LIKE.test(v)) return undefined;
   return v.slice(0, 60);
 }
 
-/** "debited by Rs 180.00 on 10-11-26; CORNER CAFE credited." : the payee named before "credited". */
+/** "debited by Rs 260.00 on 03-11-26; LAKESIDE BAKERY credited." : the payee named before "credited". */
 export function creditedParty(text: string): string | undefined {
-  const m = text.match(/;\s*([^;.]{2,60}?)\s+credited\b/i);
+  const m = text.match(/;\s?([^;.\s][^;.]{1,58}?)\s(?:is\s)?credited\b/i);
   return cleanParty(m?.[1]);
 }
 
 // Payment rails and codes a bank writes before the name ("ACH*", "NEFT-", "BIL*").
-const RAIL = /^(?:N?ACH|ECS|BIL|INF|UPI|IMPS|NEFT|RTGS|MMT|POS|CMS|BBPS|SI)$/i;
+const RAIL = /^(?:N?ACH|ECS|BIL|INF|UPI|IMPS|NEFT|RTGS|MMT|POS|CMS|BBPS|SI|ATM)$/i;
 
-/** "ACH*SOME POWER LTD*412", "NEFT-ABCD0123456789-ASHA RAO", "BIL*Car Loan": the first part that is a name. */
+/** "ACH*SOME POWER LTD*437", "NEFT-ABCD0123456789-ASHA RAO", "BIL*Car Loan": the first part that is a name. */
 export function railParty(info: string | undefined): string | undefined {
   if (!info) return undefined;
   const parts = info
+    .slice(0, 120)
     .split(/[*/]/)
     // "NEFT-<ref>-<name>" splits on its dashes; a name with a dash ("BD-ACHKFL") stays whole.
     .flatMap((p) => (/^\s*(?:NEFT|IMPS|RTGS|UPI)-/i.test(p) ? p.split("-") : [p]))
@@ -55,11 +115,15 @@ export function railParty(info: string | undefined): string | undefined {
 
 /** A UPI id the money went to or came from, digits and all ("to 98xxxxxx01@paytm"). */
 export function vpaAfter(word: "to" | "from", text: string): string | undefined {
-  const m = text.match(new RegExp(String.raw`\b${word}\s+(?:VPA\s+)?([\w.\-]+@[A-Za-z][\w.\-]*?)(?=[\s,;)]|\.(?:\s|$)|$)`, "i"));
+  const m = text.match(new RegExp(String.raw`\b${word}\s(?:VPA\s)?([\w.\-]{1,60}@[A-Za-z][\w\-]{0,30}(?:\.[\w\-]{1,30}){0,3})(?![\w@])`, "i"));
   return m?.[1];
 }
 
-/** The shared merchant guess, minus help-line text it sometimes picks up. */
+/** The shared merchant guess, minus help-line text and account numbers it sometimes picks up. */
 export function sharedParty(value: string | undefined): string | undefined {
-  return value && !NOT_A_PARTY.test(value.trim()) ? value : undefined;
+  const v = value?.trim();
+  return v && /[A-Za-z]/.test(v) && !NOT_A_PARTY.test(v) && !ACCOUNT_LIKE.test(v) ? value : undefined;
 }
+
+/** A payee name: starts with a non-space, at most 60 characters, never across a sentence end. */
+export const NAME = String.raw`(\S[^.;]{0,58}?)`;
