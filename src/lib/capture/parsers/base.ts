@@ -18,7 +18,7 @@ export interface NormalisedSource {
 }
 
 /** Money that came back after it moved: a reversal, a refund, a debit returned unpaid or bounced. */
-const MONEY_CAME_BACK = /\b(?:reversed|reversal|refund(?:ed)?|returned\s+unpaid|bounced|charged\s+back)\b/i;
+const MONEY_CAME_BACK = /\b(?:reversed|reversal|refund(?:ed)?|returned|bounced|charged\s+back)\b/i;
 
 export abstract class BankParser {
   /** Stored as the parse's `parserId` ("hdfc", "generic"). */
@@ -78,12 +78,10 @@ export abstract class BankParser {
     // Paying a card bill is a move between the person's own accounts: always reviewed, never booked as income.
     if (cardPayment) confidence = Math.min(confidence, 0.5);
     // A debit the same message says came back ("… trf to SHOPKART has been reversed", "returned unpaid"): which way
-    // the money finally went is for the person to confirm, never booked either way. The merchant's own name is left
-    // out first, so a shop called "REFUND KITCHEN" does not count. A refund credit on its own is still booked (ticket 177).
-    if (direction.type === "expense") {
-      const rest = merchant ? text.split(merchant).join(" ") : text;
-      if (MONEY_CAME_BACK.test(rest)) confidence = Math.min(confidence, 0.75);
-    }
+    // the money finally went is for the person to confirm, never booked either way. The word counts anywhere, even
+    // inside a shop's name: a captured name can swallow the word ("at ORCHID MART reversed"), so nothing is stripped
+    // first and a shop called "REFUND KITCHEN" goes to Review too. A refund credit on its own is still booked (ticket 177).
+    if (direction.type === "expense" && MONEY_CAME_BACK.test(text)) confidence = Math.min(confidence, 0.75);
 
     return {
       kind: "money",

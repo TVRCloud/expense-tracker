@@ -1,7 +1,7 @@
 // Messages that must never become transactions (OTPs, offers, due reminders, failed payments). Runs before any
 // parser, so a bank parser never has to repeat these checks.
 
-import { CREDIT_WORDS, DEBIT_WORDS } from "./extract/direction";
+import { CARD_USE, CREDIT_WORDS, DEBIT_WORDS } from "./extract/direction";
 import type { IgnoredParse } from "./types";
 
 /** A fraud warning many alerts end with ("Never share OTP/PIN with anyone"). Removed before the OTP check, so a
@@ -26,10 +26,13 @@ export function ignoreReason(text: string): IgnoredParse["reason"] | null {
     return "otp";
   }
   // Money that already moved: a past-tense debit or credit ("if debited" is a promise, not a debit).
-  const moved =
+  const movedVerb =
     /(?<!\bif\s+(?:the\s+)?(?:amount\s+)?(?:is\s+|gets\s+)?|\b(?:will|to|shall)\s+be\s+|\b(?:request|mandate)\s+(?:has\s+been\s+|is\s+|was\s+)?)\b(debited|spent|deducted|withdrawn|wdl|sent|paid|transferred|received|deposited|credited|reversed|debit by transfer|has been refunded|is refunded|refunded to)\b/i.test(
       text
     );
+  // A card spend written with no money verb ("Thank you for using … Card … for INR 845.00") moved money too, so a help
+  // line ("SMS BLOCK … to get any failed or disputed txn checked") or a refund still to come never drops it (ticket 177).
+  const moved = movedVerb || CARD_USE.test(text);
   // A notice before a debit (RBI pre-debit and mandate alerts), or a debit that could not happen, moved nothing.
   // A pre-debit notification never moves money, whatever else it says ("mandate received on ...").
   if (/\bpre-?debit\b/i.test(text)) return "reminder";

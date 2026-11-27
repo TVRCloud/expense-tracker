@@ -3,7 +3,7 @@
 // A "." ends a merchant when a space, the end or a known tail word follows it ("AMAZON.Avl Lmt"), so a VPA like
 // rahul.k@okaxis or a domain like NETFLIX.COM stays whole.
 const MERCHANT_RE =
-  /\b(at|to|from|towards|by|VPA|Info:?|trf to|paid to)\s+([A-Za-z0-9@._&*'/ -]{2,40}?)(?=\s+(?:on|ref|refno|ref\.?\s*no|via|at|from|to|by|a\/c|acct|avl|avbl|upi|dt|date|has|have|is|was|been|sms|\d{1,2}[-/])\b|\.(?=\s|$|(?:avl|avbl|bal|ref|info|not|txn|upi|call|sms|rs|inr|ur|your|thanks?|thank\s*you|dear|for)\b)|[,;(]|$)/gi;
+  /\b(at|to|from|towards|by|VPA|Info:?|trf to|paid to)\s+([A-Za-z0-9@._&*'/ -]{2,40}?)(?=\s+(?:on|ref|refno|ref\.?\s*no|via|at|from|to|by|a\/c|acct|avl|avbl|upi|dt|date|has|have|is|was|been|sms|\d{1,2}[-/])\b|\.(?=\s|$|(?:avl|avbl|bal|ref|info|not|txn|upi|call|sms|rs|inr|ur|your|thanks?|thank\s*you|dear|for)\b)|[,;(]|\n|$)/gi;
 
 /**
  * The other party. For a debit that's who was paid ("to", "at", "VPA"); for
@@ -18,6 +18,8 @@ export function findMerchant(text: string, type: "income" | "expense"): string |
     const after = text.slice((m.index ?? 0) + m[0].length).trimStart();
     if (/^(a\/c|acct|account|card)\b/i.test(after)) continue;
     if (/^(your|you|a\/c|acct|account|neft|imps|rtgs|upi)\b/i.test(value)) continue;
+    // A help line ("SMS BLOCK 1234 to … to get any failed or disputed txn checked") is never the other party (ticket 177).
+    if (/^(?:get|call|report|dispute|block|check|know|raise)\b/i.test(value)) continue;
     // "by debit to A/c XX7305": the word itself, never a payee (ticket 157).
     if (/^(?:(?:NACH|ECS|auto)\s?-?)?(?:debit|credit)$/i.test(value)) continue;
     // A phone or account number is never the other party ("SMS BLOCK 7731 to 9215676766").

@@ -82,10 +82,25 @@ describe("a debit the same message says came back stays in Review, for every par
     }
   });
 
-  it("a shop whose name says refund is still an ordinary spend", () => {
+  // The word counts anywhere, even in a shop's name: a captured name could otherwise swallow it.
+  it("a shop whose name says refund goes to Review (accepted noise)", () => {
     const p = money(read("Rs 615.00 debited from A/c XX4419 on 06-11-26 to REFUND KITCHEN. Ref 633100778899", "VM-OTHRBK"));
     expect(p).toMatchObject({ type: "expense", merchant: "REFUND KITCHEN" });
-    expect(p.confidence).toBeGreaterThanOrEqual(CONFIDENCE_AUTO_CREATE);
+    expect(p.confidence).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+  });
+
+  it.each([undefined, "VM-OTHRBK"])("%s: a name that swallows the reversal word never hides it", (sender) => {
+    for (const text of [
+      "Rs 615.00 debited from A/c XX4419 on 06-11-26 at PINE GROCER reversed",
+      "Rs 615.00 debited from A/c XX4419 on 06-11-26 to LAKEVIEW - REVERSED",
+      "Rs 615.00 debited from A/c XX4419 by NEFT of MEERA NAIR, returned on 07-11-26",
+      "Rs 615.00 debited from A/c XX4419 on 06-11-26 at REV . TRANSACTION REVERSED",
+      "Rs 615.00 debited from A/c XX4419 on 06-11-26 at FUND . REFUNDED",
+    ]) {
+      const p = read(text, sender);
+      if (p.kind === "money" && p.type === "expense") expect(p.confidence, text).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+      else expect(p.kind === "money" ? p.confidence : 0, text).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+    }
   });
 
   it("a reversal credit on its own is still booked", () => {
@@ -119,5 +134,35 @@ describe("merchant cleanup", () => {
     expect(sharedParty("FD closure 512***778402")).toBeUndefined();
     expect(sharedParty("XBOX STORE")).toBe("XBOX STORE");
     expect(sharedParty("MAX 2000 STORE")).toBe("MAX 2000 STORE");
+  });
+});
+
+describe("a card spend written as 'Thank you for using … Card … for INR' is never dropped", () => {
+  it.each(ALL)("%s: a help line about failed transactions does not make it a failure", (sender) => {
+    const p = money(
+      read(
+        "Thank you for using Lakeside Bank Credit Card XXXX8840 for INR 615.00 on 06-Nov-26 at PINE GROCER\nNot you? SMS BLOCK 8840 to 5600000 to get any failed or disputed txn checked",
+        sender
+      )
+    );
+    expect(p).toMatchObject({ type: "expense", amountMinor: 61500, last4: "8840" });
+    expect(p.merchant ?? "").not.toMatch(/failed|disputed|get any/i);
+  });
+
+  it.each(ALL)("%s: a refund still to come keeps it a spend to check in Review", (sender) => {
+    const p = money(
+      read("Thank you for using Lakeside Bank Credit Card XXXX8840 for INR 715.00 on 06-Nov-26 at PINE GROCER . A refund of INR 715.00 will be credited in 5 days.", sender)
+    );
+    expect(p).toMatchObject({ type: "expense", amountMinor: 71500 });
+    expect(p.confidence).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+  });
+
+  it("'You have used your card … for Rs …' is a spend too", () => {
+    expect(money(read("You have used your Lakeside Bank Debit Card XX8840 for Rs 315.00 at PINE GROCER on 06-11-26.", "VM-OTHRBK")).type).toBe("expense");
+  });
+
+  it("help text is never a merchant", () => {
+    const p = money(read("Acct XX274 debited Rs. 615.00 on 06-Nov-26. Avl Bal Rs. 2,000.00. To dispute call 1800000000 or SMS BLOCK 274 to 9300000000 .", "VM-OTHRBK"));
+    expect(p.merchant).toBeUndefined();
   });
 });

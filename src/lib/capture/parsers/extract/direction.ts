@@ -8,6 +8,11 @@ export const DEBIT_WORDS =
 export const CREDIT_WORDS =
   /(?<!\b(?:will|to|shall)\s+be\s+)\b(credited|(?<!\b(?:request|mandate)\s+(?:has\s+been\s+|is\s+|was\s+)?)received|deposited|refund(?:ed)?|reversed|cashback of|cr(?=\.?\s*(?:Rs|INR|₹|\d)))\b/i;
 
+/** A card spend written with no money verb (ticket 177): "Thank you for using HSBC Credit Card XXXX6603 for INR 845.00
+ * … at SHOP", "You have used your card XX1234 for Rs 500 at …". Money moved, out of the card. */
+export const CARD_USE =
+  /\b(?:thank\s*you\s+for\s+using|(?:have|has)\s+used|used)\s+(?:your\s+)?(?:[A-Za-z&]{1,15}\s+){0,4}?(?:(?:credit|debit)\s+)?card\b[^.\n]{0,40}?\bfor\s+(?:INR|Rs\.?|₹)\s?\d/i;
+
 export interface FoundDirection {
   type: "income" | "expense";
   ambiguous: boolean;
@@ -44,6 +49,8 @@ function notARepayment(text: string): boolean {
 export function findDirection(text: string): FoundDirection | null {
   // Unsure which account paid unless the message says it was debited: then it is checked in Review.
   if (LOAN_CREDITED.test(text) && !notARepayment(text)) return { type: "expense", ambiguous: !DEBIT_FROM_ACCOUNT.test(text) };
+  // A card used for an amount is a spend; a refund named in the same message makes it one to check (ambiguous).
+  if (CARD_USE.test(text)) return { type: "expense", ambiguous: CREDIT_WORDS.test(text) };
   const debit = text.search(DEBIT_WORDS);
   const credit = text.search(CREDIT_WORDS);
   if (debit === -1 && credit === -1) return null;
