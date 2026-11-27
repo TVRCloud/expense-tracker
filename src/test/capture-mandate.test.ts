@@ -27,10 +27,10 @@ describe("mandate notices", () => {
       want: { event: "created", merchant: "TuneBox", maxAmountMinor: 18900, frequency: "monthly" },
     },
     {
-      text: "NACH mandate registration for Rs 23,600.00 in favour of BRIGHTPATH FINANCE LTD has been successfully registered. Linked a/c XX7362. UMRN HDFC7000000012345678 -HDFC Bank",
+      text: "NACH mandate registration, max Rs 23,600.00, in favour of BRIGHTPATH FINANCE LTD has been successfully registered. Linked a/c XX7362. UMRN HDFC7000000012345678 -HDFC Bank",
       want: { event: "created", merchant: "BRIGHTPATH FINANCE LTD", maxAmountMinor: 2360000, last4: "7362", bankName: "HDFC Bank" },
     },
-    { text: "UPI AutoPay mandate for CloudBox of Rs 129.00 has been revoked as requested. -Kotak Bank", want: { event: "revoked", merchant: "CloudBox", maxAmountMinor: 12900 } },
+    { text: "UPI AutoPay mandate for CloudBox, limit Rs 129.00, has been revoked as requested. -Kotak Bank", want: { event: "revoked", merchant: "CloudBox", maxAmountMinor: 12900 } },
     { text: "Your e-mandate for GYMPASS has been paused till 31-01-2027.", want: { event: "paused", merchant: "GYMPASS" } },
     { text: "Your AutoPay for StreamFlix has been resumed.", want: { event: "resumed", merchant: "StreamFlix" } },
     { text: "Mandate amount for TuneBox modified to Rs 279.00 monthly.", want: { event: "modified", merchant: "TuneBox", maxAmountMinor: 27900, frequency: "monthly" } },
@@ -44,7 +44,7 @@ describe("mandate notices", () => {
     { text: "Mandate set up! VIEWBOX can now auto-debit up to Rs 479 every month.", want: { event: "created", maxAmountMinor: 47900 } },
     { text: "Your mandate for VIEWBOX has been resumed. Next debit as per schedule.", want: { event: "resumed", merchant: "VIEWBOX" } },
     { text: "Heads up: your AutoPay to VIEWBOX (max ₹479/month) is now live.", want: { event: "created", maxAmountMinor: 47900 } },
-    { text: "UPI AutoPay mandate for VIEWBOX of Rs 437 per month has been created on your UPI app.", want: { event: "created", maxAmountMinor: 43700 } },
+    { text: "UPI AutoPay mandate for VIEWBOX up to Rs 437 per month has been created on your UPI app.", want: { event: "created", maxAmountMinor: 43700 } },
     // Set-up words that say nothing about money.
     { text: "Your e-mandate registration for VIEWBOX is completed successfully.", want: { event: "created", merchant: "VIEWBOX" } },
     { text: "Your mandate for VIEWBOX up to Rs 479 has been confirmed.", want: { event: "created", maxAmountMinor: 47900 } },
@@ -54,6 +54,8 @@ describe("mandate notices", () => {
     { text: "Standing instruction for FITGROVE ended and cancelled at your request.", want: { event: "revoked", merchant: "FITGROVE" } },
     { text: "Mandate for VIEWBOX: limit increased to Rs 659. Mandate updated.", want: { event: "modified", maxAmountMinor: 65900 } },
     { text: "NACH mandate for HAWKLINE CREDIT registered. First EMI on 05-01-2027.", want: { event: "created", merchant: "HAWKLINE CREDIT" } },
+    { text: "AutoPay for VIEWBOX revoked. No further payments will be collected.", want: { event: "revoked", merchant: "VIEWBOX" } },
+    { text: "E-mandate for VIEWBOX registration success. Next payment on 05-01-2027.", want: { event: "created" } },
   ])("reads $want.event for every sender: $text", ({ text, want }) => {
     for (const sender of SENDERS) expect(mandate(parseCapture(text, AT, { sender }))).toMatchObject(want);
   });
@@ -66,7 +68,7 @@ describe("mandate notices", () => {
   });
 
   it("never stores a mandate reference or an amount as the merchant", () => {
-    const p = mandate(parseCapture("UPI mandate for Rs 637.00 created. UMN 4f2a91c0d2@okaxis", AT));
+    const p = mandate(parseCapture("UPI mandate up to Rs 637.00 created. UMN 4f2a91c0d2@okaxis", AT));
     expect(p.merchant).toBeUndefined();
     expect(JSON.stringify(p)).not.toContain("4f2a91c0d2");
   });
@@ -116,6 +118,15 @@ describe("money that mentions a mandate is never a notice", () => {
     "AutoPay mandate created and Rs 437 collected for VIEWBOX.",
     "Rs 437 has been taken for VIEWBOX. Your AutoPay mandate is created.",
     "AutoPay for VIEWBOX successfully created; Rs 437 completed today.",
+    // Review 5: an amount that is not labelled as a limit is money, whatever event follows it.
+    "AutoPay of Rs 437 to VIEWBOX confirmed. Mandate active.",
+    "Mandate for Rs 437 to VIEWBOX confirmed today.",
+    "Standing instruction of Rs 9,400 to RD account confirmed for today. SI updated.",
+    "AutoPay for VIEWBOX up to Rs 479 updated. Payment confirmed.",
+    "AutoPay of Rs 437 to VIEWBOX approved by you just now. Mandate active.",
+    "AutoPay for Rs 437 to VIEWBOX accepted by bank today.",
+    // An unlabelled amount right before the event is Review now, never a notice.
+    "UPI AutoPay mandate for VIEWBOX of Rs 437 per month has been created on your UPI app.",
     "Money added: ₹1,835 to Paytm Wallet. AutoPay set up for top-up.",
     "Rs 437 ka bhugtan VIEWBOX ko AutoPay se ho gaya. Mandate created.",
     "SIP instalment of Rs 2,860 collected via NACH for Meadowlark Fund. Mandate registered.",

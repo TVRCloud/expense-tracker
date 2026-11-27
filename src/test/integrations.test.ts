@@ -4520,7 +4520,7 @@ describe("mandate, fund house and loan messages at ingest", () => {
 
   it.each([
     ["mandate", "UPI AutoPay for STREAMLY created: up to Rs 637.00 a month."],
-    ["mandate", "UPI AutoPay mandate for CloudBox of Rs 129.00 has been revoked as requested."],
+    ["mandate", "UPI AutoPay mandate for CloudBox, limit Rs 129.00, has been revoked as requested."],
     ["investment", "Dear Investor, 41.287 units allotted in Folio No 70013348/21 under Harbor Bluechip Fund - Direct Growth at NAV 66.6052 for Rs 2,750.00 on 03-Dec-2026."],
     ["investment", "Lotus MF: your SIP into Lotus Midcap Growth Fund DG for Rs.2,750.00 is processed; units go to your folio at the day's NAV."],
   ])("keeps a %s message without booking it or putting it in Review", async (reason, text) => {

@@ -22,7 +22,7 @@ const EVENT_WORDS: [MandateParse["event"], string][] = [
   ["paused", String.raw`paused|suspended|put\s+on\s+hold`],
   ["resumed", String.raw`resumed|reactivated|unpaused`],
   ["modified", String.raw`modified|updated|changed|amended|revised`],
-  ["created", String.raw`created|registered|set\s?-?up|activated|accepted|approved|confirmed|successfully\s+(?:added|linked)|(?:is\s+)?now\s+(?:live|active)|(?<=\bregistration\b[^.;!?]{0,60})completed`],
+  ["created", String.raw`created|registered|set\s?-?up|activated|accepted|approved|confirmed|successfully\s+(?:added|linked)|(?:is\s+)?now\s+(?:live|active)|(?<=\bregistration\b[^.;!?]{0,60})completed|registration\s+success(?:ful)?`],
 ];
 // The event must belong to the mandate itself: the mandate word and the event in one clause, at most
 // 100 characters apart ("UPI-Mandate for Rs.637.00 is successfully created", "created a mandate on"), never across a
@@ -43,9 +43,9 @@ const MOVED_MORE =
 // doubt a mandate message goes to Review (money), never dropped: a missed notice costs one Review item, a wrongly kept
 // notice loses a payment without a trace. This is structural on purpose; a list of money verbs is never complete.
 //
-// 1. Limit positions: right after max, maximum, up to, upto, limit, not exceeding or ceiling, or after
-//    "modified/changed/revised/increased/reduced to". "mandate/AutoPay/NACH/SI ... for|of <amount>" is a limit only
-//    when the event verb follows at once ("AutoPay mandate for CloudBox of Rs 129.00 has been revoked").
+// 1. Limit positions: an amount counts only when labelled, right after max, maximum, up to, upto, limit, not
+//    exceeding or ceiling, or after "modified/changed/revised/increased/reduced to". "AutoPay of Rs 449 to X
+//    confirmed" may be a payment, so "mandate/AutoPay ... for|of <amount>" is never a limit (review round 5).
 // 2. Every amount counts, written as widely as findAmount reads it: rupees (Rs, Re, INR, ₹), foreign codes and
 //    symbols, "Amt"/"Amount" and bare decimals like 449.00. An amount next to an account or card mask, or a
 //    "transaction of" an amount, is money.
@@ -58,13 +58,6 @@ const AMOUNT_ANY = new RegExp(
 );
 const LIMIT_WORD_BEFORE =
   /\b(?:max(?:imum)?\.?(?:\s(?:amount|amt|limit|debit))?(?:\sof)?|up\s?to|upto|limit(?:\sof)?|not\sexceeding|ceiling(?:\sof)?|(?:modified|changed|revised|amended|increased|reduced|updated)\sto)\s{0,2}:?\s{0,2}$/i;
-const MANDATE_FOR_BEFORE = new RegExp(String.raw`\b${MANDATE_SRC}\b${CLAUSE}{0,60}?\b(?:for|of)\s{1,2}$`, "i");
-const ALL_EVENTS = EVENT_WORDS.map(([, words]) => words).join("|");
-// After "mandate ... for|of <amount>": an optional frequency and payee, then the event verb at once.
-const EVENT_RIGHT_AFTER = new RegExp(
-  String.raw`^(?:\s(?:per|a|every)\s(?:month|week|year|day)|\s(?:monthly|weekly|yearly|daily))?\s{0,2}(?:(?:to|for|towards|in\s+favou?r\s+of)\s+(?:[A-Za-z0-9][\w&.'@-]{0,30}\s){0,5}?)?(?:is\s|has\sbeen\s|was\s)?(?:successfully\s)?(?:${ALL_EVENTS})\b`,
-  "i"
-);
 const MASK_NEAR = /(?:\b(?:a\/c|acct|account|card)\b[^.;\d]{0,12}?[x*]{1,12}\s?\d{3,4}|\b[x*]{2,}\d{3,4}\b|\bending\s(?:with\s)?\d{4}\b)/i;
 const TRANSACTION_OF = /\b(?:transaction|txn|trxn)s?\s+(?:of|for|worth|amount)\b/i;
 
@@ -77,8 +70,8 @@ function onlyLimitAmounts(text: string): boolean {
     const before = text.slice(Math.max(0, index - 90), index);
     // The clause before the amount: back to the last sentence end.
     const clause = before.slice(Math.max(before.lastIndexOf(". "), before.lastIndexOf(";"), before.lastIndexOf("!"), before.lastIndexOf(":")) + 1);
-    const limit = LIMIT_WORD_BEFORE.test(before) || (MANDATE_FOR_BEFORE.test(clause) && EVENT_RIGHT_AFTER.test(text.slice(end, end + 120)));
-    if (!limit) return false;
+    // Only a labelled limit: "mandate for Rs 449 confirmed" can be a payment, so an unlabelled amount is money.
+    if (!LIMIT_WORD_BEFORE.test(before)) return false;
     // Any account or card mask in the clause holding the amount (or just around it) means money moved on it.
     const after = text.slice(end, end + 160);
     const clauseEnd = after.search(/[.;!?](?!\d)|\n/);
@@ -114,10 +107,11 @@ function unknownPast(text: string): boolean {
 
 // Future and limit wording a notice uses about debits still to come ("can now auto-debit up to", "next debit").
 const FUTURE_DEBIT =
-  /\b(?:can\s+(?:now\s+)?auto-?debit|auto-?debit(?=\s+up\s?to\b)|next\s+debit|debits?\s+as\s+per\s+schedule|(?:first|next)\s+(?:instal(?:l)?ment|EMI|debit)\s+(?:on|from|due)\b)/gi;
+  /\b(?:can\s+(?:now\s+)?auto-?debit|auto-?debit(?=\s+up\s?to\b)|next\s+debit|debits?\s+as\s+per\s+schedule|(?:first|next)\s+(?:instal(?:l)?ment|EMI|debit|payment)\s+(?:on|from|due)\b|no\s+further\s+payments?|payments?\s+will\b)/gi;
 // Nouns and short verbs about money that moved ("deduction success", "after recovery", "instalment", "EMI", "ran
 // today"). "successfully created/registered" is fine: moneyMoved already allows success next to an event verb.
-const MONEY_NOUN = /\b(?:success|recovery|deduction|collection|instal(?:l)?ments?|EMIs?|kisht|ran|gone|hit)\b/i;
+const MONEY_NOUN =
+  /\b(?:(?<!\bregistration\s)success|recovery|deduction|collection|instal(?:l)?ments?|EMIs?|kisht|ran|gone|hit|payment(?!s?\s+will\b)(?!\s+on\b))\b/i;
 
 export function moneyMoved(text: string): boolean {
   return DEBIT_WORDS.test(text) || CREDIT_WORDS.test(text) || MOVED_MORE.test(text);
@@ -140,7 +134,7 @@ const NOT_A_MERCHANT =
   /^(?:rs\.?|inr|₹|\d|a|an|the|your|you|my|this|max(?:imum)?|amount|amt|up\s?to|daily|weekly|fortnightly|monthly|quarterly|half[\s-]?yearly|yearly|annual(?:ly)?|every|as\s+and\s+when|as\s+presented|one[\s-]?time|a\/c|acct|account|card|upi|nach|e-?mandate|mandate|auto\s?-?pay|details|more|any|queries|help|support|cancellation|modification|registration)\b/i;
 
 const MAX_AMOUNT =
-  /\b(?:max(?:imum)?\.?(?:\s+(?:amount|amt|limit|debit))?(?:\s+of)?|up\s?to|upto|limit\s+of|not\s+exceeding)\s*:?\s*(?:Rs\.?|INR|₹)\s?([\d,]{1,15}(?:\.\d{1,2})?)/i;
+  /\b(?:max(?:imum)?\.?(?:\s+(?:amount|amt|limit|debit))?(?:\s+of)?|up\s?to|upto|limit(?:\s+of)?|not\s+exceeding|ceiling(?:\s+of)?|(?:modified|changed|revised|amended|increased|reduced|updated)\s+to)\s*:?\s*(?:Rs\.?|INR|₹)\s?([\d,]{1,15}(?:\.\d{1,2})?)/i;
 const FREQUENCY =
   /\b(daily|weekly|fortnightly|monthly|quarterly|half[\s-]?yearly|yearly|annually|as\s+and\s+when\s+presented|as\s+presented|one[\s-]?time)\b/i;
 const START = /\b(?:starting|start\s+date|commencing|effective|first\s+debit)\s*(?:from|on|date)?\s*:?\s*/i;

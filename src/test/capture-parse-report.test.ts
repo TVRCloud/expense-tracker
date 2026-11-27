@@ -46,7 +46,7 @@ describe("buildReport", () => {
 
   it("counts a mandate notice and a fund house note as info, never as a bank parser or unknown (ticket 157)", () => {
     const [row] = buildReport([
-      { text: "UPI AutoPay mandate for CloudBox of Rs 129.00 has been revoked as requested.", receivedAt: AT, channel: "sms", sender: "VM-HARBMF" },
+      { text: "UPI AutoPay mandate for CloudBox, limit Rs 129.00, has been revoked as requested.", receivedAt: AT, channel: "sms", sender: "VM-HARBMF" },
       {
         text: "Dear Investor, 41.287 units allotted in Folio No 70013348/21 under Harbor Bluechip Fund at NAV 66.6052 for Rs 2,750.00.",
         receivedAt: AT,
