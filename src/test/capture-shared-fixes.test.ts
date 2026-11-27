@@ -166,3 +166,26 @@ describe("a card spend written as 'Thank you for using … Card … for INR' is 
     expect(p.merchant).toBeUndefined();
   });
 });
+
+describe("any wording that undoes a debit sends it to Review", () => {
+  const SPEND = "Rs 615.00 spent on card XX8840 at PINE GROCER on 06-11-26.";
+  it.each([undefined, "VM-OTHRBK"])("%s", (sender) => {
+    for (const tail of [
+      "This transaction was cancelled by the merchant.",
+      "Transaction voided on 07-Nov-26.",
+      "Chargeback of Rs 615.00 approved.",
+      "Rs 615.00 reimbursed to your card.",
+      "Txn rolled back.",
+      "Amount re-credited.",
+      "Amount adjusted back to your card.",
+      "Amount credited back.",
+    ]) {
+      const p = money(read(`${SPEND} ${tail}`, sender));
+      expect(p.confidence, tail).toBeLessThanOrEqual(0.75);
+    }
+  });
+
+  it("an ordinary spend is still booked", () => {
+    expect(money(read(SPEND, "VM-OTHRBK")).confidence).toBeGreaterThanOrEqual(CONFIDENCE_AUTO_CREATE);
+  });
+});

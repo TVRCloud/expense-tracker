@@ -6,7 +6,7 @@ import { parseMessageDate, type ParsedDate } from "./dates";
 import { findAmount, type FoundAmount } from "./extract/amount";
 import { findBankName, findLast4, findPaidCard, type FoundAccount } from "./extract/account";
 import { readAvailableLimit, readBalance, type FoundFigure } from "./extract/balance";
-import { findDirection, isAtmWithdrawal, isCardPayment, type FoundDirection } from "./extract/direction";
+import { findDirection, isAtmWithdrawal, isCardPayment, MONEY_UNDONE, type FoundDirection } from "./extract/direction";
 import { findMerchant, findRef } from "./extract/merchant";
 import { normaliseSender } from "./sender";
 import type { MoneyParse } from "./types";
@@ -16,9 +16,6 @@ export interface NormalisedSource {
   header?: string;
   packageName?: string;
 }
-
-/** Money that came back after it moved: a reversal, a refund, a debit returned unpaid or bounced. */
-const MONEY_CAME_BACK = /\b(?:reversed|reversal|refund(?:ed)?|returned|bounced|charged\s+back)\b/i;
 
 export abstract class BankParser {
   /** Stored as the parse's `parserId` ("hdfc", "generic"). */
@@ -81,7 +78,7 @@ export abstract class BankParser {
     // the money finally went is for the person to confirm, never booked either way. The word counts anywhere, even
     // inside a shop's name: a captured name can swallow the word ("at ORCHID MART reversed"), so nothing is stripped
     // first and a shop called "REFUND KITCHEN" goes to Review too. A refund credit on its own is still booked (ticket 177).
-    if (direction.type === "expense" && MONEY_CAME_BACK.test(text)) confidence = Math.min(confidence, 0.75);
+    if (direction.type === "expense" && MONEY_UNDONE.test(text)) confidence = Math.min(confidence, 0.75);
 
     return {
       kind: "money",

@@ -13,6 +13,12 @@ export const CREDIT_WORDS =
 export const CARD_USE =
   /\b(?:thank\s*you\s+for\s+using|(?:have|has)\s+used|used)\s+(?:your\s+)?(?:[A-Za-z&]{1,15}\s+){0,4}?(?:(?:credit|debit)\s+)?card\b[^.\n]{0,40}?\bfor\s+(?:INR|Rs\.?|₹)\s?\d/i;
 
+/** Money that moved and then came back or was undone (ticket 177): a reversal, refund, reimbursement, chargeback,
+ * cancellation, void, bounce, return, roll-back, adjustment back or re-credit. A debit that names one of these is
+ * for the person to confirm (base.ts caps it); bare "credit"/"Cr" is left out on purpose, it is in every message. */
+export const MONEY_UNDONE =
+  /\b(?:revers\w*|refund\w*|reimburs\w*|charge-?back\w*|charged\s+back|cancel(?:l?ed|lation)|void(?:ed)?|bounced|returned|rolled\s+back|adjusted\s+back|re-?credited|credited\s+back)\b/i;
+
 export interface FoundDirection {
   type: "income" | "expense";
   ambiguous: boolean;
