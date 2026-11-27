@@ -42,13 +42,16 @@ Shared by the group (`banks/private-base.ts`, `banks/party-scrub.ts`):
   at SHOP", "INR X debited from your A/C 201***041234 towards Debit Card Purchase".
 - Accounts: every account number outside promo sentences ("Pay bills from your A/C ...", "Now pay ...", "Get ...")
   is counted, star-masked ("A/c *XX1234") or partly shown ("A/C 201***041234", "Account 15XXXXX1234"); loan, card,
-  deposit, RD and FD accounts are not counted. One account: it is the account. Two or more: no guessing, whatever
+  deposit, RD and FD accounts are not counted, nor is the other party's account: one labelled Beneficiary, Benef,
+  Payee or Remitter, or one after a bare "to"/"from" ("sent to A/C ...", "received from A/C ...") that is not the
+  person's own account moving ("debited from A/C", "by debit to A/C", "credited to your A/C"; "from A/C" into the
+  person's own loan or deposit is their savings). Only the other party's account named: no account. One account: it is the account. Two or more: no guessing, whatever
   "your", "from" or "to" says: no account, no balance or limit, and Review (a refund naming the same account twice is
   held too).
 - Overrides: the UPI id after "towards"; the card digits when no account with a number is named; the payee after the
   last "/" of an ACH debit; deposit interest "paid on your ... Deposit" is money in (income, no account, so Review),
   but TDS deducted on it is not; money moved into an RD, FD or deposit (also spelled out) from the one savings account
-  the message names is an expense of it; "debited from your account linked for IndusInd Credit Card XX1234 payment" is
+  the message names is an expense of it, and so is a loan account credited from it (a repayment); "debited from your account linked for IndusInd Credit Card XX1234 payment" is
   a card bill payment; a payee built around a masked number, one that runs into "debited"/"credited", and the "-
   IndusInd Bank" sign-off are dropped; promo sentences never add a verb.
 

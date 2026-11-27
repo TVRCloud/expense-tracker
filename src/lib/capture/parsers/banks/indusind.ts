@@ -20,13 +20,24 @@ const FUNDS_DEPOSIT = new RegExp(
   String.raw`\b${DEPOSIT_WORD}\s(?:A\/C|Account)\s[\dX*]{4,20}\s(?:has\sbeen\s|is\s)?credited\b|\bcredited\sto\s(?:your\s)?${DEPOSIT_WORD}\b`,
   "i"
 );
-const FROM_SAVINGS = /\bby\sdebit\s(?:to|from)\s(?:your\s)?A\/C\b|\bfrom\s(?:your\s)?A\/C\s\d{0,4}[X*]{2,10}\d{2,8}\b/i;
+const FROM_SAVINGS =
+  /\bby\sdebit\s(?:to|from)\s(?:your\s)?(?:Savings\s)?A\/C\b|\bfrom\s(?:your\s)?(?:Savings\s)?(?:A\/C|Account)\s\d{0,4}[X*]{2,10}\d{2,8}\b/i;
+// A loan account credited with the money ("Your Loan A/C 450***009904 is credited with INR X"): a repayment.
+const LOAN_CREDITED =
+  /\bLoan\s(?:A\/C|Account)\s[\dX*]{4,20}\s(?:has\sbeen\s|is\s)?credited\b|\bcredited\sto\s(?:your\s)?(?:[A-Za-z]{2,10}\s)?Loan\s(?:A\/C|Account)\b/i;
 // Every account number the message names, star-masked ("A/c *XX7731") or partly shown ("A/C 159***007731",
 // "Account 15XXXXX7731"), with the word before it.
-const ACCOUNT_MASK = /(\b[A-Za-z]{2,10}\s)?(?:A\/C|Account)\s(?:no\.?\s)?\*?(\d{0,4}[X*]{2,10}\d{0,4}?(\d{4}))\b/gi;
+const ACCOUNT_MASK = /(\b[A-Za-z]{2,14}\s)?(?:A\/C|Account)\s(?:no\.?\s)?\*?(\d{0,4}[X*]{2,10}\d{0,4}?(\d{4}))\b/gi;
 // A loan, card, deposit, RD or FD account: never the person's spending account, and not counted.
 const NOT_OWN = /^(?:loan|card|deposit|FD|RD)\s$/i;
 const DEPOSIT_LABEL = /^(?:deposit|FD|RD)\s$/i;
+const LOAN_LABEL = /^loan\s$/i;
+// The other party's account: labelled so ("Beneficiary A/C", "Payee Account"), or after a bare "to"/"from" ("sent to
+// A/C ...", "received from A/C ...") that is not the person's own account moving ("debited from A/C", "by debit to
+// A/C", "credited to your A/C").
+const OTHER_LABEL = /^(?:beneficiary|benef|payee|remitter)\s$/i;
+const BARE_TO_FROM = /^(?:to|from)\s$/i;
+const OWN_VERB_BEFORE = /\b(?:debited|credited|debit|credit|transferred|withdrawn|recovered|deducted)\s$/i;
 // A card named in a message that also says which account (with its number) money left or reached is only what it
 // was for. "debited from account linked" names no account, so the card stays.
 const ACCOUNT_MOVED = /\b(?:debited\sfrom|credited\sto)\s(?:your\s)?(?:a\/c|acct|account)(?:\sno\.?)?\s?\*?[x*\d]/i;
@@ -35,7 +46,7 @@ const ACCOUNT_MOVED = /\b(?:debited\sfrom|credited\sto)\s(?:your\s)?(?:a\/c|acct
 const LINKED_CARD_BILL = /\bdebited\sfrom\syour\saccount\slinked\b[^.]{0,40}?\bCredit\sCard\sXX\d{4}\spayment\b/i;
 // A sentence that sells or helps ("Pay bills from your A/C ...", "Now pay from your Account ...", "Get cashback when
 // ..."): it never adds an account or a verb.
-const PROMO = /^(?:Now\s)?(?:Pay|Earn|Convert|Use|Get|Click|Download|Enjoy|Try|Open|Apply)\b/i;
+const PROMO = /^(?:Now\s(?:you\s(?:can|may)\s)?)?(?:Pay|Earn|Convert|Use|Get|Click|Download|Enjoy|Try|Open|Apply|send)\b/i;
 
 /** The message without its promo sentences. */
 function withoutPromo(text: string): string {
@@ -45,12 +56,27 @@ function withoutPromo(text: string): string {
     .join(" ");
 }
 
-/** The account numbers the money could have moved on, and whether a deposit account was also named. */
-function accounts(text: string): { own: string[]; deposit: boolean } {
-  const all = [...withoutPromo(text).matchAll(ACCOUNT_MASK)];
+/** The account numbers the money could have moved on (the person's own kind), whether another party's account or a
+ * loan or deposit account was also named. */
+function accounts(text: string): { own: string[]; other: number; deposit: boolean; loan: boolean } {
+  const plain = withoutPromo(text);
+  const all = [...plain.matchAll(ACCOUNT_MASK)];
+  const word = (m: RegExpMatchArray) => m[1] ?? "";
+  const otherParty = (m: RegExpMatchArray) => {
+    if (OTHER_LABEL.test(word(m))) return true;
+    if (!BARE_TO_FROM.test(word(m))) return false;
+    // "debited from A/C", "by debit to A/C": still the person's own account.
+    return !OWN_VERB_BEFORE.test(plain.slice(Math.max(0, (m.index ?? 0) - 20), m.index));
+  };
+  // Money moved into the person's own loan or deposit comes "from A/C ..." their savings: not another party.
+  const ownProduct = all.some((m) => NOT_OWN.test(word(m)) && !/^card\s$/i.test(word(m)));
+  const other = (m: RegExpMatchArray) => otherParty(m) && !(ownProduct && /^from\s$/i.test(word(m)));
+  const own = all.filter((m) => !NOT_OWN.test(word(m)) && !other(m));
   return {
-    own: all.filter((m) => !NOT_OWN.test(m[1] ?? "")).map((m) => m[3]),
-    deposit: all.some((m) => DEPOSIT_LABEL.test(m[1] ?? "")),
+    own: own.map((m) => m[3]),
+    other: all.filter(other).length,
+    deposit: all.some((m) => DEPOSIT_LABEL.test(word(m))),
+    loan: all.some((m) => LOAN_LABEL.test(word(m))),
   };
 }
 
@@ -69,8 +95,12 @@ export class IndusIndParser extends PrivateBankParser {
     const plain = withoutPromo(text);
     if (DEPOSIT_INTEREST.test(plain) && !TAX.test(plain)) return { type: "income", ambiguous: false };
     // Money moved into the person's RD, FD or deposit from the one savings account the message names.
-    const { own, deposit } = accounts(plain);
+    const { own, deposit, loan } = accounts(plain);
     if (deposit && own.length === 1 && FUNDS_DEPOSIT.test(plain) && FROM_SAVINGS.test(plain)) return { type: "expense", ambiguous: false };
+    // A loan account credited from the one savings account named: a repayment, money out of savings.
+    if (loan && own.length === 1 && LOAN_CREDITED.test(plain) && (FROM_SAVINGS.test(plain) || /\bdebited\b/i.test(plain))) {
+      return { type: "expense", ambiguous: false };
+    }
     return super.direction(plain);
   }
 
@@ -81,9 +111,11 @@ export class IndusIndParser extends PrivateBankParser {
   protected override account(text: string, type: "income" | "expense"): FoundAccount | null {
     // One account named (loan, card and deposit accounts aside): that is the account. Two or more: no guessing,
     // whatever "your", "from" or "to" says; the message goes to Review (see parse).
-    const { own } = accounts(text);
+    const { own, other } = accounts(text);
     if (own.length === 1) return { last4: own[0], instrument: "account" };
     if (own.length > 1) return null;
+    // Only the other party's account is named ("sent to A/C ...", "Beneficiary Account ..."): never take its digits.
+    if (other > 0) return null;
     if (DEPOSIT_INTEREST.test(text)) return null;
     const card = ACCOUNT_MOVED.test(text) ? null : text.match(/\bIndusInd\s(?:Credit\s|Debit\s)?Card\sXX(\d{4})\b/i);
     if (card) return { last4: card[1], instrument: "card" };

@@ -12,16 +12,14 @@ const money = (p: CaptureParse) => {
 describe("IndusInd: two accounts of the person's kind are never guessed (Review, no account)", () => {
   readsAll({ sender: "VM-INDUSB-S" }, [
     {
-      name: "IMPS to another account: two accounts, so no account and Review",
+      name: "IMPS to another account: only the person's own account counts",
       text: "IMPS of INR 1,140 to Account 62XXXXXX8019 debited from your A/C 207***003386 - IndusInd Bank",
-      want: { type: "expense", amountMinor: 114000, last4: undefined },
-      auto: false,
+      want: { type: "expense", last4: "3386" },
     },
     {
-      name: "IMPS from another account: two accounts, so no account and Review",
+      name: "IMPS from another account: only the person's own account counts",
       text: "IMPS of INR 1,140 received from Account 62XXXXXX8019 in your A/C 207***003386 - IndusInd Bank",
-      want: { type: "income", amountMinor: 114000, last4: undefined },
-      auto: false,
+      want: { type: "income", last4: "3386" },
     },
     {
       name: "an RD instalment is money out of the savings account",
@@ -192,16 +190,14 @@ describe("a debit the message says was undone stays in Review", () => {
 describe("IndusInd: a beneficiary account next to the own one means Review", () => {
   readsAll({ sender: "VM-INDUSB-S" }, [
     {
-      name: "own account leads but a beneficiary is named: Review",
+      name: "own account leads; the account it was sent to is the other party's",
       text: "A/c *XX3386 debited by Rs 1,265.00 towards IMPS to Account 71XXXXXX5072. RRN: 631088221144. Not You? call 0000000000- IndusInd Bank.",
-      want: { type: "expense", last4: undefined },
-      auto: false,
+      want: { type: "expense", last4: "3386" },
     },
     {
-      name: "own account leads a credit from another account: Review",
+      name: "own account leads a credit from another party's account",
       text: "A/c *XX3386 credited by Rs 1,265.00 from Account 71XXXXXX5072 via IMPS. RRN: 631088221144.- IndusInd Bank.",
-      want: { type: "income", last4: undefined },
-      auto: false,
+      want: { type: "income", last4: "3386" },
     },
     {
       name: "two partly shown accounts, whatever 'your' says: Review",
@@ -305,9 +301,9 @@ describe("IndusInd: 'your', 'from' or 'to' never picks between two accounts", ()
       auto: false,
     },
     {
-      name: "sent from another account to yours: Review",
+      name: "sent from another party's account to yours: both money words, so Review",
       text: "INR 1,265 sent from Account 71XXXXXX5072 to your A/C 207***003386 credited via IMPS - IndusInd Bank",
-      want: { last4: undefined },
+      want: { last4: "3386" },
       auto: false,
     },
     {
@@ -417,5 +413,45 @@ it("IndusInd: two accounts carry no balance (it belongs to an account)", () => {
 describe("South Indian: a one-X code after a name is a mask", () => {
   readsAll({ sender: "AD-SIBSMS-S" }, [
     { name: "SUNIL X6634", text: "A/c X8846 DEBIT:Rs.940.00 SUNIL X6634 MCT Bal:Rs.4,899.00 -South Indian Bank", want: { merchant: "SUNIL" } },
+  ]);
+});
+
+// Ticket 172 review, round 5: the other party's account is never the person's.
+describe("IndusInd: the other party's account is never taken", () => {
+  readsAll({ sender: "VM-INDUSB-S" }, [
+    {
+      name: "sent to another account names no own account",
+      text: "INR 1,265 sent to A/C 71XXXXXX5072 via IMPS - IndusInd Bank",
+      want: { last4: undefined },
+      auto: false,
+    },
+    {
+      name: "received from another account names no own account",
+      text: "INR 1,265 received from A/C 71XXXXXX5072 via IMPS. Ref 631088554433 - IndusInd Bank",
+      want: { last4: undefined },
+      auto: false,
+    },
+    {
+      name: "a beneficiary account is never the person's",
+      text: "Your IndusInd A/c debited for INR 1,265 towards IMPS to Beneficiary Account 71XXXXXX5072 on 07/11/26 - IndusInd Bank",
+      want: { last4: undefined },
+      auto: false,
+    },
+    {
+      name: "debited from your account to a beneficiary keeps yours",
+      text: "INR 1,265 debited from your A/C 207***003386 to Beneficiary A/C 71XXXXXX5072 - IndusInd Bank",
+      want: { type: "expense", last4: "3386" },
+      auto: true,
+    },
+    {
+      name: "a loan credited, the money debited from savings: a repayment from savings",
+      text: "Your Loan A/C 630***004417 is credited with INR 6,835. Amount debited from Savings A/C 207***003386 - IndusInd Bank",
+      want: { type: "expense", amountMinor: 683500, last4: "3386" },
+    },
+    {
+      name: "a promo line that offers to send money adds no account",
+      text: "INR 1,265 debited from your A/C 207***003386. Now you can send money to A/C 71XXXXXX5072 instantly - IndusInd Bank",
+      want: { type: "expense", last4: "3386" },
+    },
   ]);
 });
