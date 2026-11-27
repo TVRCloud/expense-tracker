@@ -90,6 +90,9 @@ describe("money about a fund is never a fund house note", () => {
     [undefined, "Your fund transfer of Rs 9,850 has been processed from A/c XX5150."],
     [undefined, "Txn of Rs 4950 on Card XX5583 at PINEVALE MUTUAL FUND successful. Purchase processed."],
     [undefined, "Rs 14,120 refunded to your A/c XX5150 for unallotted IPO. Fund allotment completed."],
+    [undefined, "SIP instalment of Rs 2,860 collected from your bank a/c for Meadowlark Fund. Folio 5847. Units allotted 41.207."],
+    [undefined, "Redemption proceeds Rs 11,720 for Meadowlark Fund remitted to your bank. Folio 5847."],
+    [undefined, "Aapke khate mein Rs 11,720 jama hue. Meadowlark Fund redemption processed. Folio 5847."],
   ])("%s %s", (sender, text) => {
     const p = parseCapture(text, AT, { sender });
     expect(p.kind).not.toBe("investment");

@@ -22,12 +22,23 @@ const DEBIT_FROM_ACCOUNT =
   /\b(?:by\s+(?:NACH\s+|ECS\s+|auto\s?-?)?debit\s+(?:to|from|of)|debited\s+(?:from|to))\s+(?:your\s+)?(?:[A-Za-z]{2,15}\s+){0,3}?(?:a\/c|acct|account)\b/i;
 // The loan paying out or being topped up by someone else: a disbursal ("being loan amount ... transferred to your
 // a/c"), cashback, subvention, interest or a subsidy. Those keep the usual reading.
-const NOT_A_REPAYMENT =
-  /\bdisburs|\bloan\s+amount\b|\b(?:transferred|credited|paid)\s+(?:to|in|into)\s+your\s+(?:savings\s+)?(?:a\/c|acct|account)\b|\b(?:cashback|subvention|interest|subsidy)\b/i;
+const PAID_OUT =
+  /\bdisburs|\bloan\s+amount\b|\b(?:transferred|credited|paid)\s+(?:to|in|into)\s+your\s+(?:savings\s+)?(?:a\/c|acct|account)\b/i;
+// Interest, cashback, subvention or a subsidy as the thing credited ("Interest of Rs 115 credited ...").
+const TOP_UP_SUBJECT = /\b(?:interest|cashback|subvention|subsidy)\s+(?:of\s+)?(?:Rs\.?|INR|₹)/i;
+const TOP_UP_WORD = /\b(?:cashback|subvention|interest|subsidy)\b/i;
+// An EMI or a prepayment names interest as a part of it ("EMI incl. interest"): still a repayment.
+const REPAYMENT_WORD = /\b(?:EMI|repayment|re-?payment|prepayment|part-?prepayment|instal(?:l)?ments?|foreclosure)\b/i;
+function notARepayment(text: string): boolean {
+  if (PAID_OUT.test(text)) return true;
+  // An EMI or prepayment, or money debited from the person's account, is a repayment whatever interest it names.
+  if (REPAYMENT_WORD.test(text) || DEBIT_FROM_ACCOUNT.test(text)) return false;
+  return TOP_UP_SUBJECT.test(text) || TOP_UP_WORD.test(text);
+}
 
 export function findDirection(text: string): FoundDirection | null {
   // Unsure which account paid unless the message says it was debited: then it is checked in Review.
-  if (LOAN_CREDITED.test(text) && !NOT_A_REPAYMENT.test(text)) return { type: "expense", ambiguous: !DEBIT_FROM_ACCOUNT.test(text) };
+  if (LOAN_CREDITED.test(text) && !notARepayment(text)) return { type: "expense", ambiguous: !DEBIT_FROM_ACCOUNT.test(text) };
   const debit = text.search(DEBIT_WORDS);
   const credit = text.search(CREDIT_WORDS);
   if (debit === -1 && credit === -1) return null;

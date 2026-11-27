@@ -19,8 +19,8 @@ const money = (p: CaptureParse) => {
 describe("mandate notices", () => {
   it.each([
     {
-      text: "UPI AutoPay for STREAMLY created: up to Rs 637.00 a month from A/c XX7362. -Axis Bank",
-      want: { event: "created", merchant: "STREAMLY", maxAmountMinor: 63700, last4: "7362" },
+      text: "UPI AutoPay for STREAMLY created: up to Rs 637.00 a month. -Axis Bank",
+      want: { event: "created", merchant: "STREAMLY", maxAmountMinor: 63700 },
     },
     {
       text: "e-mandate for TuneBox registered: monthly, max Rs 189.00, starting 05-12-2026.",
@@ -35,6 +35,11 @@ describe("mandate notices", () => {
     { text: "Your AutoPay for StreamFlix has been resumed.", want: { event: "resumed", merchant: "StreamFlix" } },
     { text: "Mandate amount for TuneBox modified to Rs 279.00 monthly.", want: { event: "modified", merchant: "TuneBox", maxAmountMinor: 27900, frequency: "monthly" } },
     { text: "Standing instruction on Card XX4417 for MEDIPLAN has been cancelled.", want: { event: "revoked", merchant: "MEDIPLAN" } },
+    // "successfully" after the verb, and trailing words that are not the merchant's.
+    { text: "Your mandate for VIEWBOX created successfully.", want: { event: "created", merchant: "VIEWBOX" } },
+    { text: "E-mandate for HAWKLINE CREDIT registered successfully with UMRN KKBK7000000098765432.", want: { event: "created", merchant: "HAWKLINE CREDIT" } },
+    { text: "NACH mandate for HAWKLINE CREDIT suspended as per your request.", want: { event: "paused", merchant: "HAWKLINE CREDIT" } },
+    { text: "AutoPay for VIEWBOX through UPI stopped as per your request.", want: { event: "revoked", merchant: "VIEWBOX" } },
   ])("reads $want.event for every sender: $text", ({ text, want }) => {
     for (const sender of SENDERS) expect(mandate(parseCapture(text, AT, { sender }))).toMatchObject(want);
   });
@@ -82,11 +87,40 @@ describe("money that mentions a mandate is never a notice", () => {
     "Mandate executed: INR 2,170 debit from IDFC FIRST Bank A/C XX2296 for ORBIT LOANS approved.",
     "UPI AutoPay: Rs 187 to SOUNDLY successful. Mandate created on 01-12-26.",
     "Rs. 187 Dr. from A/c XX7362 for UPI AutoPay SOUNDLY. AutoPay activated.",
+    // Review 2: an amount that is not the mandate's limit means money moved, whatever verb carries it.
+    "EMI of Rs 2,960 recovered via e-mandate from A/c XX4718. Mandate ID updated.",
+    "ECS return charges of Rs 285 levied on A/c XX4718. NACH mandate for HAWKLINE CREDIT suspended.",
+    "Rs 437 pulled from HDFC Bank A/c XX4718 under e-mandate. E-mandate modified.",
+    "Your standing instruction transaction of Rs 873 at FITGROVE on HDFC Bank Credit Card XX2967 has been approved.",
+    "Rs 437 collected from Kotak A/c X4718 for VIEWBOX. Your AutoPay mandate is created.",
+    "INR 437 recovered from IDFC FIRST Bank A/C XX4718 for VIEWBOX. Standing instruction updated.",
+    "Rs 1,180 auto-recovered from Acct XX471 for PATHLEAF e-mandate. Mandate amended.",
+    "Rs 1,180 realised from A/c XX4718 under NACH. Mandate updated.",
+    "Rs 437 billed to your card XX2967 by VIEWBOX. Standing instruction amended.",
+    "Rs 437 transfered to VIEWBOX via AutoPay. Mandate modified.",
+    "Rs 437 settled to VIEWBOX through UPI AutoPay. Mandate modified to Rs 479.",
+    "AutoPay mandate created and Rs 437 collected for VIEWBOX.",
+    "Rs 437 has been taken for VIEWBOX. Your AutoPay mandate is created.",
+    "AutoPay for VIEWBOX successfully created; Rs 437 completed today.",
+    "Money added: ₹1,835 to Paytm Wallet. AutoPay set up for top-up.",
+    "Rs 437 ka bhugtan VIEWBOX ko AutoPay se ho gaya. Mandate created.",
+    "SIP instalment of Rs 2,860 collected via NACH for Meadowlark Fund. Mandate registered.",
   ])("%s", (text) => {
     for (const sender of SENDERS) {
       const p = parseCapture(text, AT, { sender });
       expect(p.kind, String(sender)).not.toBe("mandate");
       expect(p.kind, String(sender)).not.toBe("investment");
+    }
+  });
+
+  it("an amount printed next to an account or card mask is money, even after a limit word", () => {
+    expect(parseCapture("UPI AutoPay for STREAMLY created: up to Rs 637.00 a month from A/c XX7362.", AT).kind).not.toBe("mandate");
+  });
+
+  it("never keeps a PAN, in any case, as the merchant", () => {
+    for (const text of ["AutoPay created for abcde1234f.", "Mandate in favour of RAVI ABCDE1234F created."]) {
+      const p = mandate(parseCapture(text, AT));
+      expect(JSON.stringify(p)).not.toMatch(/[a-z]{5}\d{4}[a-z]/i);
     }
   });
 
@@ -149,6 +183,14 @@ describe("money into a loan", () => {
     expect(p).toMatchObject({ type: "expense", last4: "7362" });
     expect(p.confidence).toBeGreaterThanOrEqual(CONFIDENCE_AUTO_CREATE);
     expect(p.merchant ?? "").not.toMatch(/debit/i);
+  });
+
+  it.each([
+    ["SBI", "JD-SBIINB-S", "EMI of Rs 2,315 (principal Rs 1,980, interest Rs 335) credited to your loan a/c XX6618 by debit to A/c XX7362."],
+    ["ICICI", "AX-ICICIT-S", "Your Loan Account XX618 has been credited with INR 2,315.00 towards EMI incl. interest by debit to Acct XX362."],
+    ["generic", undefined, "Your loan account XX6618 has been credited with Rs 38,500 part-prepayment. Amount debited from A/c XX7362. Interest recalculated."],
+  ])("%s: an EMI or prepayment that names interest is still a repayment", (_bank, sender, text) => {
+    expect(money(parseCapture(text, AT, { sender })).type).toBe("expense");
   });
 
   it.each([

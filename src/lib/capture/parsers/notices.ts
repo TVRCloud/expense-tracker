@@ -37,7 +37,36 @@ const EVENTS: [MandateParse["event"], RegExp, RegExp][] = EVENT_WORDS.map(([even
 // Money moved in this message, so it is a payment or a credit, never a notice. When in doubt it is money: a missed
 // notice only costs a Review item, a wrongly kept notice loses a payment without a trace.
 const MOVED_MORE =
-  /\b(?:debit|dr|cr|executed|processed|done|paid|used|wdl|txn|deposited|withdrawn|charged|received|sent|transferred|payment\s+successful)\b|\bsuccessful(?:ly)?\b(?!\s+(?:created|registered|set\s?-?up|setup|activated|added|linked|modified|updated|revoked|cancell?ed|paused|resumed)\b)/i;
+  /\b(?:debit|dr|cr|executed|processed|done|paid|used|wdl|txn|deposited|withdrawn|charged|received|sent|transferred|payment\s+successful)\b|(?<!\b(?:created|registered|set\s?-?up|setup|activated|added|linked|modified|updated|revoked|cancell?ed|paused|resumed)\s)\bsuccessful(?:ly)?\b(?!\s+(?:created|registered|set\s?-?up|setup|activated|added|linked|modified|updated|revoked|cancell?ed|paused|resumed)\b)/i;
+
+// A mandate notice may print an amount only as the mandate's limit: right after a limit word ("max", "up to",
+// "limit"), after "mandate/AutoPay/NACH/SI ... for|of" in the same clause, or after "modified/changed/revised to".
+// Any other amount, an amount printed next to an account or card mask, or a "transaction of" an amount means money
+// moved, so the message is money or Review, never a notice. This is structural on purpose: a list of money verbs
+// can never be complete ("recovered", "pulled", "realised", "billed", "ka bhugtan").
+const AMOUNT_ANY = /(?:Rs\.?|INR|₹|US\$|\$)\s?[\d,]{1,15}(?:\.\d{1,2})?/gi;
+const LIMIT_BEFORE = new RegExp(
+  String.raw`(?:\b(?:max(?:imum)?\.?(?:\s(?:amount|amt|limit|debit))?(?:\sof)?|up\s?to|upto|limit(?:\sof)?|not\sexceeding|(?:modified|changed|revised|amended|increased|reduced|updated)\sto)|\b${MANDATE_SRC}\b${CLAUSE}{0,60}?\b(?:for|of))\s{0,2}:?\s{0,2}$`,
+  "i"
+);
+const MASK_NEAR = /(?:\b(?:a\/c|acct|account|card)\b[^.;\d]{0,12}?[x*]{1,12}\s?\d{3,4}|\b[x*]{2,}\d{3,4}\b)/i;
+const TRANSACTION_OF = /\b(?:transaction|txn|trxn)s?\s+(?:of|for|worth|amount)\b/i;
+
+/** Every amount the message prints is the mandate's limit, and none sits next to an account or card. */
+function onlyLimitAmounts(text: string): boolean {
+  if (TRANSACTION_OF.test(text)) return false;
+  for (const m of text.matchAll(AMOUNT_ANY)) {
+    const index = m.index ?? 0;
+    const before = text.slice(Math.max(0, index - 90), index);
+    // The clause before the amount: back to the last sentence end.
+    const clause = before.slice(Math.max(before.lastIndexOf(". "), before.lastIndexOf(";"), before.lastIndexOf("!")) + 1);
+    if (!LIMIT_BEFORE.test(clause)) return false;
+    const around = text.slice(Math.max(0, index - 30), index + m[0].length + 30);
+    if (MASK_NEAR.test(around)) return false;
+  }
+  return true;
+}
+
 export function moneyMoved(text: string): boolean {
   return DEBIT_WORDS.test(text) || CREDIT_WORDS.test(text) || MOVED_MORE.test(text);
 }
@@ -45,7 +74,7 @@ export function moneyMoved(text: string): boolean {
 const NOT_A_NOTICE =
   /\b(?:has|have)\s+requested\b|\bcollect\s+request\b|\b(?:approve|authori[sz]e)\s+(?:the|this|your)\b|\bpending\s+(?:for\s+)?(?:approval|authori[sz]ation)\b|\b(?:failed|declined|unsuccessful|rejected|could\s+not\s+be)\b|\bpre-?debit\b/i;
 
-const STOP = String.raw`(?=\s(?:has|have|is|was|for|on|with|from|of|via|by|till|until|starting|from|UMN|UMRN|ID|mandate|e-mandate|AutoPay|created|registered|modified|updated|revoked|cancell?ed|paused|resumed|successfully|setup|set)\b|[.,;:(]|$)`;
+const STOP = String.raw`(?=\s(?:has|have|is|was|for|on|with|from|of|via|by|till|until|starting|from|UMN|UMRN|ID|mandate|e-mandate|AutoPay|created|registered|modified|updated|revoked|cancell?ed|paused|resumed|suspended|stopped|deactivated|successfully|setup|set|through|as\s+per)\b|[.,;:(]|$)`;
 const PARTY = String.raw`(\S[^.;:,()]{0,58}?)`;
 // Tried in order; within one pattern every match is tried, so "for Rs.649 ... towards STREAMLY" still finds STREAMLY.
 const MERCHANT_PATTERNS = [
@@ -86,10 +115,11 @@ function cleanMerchant(raw: string | undefined): string | undefined {
     .trim()
     .replace(/[ .*\-]{1,5}$/, "")
     // A verb the bank wrote after the name ("STREAMLY processed").
-    .replace(/\s(?:processed|done|executed|successful(?:ly)?|completed)$/i, "");
+    .replace(/\s(?:processed|done|executed|successful(?:ly)?|completed|suspended|stopped|revoked|cancell?ed|paused|resumed|modified|updated|created|registered)$/i, "")
+    .replace(/\s(?:through|via|using)\s(?:UPI|NACH|AutoPay|e-?mandate)$/i, "");
   if (!v || v.length < 2 || !/[A-Za-z]{2}/.test(v) || NOT_A_MERCHANT.test(v)) return undefined;
   // A masked number or an amount is never the merchant.
-  if (/[x*]{2,}\d|\b(?:rs|inr)\.?\s?\d|\d{6,}/i.test(v) || /[A-Z]{5}\d{4}[A-Z]/.test(v)) return undefined;
+  if (/[x*]{2,}\d|\b(?:rs|inr)\.?\s?\d|\d{6,}/i.test(v) || /[A-Z]{5}\d{4}[A-Z]/i.test(v)) return undefined;
   // A mandate reference written like a UPI id ("4f2a91c0d2@okaxis") is never the merchant.
   if (/(?:^|\s)[a-z0-9]{8,}@/i.test(v) && /\d/.test(v.split("@")[0])) return undefined;
   return v.slice(0, 60);
@@ -98,7 +128,7 @@ function cleanMerchant(raw: string | undefined): string | undefined {
 /** A mandate set up, changed, paused, resumed or revoked, when no money moved in the message. */
 export function parseMandateNotice(raw: string): MandateParse | null {
   const text = raw.replace(/\s+/g, " ").trim();
-  if (!MANDATE_WORD.test(text) || moneyMoved(text) || NOT_A_NOTICE.test(text)) return null;
+  if (!MANDATE_WORD.test(text) || moneyMoved(text) || NOT_A_NOTICE.test(text) || !onlyLimitAmounts(text)) return null;
   const event = EVENTS.find(([, after, before]) => after.test(text) || before.test(text))?.[0];
   if (!event) return null;
 
@@ -148,7 +178,7 @@ const NOT_FUND_EVENT =
 // Money that moved on the person's own account or card in this message: that one is the money, so the message stays a
 // money parse (booked or in Review). "purchase" alone is a fund word when the fund's own figures are printed.
 const MONEY_HERE =
-  /(?<!\b(?:will|to|shall|would)\s+be\s+)\b(?:debited|credited|debit|dr|cr|spent|paid|sent|received|deposited|withdrawn|transferred|deducted|charged|used|wdl|txn|refund(?:ed)?|reversed|payment\s+(?:of|successful))\b/i;
+  /(?<!\b(?:will|to|shall|would)\s+be\s+)\b(?:debited|credited|debit|dr|cr|spent|paid|sent|received|deposited|withdrawn|transferred|deducted|charged|used|wdl|txn|refund(?:ed)?|reversed|collected|remitted|paid\s+out|jama|credited\s+back|payment\s+(?:of|successful))\b/i;
 const FOLIO_FIGURE = /\bfolio\s*(?:no\.?|number|#)?\s*[:\-]?\s*[x*]{0,12}\d{4,20}(?:\/\d{1,4})?/gi;
 
 // A fund's name: up to eight words ending in Fund, FoF or ETF, never a folio, a PAN, an amount or an account.
