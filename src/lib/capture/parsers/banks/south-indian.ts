@@ -67,7 +67,9 @@ export class SouthIndianParser extends PrivateBankParser {
     const shop = text.match(/\bDEBIT:\s?Rs\.?\s?[\d,]{1,15}(?:\.\d{1,2})?\s(\S[^.;:]{0,58}?)\s(?:MCT\s)?Bal:/i);
     const info = text.match(/\bInfo:\s?(?:UPI|IMPS|NEFT)\/[A-Za-z]{3,5}\/\d{6,22}\/\s?(\S[^/;]{0,58}?)(?:\son\s\d|\.\s|\.$|$)/i);
     if (CC_PAYMENT.test(text)) return undefined;
-    return scrubParty(cleanParty(shop?.[1])) ?? scrubParty(cleanParty(info?.[1])) ?? scrubParty(sharedParty(super.merchant(text, type)));
+    // South Indian masks accounts with one X ("A/c X5521"), so a one-X code after a name is a mask ("RAVI X7781").
+    const sib = (v: string | undefined) => scrubParty(v?.replace(/\s[xX]\d{4}$/, ""));
+    return sib(cleanParty(shop?.[1])) ?? sib(cleanParty(info?.[1])) ?? sib(sharedParty(super.merchant(text, type)));
   }
 
   protected override ref(text: string): string | undefined {

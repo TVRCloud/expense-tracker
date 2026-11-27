@@ -9,8 +9,8 @@ Shared by the group (`banks/private-base.ts`, `banks/party-scrub.ts`):
 - A debit with an undo word anywhere in the message ("reversed", "reversal", "refunded", "returned unpaid", "bounced",
   "charged back") stays in Review, a payee's own name included ("REVERSAL CAFE" goes to Review too: accepted noise).
 - Payee names lose references, masked numbers and card numbers ("631088123456/name@bank" keeps the UPI id, "HDFC CC
-  6612" becomes "HDFC CC"); a one-X code ("X7781") is removed only after a/c, account or card or when it is the whole
-  name; digits inside a UPI id and names like "X1000 FITNESS" or "9x12 FURNITURE" are kept.
+  6612" becomes "HDFC CC"); a one-X code ("X7781") is removed only after a/c, account or card, when it is the whole
+  name, or (South Indian, whose accounts use one X) at the end of a name ("RAVI X7781" becomes "RAVI"); digits inside a UPI id and names like "X1000 FITNESS" or "9x12 FURNITURE" are kept.
 - A card the message only mentions ("towards ... Debit Card 6612 annual fee") never replaces the account the money
   left or reached (Federal, YES BANK, IndusInd); that account must be written with its number ("debited from account
   linked to the card" names none, so the card stays).
@@ -40,17 +40,17 @@ Shared by the group (`banks/private-base.ts`, `banks/party-scrub.ts`):
 - Header: `INDUSB`.
 - Shapes: "A/c *XX1234 debited|credited by Rs X towards|from <UPI id>", "INR X spent on IndusInd Card XX1234 on ...
   at SHOP", "INR X debited from your A/C 201***041234 towards Debit Card Purchase".
-- Overrides: the UPI id after "towards"; the last four digits of a partly shown account ("A/C 201***041234",
-  "Account 15XXXXX1234"), never a loan, card, deposit, RD or FD account: an account written as the person's own after
-  "by debit to/from (your) A/C" or "from your A/C" paid (an expense of it, whatever account "credited" names), one
-  written "to/in your A/C <mask> credited" or "credited to your A/C <mask>" received; then the own account that leads the UPI shape
-  ("A/c *XX1234 debited by") wins, then the partly shown account right next to the direction's verb ("debited from
-  your A/C <mask>", "<mask> has been credited"), then, with two left, the one written "your A/C" (else none); the card digits; the payee after the last "/" of an ACH debit; deposit interest
-  "paid on your ... Deposit" is money in (income, no account, so Review), never an expense, but TDS deducted on it is
-  not; money moved into an RD, FD or deposit from the savings account ("credited to your RD A/C ... by debit to A/C")
-  (also spelled out, "Recurring Deposit", "Fixed Deposit") is an expense of the savings account; a payee guess that
-  runs into "debited"/"credited" is dropped; "debited from your account linked for IndusInd Credit Card XX1234
-  payment" is a card bill payment; a payee built around a masked number ("FD closure 410***551203") is dropped.
+- Accounts: every account number outside promo sentences ("Pay bills from your A/C ...", "Now pay ...", "Get ...")
+  is counted, star-masked ("A/c *XX1234") or partly shown ("A/C 201***041234", "Account 15XXXXX1234"); loan, card,
+  deposit, RD and FD accounts are not counted. One account: it is the account. Two or more: no guessing, whatever
+  "your", "from" or "to" says: no account, no balance or limit, and Review (a refund naming the same account twice is
+  held too).
+- Overrides: the UPI id after "towards"; the card digits when no account with a number is named; the payee after the
+  last "/" of an ACH debit; deposit interest "paid on your ... Deposit" is money in (income, no account, so Review),
+  but TDS deducted on it is not; money moved into an RD, FD or deposit (also spelled out) from the one savings account
+  the message names is an expense of it; "debited from your account linked for IndusInd Credit Card XX1234 payment" is
+  a card bill payment; a payee built around a masked number, one that runs into "debited"/"credited", and the "-
+  IndusInd Bank" sign-off are dropped; promo sentences never add a verb.
 
 ## South Indian Bank (`south-indian.ts`, id `south_indian`)
 - Header: `SIBSMS`.

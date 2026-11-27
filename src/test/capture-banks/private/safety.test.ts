@@ -61,9 +61,13 @@ describe.each(BANKS)("$id: safety", ({ id, sender, name }) => {
     expect(own.confidence).toBeLessThan(1);
   });
 
-  it("a debit naming two accounts is booked on the payer's", () => {
+  it("a debit naming two accounts is booked on the payer's, or on none and held (IndusInd never guesses)", () => {
     const text = "Your a/c no. XXXXXXXX4407 is debited for Rs.615.00 on 05-10-26 and a/c XXXXXX8825 credited (IMPS Ref no 604499114455).";
-    expect(money(parseCapture(text, RECEIVED, { sender })).last4).toBe("4407");
+    const p = money(parseCapture(text, RECEIVED, { sender }));
+    if (id === "indusind") {
+      expect(p.last4).toBeUndefined();
+      expect(p.confidence).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+    } else expect(p.last4).toBe("4407");
   });
 
   it("a loan account's digits are never the account", () => {

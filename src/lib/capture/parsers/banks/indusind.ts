@@ -5,7 +5,8 @@
 
 import type { FoundAccount } from "../extract/account";
 import type { FoundDirection } from "../extract/direction";
-import { cleanParty, sharedParty } from "./known";
+import type { MoneyParse } from "../types";
+import { cleanParty, REVIEW_CEILING, sharedParty } from "./known";
 import { hasMaskedNumber, scrubParty } from "./party-scrub";
 import { PrivateBankParser } from "./private-base";
 
@@ -20,31 +21,38 @@ const FUNDS_DEPOSIT = new RegExp(
   "i"
 );
 const FROM_SAVINGS = /\bby\sdebit\s(?:to|from)\s(?:your\s)?A\/C\b|\bfrom\s(?:your\s)?A\/C\s\d{0,4}[X*]{2,10}\d{2,8}\b/i;
-// An account written in full or partly shown ("A/C 159***007731", "Account 15XXXXX7731"), with the word before it.
-const MASKED_ACCOUNT = /(\b[A-Za-z]{2,8}\s)?(?:A\/C|Account)\s(?:no\.?\s)?(\d{1,4}[X*]{2,10}\d{0,4}?(\d{4}))\b/gi;
-// Not the person's own spending account: a loan, card, deposit, RD or FD.
+// Every account number the message names, star-masked ("A/c *XX7731") or partly shown ("A/C 159***007731",
+// "Account 15XXXXX7731"), with the word before it.
+const ACCOUNT_MASK = /(\b[A-Za-z]{2,10}\s)?(?:A\/C|Account)\s(?:no\.?\s)?\*?(\d{0,4}[X*]{2,10}\d{0,4}?(\d{4}))\b/gi;
+// A loan, card, deposit, RD or FD account: never the person's spending account, and not counted.
 const NOT_OWN = /^(?:loan|card|deposit|FD|RD)\s$/i;
-const OWN = /^your\s$/i;
+const DEPOSIT_LABEL = /^(?:deposit|FD|RD)\s$/i;
 // A card named in a message that also says which account (with its number) money left or reached is only what it
 // was for. "debited from account linked" names no account, so the card stays.
 const ACCOUNT_MOVED = /\b(?:debited\sfrom|credited\sto)\s(?:your\s)?(?:a\/c|acct|account)(?:\sno\.?)?\s?\*?[x*\d]/i;
-// The account the money left, written as the person's own ("by debit from your A/C <mask>", "from your A/C
-// <mask>"): whatever account "credited" names, this one paid, so the message is an expense of it.
-const OWN_PAYER = /\b(?:by\sdebit\s(?:to|from)\s(?:your\s)?(?:Savings\s)?|from\syour\s(?:Savings\s)?)(?:A\/C|Account)\s(\d{0,4}[X*]{2,10}\d{0,4}?(\d{4}))\b/i;
-// The account the money reached, written as the person's own ("to your A/C <mask> credited", "credited to your A/C
-// <mask>"); deposits are read by FUNDS_DEPOSIT first.
-const OWN_PAYEE =
-  /\b(?:(?:to|in|into)\syour\s(?:Savings\s)?(?:A\/C|Account)\s(\d{0,4}[X*]{2,10}\d{0,4}?(\d{4}))\s(?:credited|via)\b|credited\s(?:to|in|into)\syour\s(?:Savings\s)?(?:A\/C|Account)\s(\d{0,4}[X*]{2,10}\d{0,4}?(\d{4}))\b)/i;
 // A card bill paid from the account linked to the card ("debited from your account linked for IndusInd Credit Card
 // XX8812 payment").
 const LINKED_CARD_BILL = /\bdebited\sfrom\syour\saccount\slinked\b[^.]{0,40}?\bCredit\sCard\sXX\d{4}\spayment\b/i;
-// The person's own account leading IndusInd's UPI shape: "A/c *XX7731 debited by ...".
-const LEADING_OWN = /^A\/c\s\*?XX(\d{4})\b/i;
-// The verb right before or right after a partly shown account tells whose it is.
-const BEFORE_EXPENSE = /\b(?:debited\s(?:from|to)|by\sdebit\s(?:to|from)|from)\s(?:your\s)?$/i;
-const BEFORE_INCOME = /\b(?:credited\s(?:to|in|into)|in|into)\s(?:your\s)?$/i;
-const AFTER_EXPENSE = /^\s(?:has\sbeen\s|is\s|was\s)?debited\b/i;
-const AFTER_INCOME = /^\s(?:has\sbeen\s|is\s|was\s)?credited\b/i;
+// A sentence that sells or helps ("Pay bills from your A/C ...", "Now pay from your Account ...", "Get cashback when
+// ..."): it never adds an account or a verb.
+const PROMO = /^(?:Now\s)?(?:Pay|Earn|Convert|Use|Get|Click|Download|Enjoy|Try|Open|Apply)\b/i;
+
+/** The message without its promo sentences. */
+function withoutPromo(text: string): string {
+  return text
+    .split(/(?<=\.)\s+(?=[A-Z])/)
+    .filter((sentence) => !PROMO.test(sentence.trim()))
+    .join(" ");
+}
+
+/** The account numbers the money could have moved on, and whether a deposit account was also named. */
+function accounts(text: string): { own: string[]; deposit: boolean } {
+  const all = [...withoutPromo(text).matchAll(ACCOUNT_MASK)];
+  return {
+    own: all.filter((m) => !NOT_OWN.test(m[1] ?? "")).map((m) => m[3]),
+    deposit: all.some((m) => DEPOSIT_LABEL.test(m[1] ?? "")),
+  };
+}
 
 export class IndusIndParser extends PrivateBankParser {
   readonly id = "indusind";
@@ -58,11 +66,12 @@ export class IndusIndParser extends PrivateBankParser {
   ];
 
   protected override direction(text: string): FoundDirection | null {
-    if (DEPOSIT_INTEREST.test(text) && !TAX.test(text)) return { type: "income", ambiguous: false };
-    if (OWN_PAYER.test(text)) return { type: "expense", ambiguous: false };
-    if (FUNDS_DEPOSIT.test(text) && FROM_SAVINGS.test(text)) return { type: "expense", ambiguous: false };
-    if (OWN_PAYEE.test(text) && !FUNDS_DEPOSIT.test(text)) return { type: "income", ambiguous: false };
-    return super.direction(text);
+    const plain = withoutPromo(text);
+    if (DEPOSIT_INTEREST.test(plain) && !TAX.test(plain)) return { type: "income", ambiguous: false };
+    // Money moved into the person's RD, FD or deposit from the one savings account the message names.
+    const { own, deposit } = accounts(plain);
+    if (deposit && own.length === 1 && FUNDS_DEPOSIT.test(plain) && FROM_SAVINGS.test(plain)) return { type: "expense", ambiguous: false };
+    return super.direction(plain);
   }
 
   protected override cardPayment(text: string): boolean {
@@ -70,43 +79,34 @@ export class IndusIndParser extends PrivateBankParser {
   }
 
   protected override account(text: string, type: "income" | "expense"): FoundAccount | null {
-    // The person's own account the money left or reached, when the message says so ("from your A/C <mask>").
-    const payer = type === "expense" ? text.match(OWN_PAYER) : null;
-    if (payer) return { last4: payer[2], instrument: "account" };
-    const payee = type === "income" && !FUNDS_DEPOSIT.test(text) ? text.match(OWN_PAYEE) : null;
-    if (payee) return { last4: payee[2] ?? payee[4], instrument: "account" };
-    // "A/c *XX7731 debited by ...": the account the message is about leads it.
-    const leading = text.match(LEADING_OWN);
-    if (leading) return { last4: leading[1], instrument: "account" };
-    // "A/C 201***046152", "Account 15XXXXX6152": the last four digits of a partly shown number. Never a loan, card,
-    // deposit, RD or FD account. The one next to the direction's verb wins ("debited from your A/C <mask>", "<mask>
-    // has been credited"); with two left and no verb to tell, only the one written "your A/C"; else none.
-    const masks = [...text.matchAll(MASKED_ACCOUNT)].filter((m) => !NOT_OWN.test(m[1] ?? ""));
-    if (masks.length > 0) {
-      const before = type === "expense" ? BEFORE_EXPENSE : BEFORE_INCOME;
-      const after = type === "expense" ? AFTER_EXPENSE : AFTER_INCOME;
-      // The text right before "A/C" (with "your" in it) and right after the number.
-      const at = (m: RegExpMatchArray) => (m.index ?? 0) + (m[1]?.length ?? 0);
-      const lead = (m: RegExpMatchArray) => text.slice(Math.max(0, at(m) - 30), at(m));
-      const trail = (m: RegExpMatchArray) => text.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + m[0].length + 30);
-      const pick = masks.find((m) => before.test(lead(m))) ?? masks.find((m) => after.test(trail(m)));
-      if (pick) return { last4: pick[3], instrument: "account" };
-      if (masks.length > 1) {
-        const own = masks.filter((m) => OWN.test(m[1] ?? ""));
-        return own.length === 1 ? { last4: own[0][3], instrument: "account" } : null;
-      }
-    }
+    // One account named (loan, card and deposit accounts aside): that is the account. Two or more: no guessing,
+    // whatever "your", "from" or "to" says; the message goes to Review (see parse).
+    const { own } = accounts(text);
+    if (own.length === 1) return { last4: own[0], instrument: "account" };
+    if (own.length > 1) return null;
     if (DEPOSIT_INTEREST.test(text)) return null;
     const card = ACCOUNT_MOVED.test(text) ? null : text.match(/\bIndusInd\s(?:Credit\s|Debit\s)?Card\sXX(\d{4})\b/i);
     if (card) return { last4: card[1], instrument: "card" };
     return super.account(text, type);
   }
 
+  override parse(text: string, receivedAt: Date): MoneyParse | null {
+    const parse = super.parse(text, receivedAt);
+    if (!parse || accounts(text).own.length < 2) return parse;
+    // Two or more accounts of the person's kind in one message: which one moved is not certain, so no account and
+    // no balance or limit (they belong to an account), and Review.
+    const held: MoneyParse = { ...parse, last4: undefined, instrument: undefined, confidence: Math.min(parse.confidence, REVIEW_CEILING) };
+    delete held.balanceMinor;
+    delete held.availableLimitMinor;
+    return held;
+  }
+
   protected override merchant(text: string, type: "income" | "expense"): string | undefined {
     if (DEPOSIT_INTEREST.test(text) || /\btowards\sDebit\sCard\sPurchase\b/i.test(text)) return undefined;
     const towards = text.match(/\btowards\s([\w.\-]{1,60}@[A-Za-z][\w\-]{0,30})(?![\w@])/i);
     const ach = text.match(/\bACH\sDR\b[^.]{0,80}\/([A-Za-z][A-Za-z0-9 &]{1,40})\.\s?Bal\b/i);
-    const shared = sharedParty(super.merchant(text, type));
+    // The bank's own sign-off is never part of a payee ("SHOPKART - IndusInd Bank").
+    const shared = sharedParty(super.merchant(text, type))?.replace(/\s-\s?IndusInd\s?Bank\.?$/i, "");
     // "towards FD closure 410***551203": a name built around an account number is no payee at all.
     // "at HDFC Bank debited from A/C ...": a guess that runs into the verb is the bank, not a payee.
     const usable = shared && !hasMaskedNumber(shared) && !/\b(?:debited|credited)\b/i.test(shared) ? shared : undefined;

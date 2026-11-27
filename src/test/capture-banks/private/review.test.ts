@@ -9,17 +9,19 @@ const money = (p: CaptureParse) => {
   return p;
 };
 
-describe("IndusInd: two partly shown accounts", () => {
+describe("IndusInd: two accounts of the person's kind are never guessed (Review, no account)", () => {
   readsAll({ sender: "VM-INDUSB-S" }, [
     {
-      name: "IMPS to another account keeps the person's account",
+      name: "IMPS to another account: two accounts, so no account and Review",
       text: "IMPS of INR 1,140 to Account 62XXXXXX8019 debited from your A/C 207***003386 - IndusInd Bank",
-      want: { type: "expense", amountMinor: 114000, last4: "3386" },
+      want: { type: "expense", amountMinor: 114000, last4: undefined },
+      auto: false,
     },
     {
-      name: "IMPS from another account keeps the person's account",
+      name: "IMPS from another account: two accounts, so no account and Review",
       text: "IMPS of INR 1,140 received from Account 62XXXXXX8019 in your A/C 207***003386 - IndusInd Bank",
-      want: { type: "income", amountMinor: 114000, last4: "3386" },
+      want: { type: "income", amountMinor: 114000, last4: undefined },
+      auto: false,
     },
     {
       name: "an RD instalment is money out of the savings account",
@@ -187,22 +189,25 @@ describe("a debit the message says was undone stays in Review", () => {
 });
 
 // Ticket 172 review, round 2.
-describe("IndusInd: the person's own account wins over a beneficiary's", () => {
+describe("IndusInd: a beneficiary account next to the own one means Review", () => {
   readsAll({ sender: "VM-INDUSB-S" }, [
     {
-      name: "own account leads, beneficiary partly shown",
+      name: "own account leads but a beneficiary is named: Review",
       text: "A/c *XX3386 debited by Rs 1,265.00 towards IMPS to Account 71XXXXXX5072. RRN: 631088221144. Not You? call 0000000000- IndusInd Bank.",
-      want: { type: "expense", last4: "3386" },
+      want: { type: "expense", last4: undefined },
+      auto: false,
     },
     {
-      name: "own account leads a credit from a partly shown account",
+      name: "own account leads a credit from another account: Review",
       text: "A/c *XX3386 credited by Rs 1,265.00 from Account 71XXXXXX5072 via IMPS. RRN: 631088221144.- IndusInd Bank.",
-      want: { type: "income", last4: "3386" },
+      want: { type: "income", last4: undefined },
+      auto: false,
     },
     {
-      name: "the verb decides over 'your' with two partly shown accounts",
+      name: "two partly shown accounts, whatever 'your' says: Review",
       text: "IMPS of INR 1,265 to your Account 71XXXXXX5072 at AXIS Bank debited from A/C 207***003386 - IndusInd Bank",
-      want: { type: "expense", last4: "3386" },
+      want: { type: "expense", last4: undefined },
+      auto: false,
     },
     {
       name: "a spelled-out Recurring Deposit funded from savings is money out of savings",
@@ -279,27 +284,31 @@ describe("Federal: an e-mandate card payment keeps its card", () => {
 });
 
 // Ticket 172 review, round 3.
-describe("IndusInd: the account written as the person's own paid, whatever account 'credited' names", () => {
+describe("IndusInd: 'your', 'from' or 'to' never picks between two accounts", () => {
   readsAll({ sender: "VM-INDUSB-S" }, [
     {
-      name: "credited to another account by debit from yours",
+      name: "credited to another account by debit from yours: Review",
       text: "INR 1,265 credited to A/C 71XXXXXX5072 by debit from your A/C 207***003386 - IndusInd Bank",
-      want: { type: "expense", amountMinor: 126500, last4: "3386" },
+      want: { amountMinor: 126500, last4: undefined },
+      auto: false,
     },
     {
-      name: "another account has been credited from yours",
+      name: "another account has been credited from yours: Review",
       text: "Account 71XXXXXX5072 has been credited with INR 1,265 from your A/C 207***003386 - IndusInd Bank",
-      want: { type: "expense", last4: "3386" },
+      want: { last4: undefined },
+      auto: false,
     },
     {
-      name: "received in another account from yours",
+      name: "received in another account from yours: Review",
       text: "INR 1,265 received in A/C 71XXXXXX5072 from your A/C 207***003386 via IMPS - IndusInd Bank",
-      want: { type: "expense", last4: "3386" },
+      want: { last4: undefined },
+      auto: false,
     },
     {
-      name: "sent from another account to yours is income",
+      name: "sent from another account to yours: Review",
       text: "INR 1,265 sent from Account 71XXXXXX5072 to your A/C 207***003386 credited via IMPS - IndusInd Bank",
-      want: { type: "income", last4: "3386" },
+      want: { last4: undefined },
+      auto: false,
     },
     {
       name: "a card bill paid from the account linked to the card",
@@ -366,5 +375,47 @@ describe("an undo word anywhere sends a debit to Review", () => {
       want: { type: "expense" },
       auto: false,
     },
+  ]);
+});
+
+// Ticket 172 review, round 4 (decision: no guessing between two accounts on IndusInd).
+describe("IndusInd: one account is used, promo sentences add none", () => {
+  readsAll({ sender: "VM-INDUSB-S" }, [
+    {
+      name: "a credit followed by a promo line naming the same account",
+      text: "INR 1,265 credited to your A/C 207***003386 via IMPS. Pay bills from your A/C 207***003386 on IndusMobile - IndusInd Bank",
+      want: { type: "income", last4: "3386" },
+      auto: true,
+    },
+    {
+      name: "a refund naming the account twice is held",
+      text: "Refund of INR 1,265 credited to your A/C 207***003386 for txn from your A/C 207***003386 at BOOKNEST - IndusInd Bank",
+      want: { last4: undefined },
+      auto: false,
+    },
+    {
+      name: "a payee keeps no bank sign-off",
+      text: "INR 1,265 credited to your Savings Account 15XXXXX3386 by NEFT from MEENA - IndusInd Bank",
+      want: { type: "income", last4: "3386", merchant: "MEENA" },
+    },
+  ]);
+});
+
+it("IndusInd: two accounts carry no balance (it belongs to an account)", () => {
+  const p = money(
+    parseCapture(
+      "INR 1,265 debited from your A/C 207***003386 and credited to your A/C 71XXXXXX5072. Avl BAL INR 4,120.00 - IndusInd Bank",
+      RECEIVED,
+      { sender: "VM-INDUSB-S" }
+    )
+  );
+  expect(p.last4).toBeUndefined();
+  expect(p.balanceMinor).toBeUndefined();
+  expect(p.confidence).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+});
+
+describe("South Indian: a one-X code after a name is a mask", () => {
+  readsAll({ sender: "AD-SIBSMS-S" }, [
+    { name: "SUNIL X6634", text: "A/c X8846 DEBIT:Rs.940.00 SUNIL X6634 MCT Bal:Rs.4,899.00 -South Indian Bank", want: { merchant: "SUNIL" } },
   ]);
 });
