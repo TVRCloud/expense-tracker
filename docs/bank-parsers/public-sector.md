@@ -9,10 +9,12 @@ All ten extend `PublicSectorParser` (`banks/public-sector-base.ts`), which keeps
 matched: a debit that was reversed, refunded or not dispensed (the verb only: a payee called "REFUND CORNER" or a help
 line "Cash not dispensed? Call …" changes nothing), and a credit into a loan or towards an EMI as what was credited
 ("towards Loan EMI", "for/as/against … loan/EMI", "EMI recovery", "loan instalment", "loan a/c … credited",
-"--LOAN RECOVERY"; a promo "Apply for a Home Loan" or a payer "EMI STORE"
-does not count). That credit also drops its account digits, balance and a "Loan EMI" merchant, so a confirm can never
-teach a savings account the loan's number; when it names the account the money left ("for EMI from A/c *5093", "by
-debit to SB XXXX3917") it is that account's expense, still in Review. Its `nameOnly` cleans a payee: no "Sender:"/"Beneficiary:" label, no
+"--LOAN RECOVERY"), read only in the money sentence or a next sentence about the same amount ("This amount is…",
+"Being…", "Adjusted…"), with payer fields ("from …", "by MB …", "By.…", up to a "towards") taken out: a promo "Apply for
+a Home Loan" or a payer "EMI RECOVERY SOLUTIONS LTD" does not count. That credit also drops its account digits, balance
+and a "Loan EMI" merchant, so a confirm can never teach a savings account the loan's number; when its money sentence
+names the account the money left with an account word ("for EMI from A/c *5093", "by debit to SB XXXX3917") it is that
+account's expense, still in Review. Its `nameOnly` cleans a payee: no "Sender:"/"Beneficiary:" label, no
 "towards refund…"/"reversal of…"/bare "REV", "transfer" or "cash"/"…Loan disbursal" reason (real names such as "REV MOTORS", "Towards
 Travels", "SENDER ENTERPRISES" stay), no run of eight or more digits, and no UPI id made of a phone number. When a
 bank's own payee field matches but holds no name, the parser gives no merchant rather than the shared guess.

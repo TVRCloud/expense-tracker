@@ -296,3 +296,35 @@ describe("round 3: loan wording, card payments and ATM charges", () => {
     expect(p).toMatchObject({ kind: "money", type: "income", merchant: undefined });
   });
 });
+
+// Ticket 171 review, round 4: loan words count only in the money sentence (or a follow-up about the same amount) and
+// never inside a payer's name; the account a repayment left needs an account word before its digits.
+describe("round 4: promo lines and payer names never make a credit a repayment", () => {
+  it.each([
+    { sender: "VM-PNBSMS-S", text: "Ac XX6731 Credited with Rs.86,950.00 05-11-2026 11:02:09 being Salary Dec. Aval Bal Rs.97,744.25 CR. Pre-approved offer for car loan inside the PNB ONE app -PNB", last4: "6731" },
+    { sender: "AD-BOBSMS-S", text: "Rs.86,950.00 credited to A/c XX719628 via NEFT/631902111020 by ORBIT TECH from A/c XX5521. Check offers for home loan at 8.4% -Bank of Baroda", last4: "9628" },
+    { sender: "VM-CANBNK-S", text: "Dear Customer, Acct XXX482 credited with INR 2,655.00 on 05-11-26 from LATA IYER; UPI:631702491020; Bal INR 10,869.66. Apply for personal loan in 2 min-CanaraBank", last4: "482" },
+    { sender: "VK-UCOBNK-S", text: "A/c XX8840 Credited with Rs.5,445.00 on 05-11-2026 by NEFT from EMI RECOVERY SOLUTIONS LTD.Avl Bal Rs.8,367.90", last4: "8840", merchant: "EMI RECOVERY SOLUTIONS LTD" },
+    { sender: "JM-UNIONB-S", text: "Union Bank of India A/c*5093 Cr Rs1,195.00 on 05-11-26 10:07 by MB 6601234679 AS EMI TRADERS, Bal Rs4,300.80", last4: "5093", merchant: "AS EMI TRADERS" },
+    { sender: "CP-CENTBK-S", text: "Rs. 1,655.00 credited to your A/c xxxxxx7719 on 05/11/2026 through NEFT vide Ref No./N308261110 By.FOR LOAN HELP NGO-CBoI", last4: "7719", merchant: "FOR LOAN HELP NGO" },
+    { sender: "AD-INDBNK-S", text: "Rs.18.35 credited to a/c *6614 on 05/11/2026 by a/c linked to VPA rohan.s@oksbi (UPI Ref no 631944551120). Interest rates for home loan cut.Indian Bank", last4: "6614" },
+    { sender: "AD-INDBNK-S", text: "Rs.5,050.00 credited to a/c *6614 on 05/11/2026 from 2026 batch alumni as EMI help.Indian Bank", last4: "6614" },
+    { sender: "VM-PNBSMS-S", text: "Ac XX6731 Credited with Rs.1,955.00 05-11-2026 thru UPI from LOAN DUES COLLECTION AGENCY refund. Aval Bal Rs.15,809.25 CR -PNB", last4: "6731", merchant: "LOAN DUES COLLECTION AGENCY" },
+  ])("$sender: income booked on its own account", ({ sender, text, last4, merchant }) => {
+    const p = parseCapture(text, RECEIVED, { sender });
+    expect(p).toMatchObject({ kind: "money", type: "income", last4 });
+    expect(p.confidence).toBeGreaterThanOrEqual(CONFIDENCE_AUTO_CREATE);
+    if (merchant) expect(p.kind === "money" && p.merchant).toBe(merchant);
+  });
+
+  it("a follow-up sentence about the same amount still marks a loan repayment", () => {
+    for (const text of [
+      "Ac XX9921 Credited with Rs.5,430.00 05-11-2026 by transfer. Being repayment of Loan. -PNB",
+      "A/c XX9910 Credited with Rs.5,430.00 on 05-11-2026 by transfer. Adjusted against your home loan dues.Avl Bal Rs.0.00",
+    ]) {
+      const p = parseCapture(text, RECEIVED, { sender: text.includes("PNB") ? "VM-PNBSMS-S" : "VK-UCOBNK-S" });
+      expect(p.confidence).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+      expect(p.kind === "money" && p.last4).toBeFalsy();
+    }
+  });
+});
