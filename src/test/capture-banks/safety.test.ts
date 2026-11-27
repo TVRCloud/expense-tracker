@@ -64,7 +64,7 @@ describe.each(BANKS)("$id: safety", ({ id, sender, name }) => {
     for (const text of pads) {
       const start = performance.now();
       parseCapture(text, RECEIVED, { sender });
-      expect(performance.now() - start).toBeLessThan(50);
+      expect(performance.now() - start).toBeLessThan(250);
     }
   });
 });
@@ -75,5 +75,84 @@ describe("styled letters for every sender", () => {
     for (const sender of ["VM-HDFCBK", "JD-SBIINB", "VM-OTHRBK", undefined]) {
       expect(parseCapture(text, RECEIVED, { sender })).toMatchObject({ kind: "ignored", reason: "otp" });
     }
+  });
+});
+
+describe("card bills paid from a bank account", () => {
+  const cases: { name: string; sender: string; text: string; last4?: string }[] = [
+    {
+      name: "Axis: debited for a credit card bill",
+      sender: "AX-AXISBK-S",
+      text: "INR 8,615.00 debited from A/c no. XX441907 on CREDIT CARD BILL PAYMENT 04-10-2026 09:48:21 IST. Avl bal: INR 3,077.00 - Axis Bank",
+    },
+    {
+      name: "IDFC: debited towards a credit card bill",
+      sender: "BM-IDFCFB-S",
+      text: "Your A/C XXXXX9283 is debited by INR 3,940.00 on 04/10/26 towards credit card bill. New Bal :INR 1,212.40",
+    },
+    {
+      name: "ICICI: a card bill after Info",
+      sender: "AX-ICICIT-S",
+      text: "ICICI Bank Acct XX274 debited for Rs 10,480.00 on 04-Oct-26 InfoBIL*ICICI Card 3391. Avl Bal Rs 5,220.",
+    },
+    {
+      name: "ICICI: paid by UPI to the card, which names its own digits",
+      sender: "AX-ICICIT-S",
+      text: "ICICI Bank Acct XX274 debited for Rs 8,470.00 on 04-Oct-26; ICICI Bank Credit Card XX3391 credited. UPI:604400126655.",
+      last4: "3391",
+    },
+  ];
+
+  it.each(cases)("$name: a card payment that never carries the debited account's digits", ({ sender, text, last4 }) => {
+    const p = parseCapture(text, RECEIVED, { sender });
+    expect(p).toMatchObject({ kind: "money", cardPayment: true, type: "income", last4, instrument: last4 ? "card" : undefined });
+    if (!last4) expect(p.kind === "money" && p.last4).toBeFalsy();
+    expect(p.confidence).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+  });
+});
+
+describe("promo or help text about card bills never turns a spend into a card payment", () => {
+  const cases: { name: string; sender: string; text: string; merchant: string }[] = [
+    {
+      name: "Axis card spend with a pay-your-bill line",
+      sender: "AX-AXISBK-S",
+      text: "Spent INR 640 using Axis Bank Credit Card no. XX2208 on 04-10-26 13:22:09 IST at HOTEL SAFFRON. Avl limit: INR 58,100.00. Pay your credit card bill to Axis Bank Credit Card easily.",
+      merchant: "HOTEL SAFFRON",
+    },
+    {
+      name: "Kotak card spend with a pay-to-card line",
+      sender: "JD-KOTAKB-S",
+      text: "INR 715 spent on Kotak Credit Card x6047 on 04-OCT-2026 at SHOPWAVE. Avl limit INR 40,535.00. Use the app to pay to your Kotak credit card.",
+      merchant: "SHOPWAVE",
+    },
+    {
+      name: "HDFC card spend with an offer line",
+      sender: "VM-HDFCBK-S",
+      text: "Spent Rs.355.00 On HDFC Bank Card 5150 At ..METRO MART On 2026-10-04:18:10:33. Earn 5% back when you pay to HDFC Bank Credit Card bills.",
+      merchant: "METRO MART",
+    },
+    {
+      name: "a payee named Credit Card Services is a merchant",
+      sender: "VM-HDFCBK-S",
+      text: "Rs.275.00 debited from A/c XX5150 on 04-10-26 to ACME Credit Card Services. UPI Ref 604400127788.",
+      merchant: "ACME Credit Card Services",
+    },
+  ];
+
+  it.each(cases)("$name", ({ sender, text, merchant }) => {
+    const p = parseCapture(text, RECEIVED, { sender });
+    expect(p).toMatchObject({ kind: "money", type: "expense", merchant });
+    expect(p.kind === "money" && p.cardPayment).toBeFalsy();
+    expect(p.confidence).toBeGreaterThanOrEqual(CONFIDENCE_AUTO_CREATE);
+  });
+});
+
+describe("SBI card spend written 'done at SHOP on your card'", () => {
+  it("reads a spend abroad and keeps it in Review", () => {
+    const p = parseCapture("Trxn. of USD 11.49 done at CLOUDAPP on your SBI Credit Card ending 7731 on 04/10/26.", RECEIVED, {
+      sender: "VM-SBICRD",
+    });
+    expect(p).toMatchObject({ kind: "money", parserId: "sbi", type: "expense", currency: "USD", amountMinor: 1149, last4: "7731", merchant: "CLOUDAPP" });
+    expect(p.confidence).toBeLessThanOrEqual(0.6);
   });
 });

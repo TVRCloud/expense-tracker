@@ -6,8 +6,10 @@ import type { FoundAccount } from "../extract/account";
 import type { FoundDirection } from "../extract/direction";
 import { cleanParty, KnownBankParser, NAME, sharedParty } from "./known";
 
-// Only the card-spend shape reads "done at" as a debit, never a deposit or a credit.
-const CARD_DONE_AT = /\bby\sSBI\s(?:Debit|Credit)\sCard\s[x*]{0,4}\d{4}\sdone\sat\s/i;
+// Only the card-spend shapes read "done at" as a debit, never a deposit or a credit: "by SBI Debit Card 1234 done at
+// SHOP" and "done at SHOP on your SBI Credit Card ending 1234".
+const CARD_DONE_AT =
+  /\bby\sSBI\s(?:Debit|Credit)\sCard\s[x*]{0,4}\d{4}\sdone\sat\s|\bdone\sat\s[^.]{1,60}?\son\syour\sSBI\s(?:Debit|Credit)\sCard\sending\s/i;
 const MONEY_IN = /\b(?:deposit(?:ed)?|credited|refund(?:ed)?|revers(?:al|ed))\b/i;
 
 export class SbiParser extends KnownBankParser {

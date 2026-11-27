@@ -6,6 +6,7 @@
 // first, so no pattern can backtrack badly on a long or padded message.
 
 import { BankParser } from "../base";
+import { CREDIT_WORDS, DEBIT_WORDS, isCardPayment } from "../extract/direction";
 import type { MoneyParse } from "../types";
 
 /** Added when a message has one of the bank's known shapes (see `KnownBankParser.shapes`). */
@@ -20,15 +21,29 @@ const NOT_YET =
 const MANDATE = /\bmandate\b/i;
 // Characters that may sit inside an amount ("9,125.00") without ending a sentence.
 const SAME_SENTENCE = String.raw`(?:[^.]|\.(?=\d))`;
-// Money paid to a credit card: its bill, not a spend or income.
+// "Credit Card Services", "Credit Card Solutions Pvt": a business name, not a card.
+const CARD = String.raw`credit\s*card(?!\s(?:services?|solutions?|ltd|limited|pvt|private|co|company|corp)\b)`;
+// Money paid to a credit card: its bill, not a spend or income. Tested only on the sentence holding the amount.
 const PAID_TO_CARD = [
-  new RegExp(String.raw`\bto\s+(?:[A-Za-z]+\s+){0,3}credit\s*card\b`, "i"),
+  new RegExp(String.raw`\bto\s+(?:[A-Za-z]+\s+){0,3}${CARD}`, "i"),
   /\bcredit\s*card\s+(?:no\.?\s*)?[x*]{0,8}\d{0,4}\s+credited\b/i,
   /\bcredit\s*card\s+bill\s+payment\b/i,
-  /\btowards\s(?:your\s)?(?:[A-Za-z]+\s){0,4}credit\s*card\b/i,
+  new RegExp(String.raw`\btowards\s(?:your\s)?(?:[A-Za-z]+\s){0,4}${CARD}`, "i"),
   /\bInfo\s?BIL\*[^.*]{0,30}?\bcard\b/i,
   new RegExp(String.raw`\bcard\b${SAME_SENTENCE}{0,40}?\bpayment\s+of\b${SAME_SENTENCE}{0,40}?\b(?:received|credited)\b`, "i"),
 ];
+const AMOUNT_TOKEN = /(?:Rs\.?|INR|₹)\s?\d/i;
+
+/** The sentence that holds the amount and the money verb, so promo or help text after it ("Pay your credit card
+ * bill to ...") is never read as what happened. A "." inside an amount, "Rs." or "no." does not end a sentence. */
+export function moneySentence(text: string): string {
+  const sentences = text.split(/(?<!\b(?:Rs|no|Avl|Bal|Txn|Trxn))\.\s+(?=[A-Z])/);
+  return (
+    sentences.find((s) => AMOUNT_TOKEN.test(s) && (DEBIT_WORDS.test(s) || CREDIT_WORDS.test(s))) ??
+    sentences.find((s) => AMOUNT_TOKEN.test(s)) ??
+    text
+  );
+}
 
 export abstract class KnownBankParser extends BankParser {
   /** Whole-message shapes this bank sends. Only a match earns the bonus, never the sender alone. */
@@ -40,6 +55,16 @@ export abstract class KnownBankParser extends BankParser {
     if (!parse) return null;
     // Cash from an ATM has no shop, whatever word sits after "on".
     if (parse.atm && parse.merchant) parse.merchant = undefined;
+    // A card bill paid from the person's bank account ("debited from A/c XX1234 ... credit card bill"): the type stays
+    // income like every card payment (money into the card; ingest queues it as card_payment and never books it), and
+    // the digits are only ever the card's own, never the debited account's, so it cannot suggest the wrong account.
+    if (parse.cardPayment && !isCardPayment(flat) && this.direction(flat)?.type === "expense") {
+      const card = this.paidCard(flat);
+      const debited = this.account(flat, "expense");
+      const own = card && card.last4 !== debited?.last4 ? card : null;
+      parse.last4 = own?.last4;
+      parse.instrument = own ? "card" : undefined;
+    }
     const shaped = this.hasShape(flat);
     // Unsure reads stay in Review: money not moved yet, a mandate, or a message with both a debit and a credit word
     // that is not one of the bank's known shapes.
@@ -63,8 +88,10 @@ export abstract class KnownBankParser extends BankParser {
 
   protected override cardPayment(text: string): boolean {
     if (super.cardPayment(text)) return true;
-    if (/\b(?:refund(?:ed)?|cashback|reversal|reversed)\b/i.test(text)) return false;
-    return PAID_TO_CARD.some((re) => re.test(text));
+    // A spend with a card, or money coming back, is never a bill payment, whatever promo text follows it.
+    if (/\b(?:spent|refund(?:ed)?|cashback|reversal|reversed)\b/i.test(text)) return false;
+    const sentence = moneySentence(text);
+    return PAID_TO_CARD.some((re) => re.test(sentence));
   }
 }
 
@@ -72,7 +99,10 @@ export abstract class KnownBankParser extends BankParser {
 const NOT_A_PARTY =
   /^(?:dispute|call|report|block|receive|clearing|reissue|mobile\s+x?\d+|an\s+a\/c|the\s+beneficiary|transfer\s+of|IST)(?=[\s.,;:]|$)|^merchant$/i;
 /** A masked number or an account, never a payee ("XX4410", "A/c 5150"). */
-const ACCOUNT_LIKE = /(?:^|\s)[x*]{2,}\d+\b|\b(?:a\/c|acct|account|credit\s*card)\b|\b(?:rs|inr)\.?\s?\d|^[\d\s.,-]+$/i;
+const ACCOUNT_LIKE = new RegExp(
+  String.raw`(?:^|\s)[x*]{2,}\d+\b|\b(?:a\/c|acct|account)\b|\b${CARD}\b|\b(?:rs|inr)\.?\s?\d|^[\d\s.,-]+$`,
+  "i"
+);
 
 /** Trims dots, stars and dashes a bank pads a name with, and a terminal code at the end ("AMAZON 000"). */
 export function cleanParty(raw: string | undefined): string | undefined {
