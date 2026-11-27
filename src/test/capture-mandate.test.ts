@@ -40,6 +40,11 @@ describe("mandate notices", () => {
     { text: "E-mandate for HAWKLINE CREDIT registered successfully with UMRN KKBK7000000098765432.", want: { event: "created", merchant: "HAWKLINE CREDIT" } },
     { text: "NACH mandate for HAWKLINE CREDIT suspended as per your request.", want: { event: "paused", merchant: "HAWKLINE CREDIT" } },
     { text: "AutoPay for VIEWBOX through UPI stopped as per your request.", want: { event: "revoked", merchant: "VIEWBOX" } },
+    // Future and limit wording about debits still to come stays a notice.
+    { text: "Mandate set up! VIEWBOX can now auto-debit up to Rs 479 every month.", want: { event: "created", maxAmountMinor: 47900 } },
+    { text: "Your mandate for VIEWBOX has been resumed. Next debit as per schedule.", want: { event: "resumed", merchant: "VIEWBOX" } },
+    { text: "Heads up: your AutoPay to VIEWBOX (max ₹479/month) is now live.", want: { event: "created", maxAmountMinor: 47900 } },
+    { text: "UPI AutoPay mandate for VIEWBOX of Rs 437 per month has been created on your UPI app.", want: { event: "created", maxAmountMinor: 43700 } },
   ])("reads $want.event for every sender: $text", ({ text, want }) => {
     for (const sender of SENDERS) expect(mandate(parseCapture(text, AT, { sender }))).toMatchObject(want);
   });
@@ -105,6 +110,27 @@ describe("money that mentions a mandate is never a notice", () => {
     "Money added: ₹1,835 to Paytm Wallet. AutoPay set up for top-up.",
     "Rs 437 ka bhugtan VIEWBOX ko AutoPay se ho gaya. Mandate created.",
     "SIP instalment of Rs 2,860 collected via NACH for Meadowlark Fund. Mandate registered.",
+    // Review 3: "mandate ... for|of <amount>" is a limit only when the event follows at once.
+    "AutoPay of Rs 437 to VIEWBOX recovered from HDFC Bank A/c XX4718 today. AutoPay updated.",
+    "Mandate of Rs 2,960 for HAWKLINE CREDIT realised on 05-12-26. Mandate updated.",
+    "NACH mandate for Rs 2,960 HAWKLINE CREDIT honoured on 05-12-26. Mandate updated.",
+    "Standing instruction of Rs 9,400 to RD account honoured today. Standing instruction updated.",
+    "E-mandate for Rs 613 to WRENTUNE presented and cleared. Mandate updated.",
+    "AutoPay for Rs 437 to VIEWBOX went through today. AutoPay modified.",
+    "Your AutoPay of Rs 437 for VIEWBOX was billed today; AutoPay renewed and updated.",
+    "Mandate for Rs 2,370 HAWKLINE: kisht vasool hui. Mandate updated.",
+    "AutoPay for ₹437 to VIEWBOX completed. Mandate updated.",
+    // Every way of writing an amount counts.
+    "USD 7.63 recovered on Card XX2967 for CLOUDNOTE standing instruction. SI updated.",
+    "AED 33.40 billed to Card XX2967 for CLOUDNOTE via standing instruction. SI updated.",
+    "EUR 11.49 for CLOUDNOTE realised. AutoPay modified.",
+    "Re 1 recovered for HAWKLINE mandate verification. Mandate registered.",
+    "Re. 1 taken for e-mandate penny test; e-mandate created for HAWKLINE.",
+    "437.00 recovered for VIEWBOX AutoPay. AutoPay updated.",
+    "Amt 437.00 realised from a/c ending 4718 for VIEWBOX. AutoPay updated.",
+    // A past-tense word that is not the mandate's own event means money moved.
+    "Up to Rs 3,280 NACH for HAWKLINE CREDIT; EMI recovered today. Mandate updated.",
+    "Mandate limit of Rs 3,280 for HAWKLINE CREDIT: amount recovered today, mandate updated.",
   ])("%s", (text) => {
     for (const sender of SENDERS) {
       const p = parseCapture(text, AT, { sender });
@@ -191,6 +217,24 @@ describe("money into a loan", () => {
     ["generic", undefined, "Your loan account XX6618 has been credited with Rs 38,500 part-prepayment. Amount debited from A/c XX7362. Interest recalculated."],
   ])("%s: an EMI or prepayment that names interest is still a repayment", (_bank, sender, text) => {
     expect(money(parseCapture(text, AT, { sender })).type).toBe("expense");
+  });
+
+  it("interest or a subsidy credited to the loan is not a repayment, an EMI that ends with its interest is", () => {
+    const subsidy = money(parseCapture("Interest subsidy of Rs 1,140 credited to your loan account XX6618 under PMAY. Your EMI stays the same.", AT));
+    expect(subsidy.type).toBe("income");
+    const emi = money(parseCapture("Rs 2,315 credited to your loan account XX6618. EMI received with thanks. Interest Rs 335.", AT));
+    expect(emi.type).toBe("expense");
+    expect(emi.confidence).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+  });
+
+  it("an ICICI loan credit never names 'EMI incl' as the merchant", () => {
+    const p = money(
+      parseCapture("Your Loan Account XX618 has been credited with INR 2,315.00 towards EMI incl. interest by debit to Acct XX362.", AT, {
+        sender: "AX-ICICIT-S",
+      })
+    );
+    expect(p).toMatchObject({ type: "expense", last4: "362" });
+    expect(p.merchant).toBeUndefined();
   });
 
   it.each([

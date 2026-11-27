@@ -22,7 +22,7 @@ const EVENT_WORDS: [MandateParse["event"], string][] = [
   ["paused", String.raw`paused|suspended|put\s+on\s+hold`],
   ["resumed", String.raw`resumed|reactivated|unpaused`],
   ["modified", String.raw`modified|updated|changed|amended|revised`],
-  ["created", String.raw`created|registered|set\s?-?up|activated|accepted|approved|successfully\s+(?:added|linked)`],
+  ["created", String.raw`created|registered|set\s?-?up|activated|accepted|approved|successfully\s+(?:added|linked)|(?:is\s+)?now\s+(?:live|active)`],
 ];
 // The event must belong to the mandate itself: the mandate word and the event in one clause, at most
 // 100 characters apart ("UPI-Mandate for Rs.637.00 is successfully created", "created a mandate on"), never across a
@@ -39,17 +39,33 @@ const EVENTS: [MandateParse["event"], RegExp, RegExp][] = EVENT_WORDS.map(([even
 const MOVED_MORE =
   /\b(?:debit|dr|cr|executed|processed|done|paid|used|wdl|txn|deposited|withdrawn|charged|received|sent|transferred|payment\s+successful)\b|(?<!\b(?:created|registered|set\s?-?up|setup|activated|added|linked|modified|updated|revoked|cancell?ed|paused|resumed)\s)\bsuccessful(?:ly)?\b(?!\s+(?:created|registered|set\s?-?up|setup|activated|added|linked|modified|updated|revoked|cancell?ed|paused|resumed)\b)/i;
 
-// A mandate notice may print an amount only as the mandate's limit: right after a limit word ("max", "up to",
-// "limit"), after "mandate/AutoPay/NACH/SI ... for|of" in the same clause, or after "modified/changed/revised to".
-// Any other amount, an amount printed next to an account or card mask, or a "transaction of" an amount means money
-// moved, so the message is money or Review, never a notice. This is structural on purpose: a list of money verbs
-// can never be complete ("recovered", "pulled", "realised", "billed", "ka bhugtan").
-const AMOUNT_ANY = /(?:Rs\.?|INR|₹|US\$|\$)\s?[\d,]{1,15}(?:\.\d{1,2})?/gi;
-const LIMIT_BEFORE = new RegExp(
-  String.raw`(?:\b(?:max(?:imum)?\.?(?:\s(?:amount|amt|limit|debit))?(?:\sof)?|up\s?to|upto|limit(?:\sof)?|not\sexceeding|(?:modified|changed|revised|amended|increased|reduced|updated)\sto)|\b${MANDATE_SRC}\b${CLAUSE}{0,60}?\b(?:for|of))\s{0,2}:?\s{0,2}$`,
+// A mandate notice may print an amount only as the mandate's limit, and nothing in it may say money moved. When in
+// doubt a mandate message goes to Review (money), never dropped: a missed notice costs one Review item, a wrongly kept
+// notice loses a payment without a trace. This is structural on purpose; a list of money verbs is never complete.
+//
+// 1. Limit positions: right after max, maximum, up to, upto, limit, not exceeding or ceiling, or after
+//    "modified/changed/revised/increased/reduced to". "mandate/AutoPay/NACH/SI ... for|of <amount>" is a limit only
+//    when the event verb follows at once ("AutoPay mandate for CloudBox of Rs 129.00 has been revoked").
+// 2. Every amount counts, written as widely as findAmount reads it: rupees (Rs, Re, INR, ₹), foreign codes and
+//    symbols, "Amt"/"Amount" and bare decimals like 449.00. An amount next to an account or card mask, or a
+//    "transaction of" an amount, is money.
+// 3. A past-tense word that is not an event word or a neutral word ("recovered", "honoured", "cleared", "vasool",
+//    "ho gaya") means something happened to money.
+const CURRENCY = String.raw`(?:(?:Rs|Re)\.?|INR|₹|US\$|\$|€|£|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF|HKD|NZD|SAR|QAR|THB|MYR|JPY)`;
+const AMOUNT_ANY = new RegExp(
+  String.raw`${CURRENCY}\s?\d[\d,]{0,14}(?:\.\d{1,2})?|\b(?:Amt|Amount)\.?\s{0,2}:?\s{0,2}\d[\d,]{0,14}(?:\.\d{1,2})?|\b\d[\d,]{0,14}\.\d{2}\b`,
+  "gi"
+);
+const LIMIT_WORD_BEFORE =
+  /\b(?:max(?:imum)?\.?(?:\s(?:amount|amt|limit|debit))?(?:\sof)?|up\s?to|upto|limit(?:\sof)?|not\sexceeding|ceiling(?:\sof)?|(?:modified|changed|revised|amended|increased|reduced|updated)\sto)\s{0,2}:?\s{0,2}$/i;
+const MANDATE_FOR_BEFORE = new RegExp(String.raw`\b${MANDATE_SRC}\b${CLAUSE}{0,60}?\b(?:for|of)\s{1,2}$`, "i");
+const ALL_EVENTS = EVENT_WORDS.map(([, words]) => words).join("|");
+// After "mandate ... for|of <amount>": an optional frequency and payee, then the event verb at once.
+const EVENT_RIGHT_AFTER = new RegExp(
+  String.raw`^(?:\s(?:per|a|every)\s(?:month|week|year|day)|\s(?:monthly|weekly|yearly|daily))?\s{0,2}(?:(?:to|for|towards|in\s+favou?r\s+of)\s+(?:[A-Za-z0-9][\w&.'@-]{0,30}\s){0,5}?)?(?:is\s|has\sbeen\s|was\s)?(?:successfully\s)?(?:${ALL_EVENTS})\b`,
   "i"
 );
-const MASK_NEAR = /(?:\b(?:a\/c|acct|account|card)\b[^.;\d]{0,12}?[x*]{1,12}\s?\d{3,4}|\b[x*]{2,}\d{3,4}\b)/i;
+const MASK_NEAR = /(?:\b(?:a\/c|acct|account|card)\b[^.;\d]{0,12}?[x*]{1,12}\s?\d{3,4}|\b[x*]{2,}\d{3,4}\b|\bending\s(?:with\s)?\d{4}\b)/i;
 const TRANSACTION_OF = /\b(?:transaction|txn|trxn)s?\s+(?:of|for|worth|amount)\b/i;
 
 /** Every amount the message prints is the mandate's limit, and none sits next to an account or card. */
@@ -57,15 +73,40 @@ function onlyLimitAmounts(text: string): boolean {
   if (TRANSACTION_OF.test(text)) return false;
   for (const m of text.matchAll(AMOUNT_ANY)) {
     const index = m.index ?? 0;
+    const end = index + m[0].length;
     const before = text.slice(Math.max(0, index - 90), index);
     // The clause before the amount: back to the last sentence end.
-    const clause = before.slice(Math.max(before.lastIndexOf(". "), before.lastIndexOf(";"), before.lastIndexOf("!")) + 1);
-    if (!LIMIT_BEFORE.test(clause)) return false;
-    const around = text.slice(Math.max(0, index - 30), index + m[0].length + 30);
-    if (MASK_NEAR.test(around)) return false;
+    const clause = before.slice(Math.max(before.lastIndexOf(". "), before.lastIndexOf(";"), before.lastIndexOf("!"), before.lastIndexOf(":")) + 1);
+    const limit = LIMIT_WORD_BEFORE.test(before) || (MANDATE_FOR_BEFORE.test(clause) && EVENT_RIGHT_AFTER.test(text.slice(end, end + 120)));
+    if (!limit) return false;
+    if (MASK_NEAR.test(text.slice(Math.max(0, index - 30), end + 30))) return false;
   }
   return true;
 }
+
+// Past-tense words that are the mandate's own events, or say nothing about money.
+const NEUTRAL_PAST = new Set([
+  "revoked", "cancelled", "canceled", "deactivated", "discontinued", "deleted", "terminated", "stopped", "paused",
+  "suspended", "resumed", "reactivated", "unpaused", "modified", "updated", "changed", "amended", "revised", "created",
+  "registered", "activated", "accepted", "approved", "added", "linked", "requested", "limited", "unlimited",
+  "required", "allowed", "needed", "based", "scheduled", "expected", "selected", "provided", "mentioned", "listed",
+  "hundred", "enabled", "disabled", "authorised", "authorized", "verified", "associated", "detailed", "issued",
+]);
+const PAST_WORD =
+  /\b(?:[a-z]{2,}ed|complete[ds]?|went\s+through|cleared|taken|vasool|chale\s+gaye|ho\s+gaya|jama|kata|kat\s+gay[ae]|bhugtan)\b/gi;
+function unknownPast(text: string): boolean {
+  for (const m of text.matchAll(PAST_WORD)) {
+    const word = m[0].toLowerCase();
+    if (NEUTRAL_PAST.has(word)) continue;
+    // A future promise ("will be debited as per schedule") moved nothing yet.
+    if (/\b(?:will|shall)\s+be\s+$/i.test(text.slice(Math.max(0, (m.index ?? 0) - 12), m.index))) continue;
+    return true;
+  }
+  return false;
+}
+
+// Future and limit wording a notice uses about debits still to come ("can now auto-debit up to", "next debit").
+const FUTURE_DEBIT = /\b(?:can\s+(?:now\s+)?auto-?debit|auto-?debit(?=\s+up\s?to\b)|next\s+debit|debits?\s+as\s+per\s+schedule)\b/gi;
 
 export function moneyMoved(text: string): boolean {
   return DEBIT_WORDS.test(text) || CREDIT_WORDS.test(text) || MOVED_MORE.test(text);
@@ -74,7 +115,7 @@ export function moneyMoved(text: string): boolean {
 const NOT_A_NOTICE =
   /\b(?:has|have)\s+requested\b|\bcollect\s+request\b|\b(?:approve|authori[sz]e)\s+(?:the|this|your)\b|\bpending\s+(?:for\s+)?(?:approval|authori[sz]ation)\b|\b(?:failed|declined|unsuccessful|rejected|could\s+not\s+be)\b|\bpre-?debit\b/i;
 
-const STOP = String.raw`(?=\s(?:has|have|is|was|for|on|with|from|of|via|by|till|until|starting|from|UMN|UMRN|ID|mandate|e-mandate|AutoPay|created|registered|modified|updated|revoked|cancell?ed|paused|resumed|suspended|stopped|deactivated|successfully|setup|set|through|as\s+per)\b|[.,;:(]|$)`;
+const STOP = String.raw`(?=\s(?:has|have|is|was|for|on|with|from|of|via|by|till|until|starting|from|UMN|UMRN|ID|mandate|e-mandate|AutoPay|created|registered|modified|updated|revoked|cancell?ed|paused|resumed|suspended|stopped|deactivated|successfully|setup|set|through|as\s+per|recovered|reali[sz]ed|hono(?:u)?red|under|today)\b|[.,;:(]|$)`;
 const PARTY = String.raw`(\S[^.;:,()]{0,58}?)`;
 // Tried in order; within one pattern every match is tried, so "for Rs.649 ... towards STREAMLY" still finds STREAMLY.
 const MERCHANT_PATTERNS = [
@@ -115,7 +156,7 @@ function cleanMerchant(raw: string | undefined): string | undefined {
     .trim()
     .replace(/[ .*\-]{1,5}$/, "")
     // A verb the bank wrote after the name ("STREAMLY processed").
-    .replace(/\s(?:processed|done|executed|successful(?:ly)?|completed|suspended|stopped|revoked|cancell?ed|paused|resumed|modified|updated|created|registered)$/i, "")
+    .replace(/\s(?:processed|done|executed|successful(?:ly)?|completed|suspended|stopped|revoked|cancell?ed|paused|resumed|modified|updated|created|registered|recovered|reali[sz]ed|hono(?:u)?red)(?:\stoday)?$/i, "")
     .replace(/\s(?:through|via|using)\s(?:UPI|NACH|AutoPay|e-?mandate)$/i, "");
   if (!v || v.length < 2 || !/[A-Za-z]{2}/.test(v) || NOT_A_MERCHANT.test(v)) return undefined;
   // A masked number or an amount is never the merchant.
@@ -128,7 +169,9 @@ function cleanMerchant(raw: string | undefined): string | undefined {
 /** A mandate set up, changed, paused, resumed or revoked, when no money moved in the message. */
 export function parseMandateNotice(raw: string): MandateParse | null {
   const text = raw.replace(/\s+/g, " ").trim();
-  if (!MANDATE_WORD.test(text) || moneyMoved(text) || NOT_A_NOTICE.test(text) || !onlyLimitAmounts(text)) return null;
+  const plain = text.replace(FUTURE_DEBIT, " ");
+  if (!MANDATE_WORD.test(text) || NOT_A_NOTICE.test(text)) return null;
+  if (moneyMoved(plain) || unknownPast(plain) || !onlyLimitAmounts(plain)) return null;
   const event = EVENTS.find(([, after, before]) => after.test(text) || before.test(text))?.[0];
   if (!event) return null;
 

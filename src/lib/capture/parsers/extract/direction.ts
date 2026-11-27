@@ -25,15 +25,20 @@ const DEBIT_FROM_ACCOUNT =
 const PAID_OUT =
   /\bdisburs|\bloan\s+amount\b|\b(?:transferred|credited|paid)\s+(?:to|in|into)\s+your\s+(?:savings\s+)?(?:a\/c|acct|account)\b/i;
 // Interest, cashback, subvention or a subsidy as the thing credited ("Interest of Rs 115 credited ...").
-const TOP_UP_SUBJECT = /\b(?:interest|cashback|subvention|subsidy)\s+(?:of\s+)?(?:Rs\.?|INR|₹)/i;
+// Only as the subject of its own "credited" sentence, so an EMI's "(principal Rs 1,980, interest Rs 335)" or a
+// closing "Interest Rs 315." is not one.
+const TOP_UP_SUBJECT =
+  /(?:^|[.;!]\s{1,3})(?:an?\s|your\s)?(?:[A-Za-z]{2,15}\s)?(?:interest|cashback|subvention|subsidy)\s(?:of\s|amount\s(?:of\s)?)?(?:Rs\.?|INR|₹)[^.;!]{0,60}?\bcredited\b/i;
 const TOP_UP_WORD = /\b(?:cashback|subvention|interest|subsidy)\b/i;
 // An EMI or a prepayment names interest as a part of it ("EMI incl. interest"): still a repayment.
 const REPAYMENT_WORD = /\b(?:EMI|repayment|re-?payment|prepayment|part-?prepayment|instal(?:l)?ments?|foreclosure)\b/i;
 function notARepayment(text: string): boolean {
-  if (PAID_OUT.test(text)) return true;
+  // A payout, or interest, cashback, subvention or a subsidy as the thing credited ("Interest subsidy of Rs 1,200
+  // credited ... Your EMI stays the same").
+  if (PAID_OUT.test(text) || TOP_UP_SUBJECT.test(text)) return true;
   // An EMI or prepayment, or money debited from the person's account, is a repayment whatever interest it names.
   if (REPAYMENT_WORD.test(text) || DEBIT_FROM_ACCOUNT.test(text)) return false;
-  return TOP_UP_SUBJECT.test(text) || TOP_UP_WORD.test(text);
+  return TOP_UP_WORD.test(text);
 }
 
 export function findDirection(text: string): FoundDirection | null {

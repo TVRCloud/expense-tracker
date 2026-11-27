@@ -121,7 +121,7 @@ export abstract class KnownBankParser extends BankParser {
 
 /** Words that start a help line or a non-party, never a payee ("To dispute call 1800...", "mobile x5521"). */
 const NOT_A_PARTY =
-  /^(?:dispute|call|report|block|receive|clearing|reissue|mobile\s+x?\d+|an\s+a\/c|the\s+beneficiary|transfer\s+of|IST)(?=[\s.,;:]|$)|^merchant$/i;
+  /^(?:dispute|call|report|block|receive|clearing|reissue|mobile\s+x?\d+|an\s+a\/c|the\s+beneficiary|transfer\s+of|IST)(?=[\s.,;:]|$)|^merchant$|^EMI(?:\s+incl\.?)?$/i;
 /** A masked number or an account, never a payee ("XX4410", "A/c 5150"). */
 const ACCOUNT_LIKE = new RegExp(
   String.raw`(?:^|\s)[x*]{2,}\d+\b|\bac\s?x+\d|\b(?:a\/c|acct|account)\b|\b${CARD}\b|\b(?:rs|inr)\.?\s?\d|^[\d\s.,-]+$`,
