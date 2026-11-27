@@ -5,6 +5,7 @@
 import { parseMessageDate, type ParsedDate } from "./dates";
 import { findAmount, type FoundAmount } from "./extract/amount";
 import { findBankName, findLast4, findPaidCard, type FoundAccount } from "./extract/account";
+import { findAvailableLimit, findBalance } from "./extract/balance";
 import { findDirection, isAtmWithdrawal, isCardPayment, type FoundDirection } from "./extract/direction";
 import { findMerchant, findRef } from "./extract/merchant";
 import { normaliseSender } from "./sender";
@@ -51,6 +52,9 @@ export abstract class BankParser {
     const parsedDate = this.date(text, receivedAt);
     const ref = this.ref(text);
     const merchant = this.merchant(text, direction.type);
+    // Kept on the parse only; neither adds confidence (ticket 156).
+    const balanceMinor = this.balance(text);
+    const availableLimitMinor = this.availableLimit(text);
 
     let confidence = 0.35 + 0.25; // amount + direction
     if (account) confidence += 0.25;
@@ -79,6 +83,8 @@ export abstract class BankParser {
       hasTime: parsedDate?.hasTime ?? false,
       ...(direction.type === "expense" && this.atm(text) ? { atm: true as const } : {}),
       ...(cardPayment ? { cardPayment: true as const } : {}),
+      ...(balanceMinor !== undefined ? { balanceMinor } : {}),
+      ...(availableLimitMinor !== undefined ? { availableLimitMinor } : {}),
     };
   }
 
@@ -115,6 +121,16 @@ export abstract class BankParser {
 
   protected ref(text: string): string | undefined {
     return findRef(text);
+  }
+
+  /** The balance the message prints, in paise (rupees only). Never the amount and never more confidence. */
+  protected balance(text: string): number | undefined {
+    return findBalance(text);
+  }
+
+  /** A card's available limit, in paise (rupees only). Never the amount and never more confidence. */
+  protected availableLimit(text: string): number | undefined {
+    return findAvailableLimit(text);
   }
 
   /** The bonus for this message. A bank parser returns its bonus only when the message has one of its own known

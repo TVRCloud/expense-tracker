@@ -30,6 +30,11 @@ export interface MoneyParse {
   atm?: true;
   /** Money paid to a credit card bill ("payment received towards your credit card"). Never auto-created. */
   cardPayment?: true;
+  /** The account's balance the message prints ("Avl Bal Rs.9,940.00"), in paise. Rupees only; left out when it is
+   * masked, negative, overdrawn ("Dr") or in another currency. Stored on the capture; not used yet (ticket 156). */
+  balanceMinor?: number;
+  /** A card's available limit the message prints ("Avl Lmt INR 1,02,340.00"), in paise. Same rules as the balance. */
+  availableLimitMinor?: number;
 }
 
 export interface LoanEmiParse {

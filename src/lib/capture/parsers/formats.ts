@@ -3,6 +3,7 @@
 
 import { MONTH_PATTERN, parseMessageDate } from "./dates";
 import { toMinorUnits } from "./extract/amount";
+import { findAvailableLimit } from "./extract/balance";
 import type { LoanEmiParse, MoneyParse } from "./types";
 
 // "Payment Successful: Advance EMI of Rs.3,980/- received towards Navi
@@ -37,6 +38,7 @@ export function parseIdfcCardSpend(text: string, receivedAt: Date): MoneyParse |
   if (!match) return null;
   const [, amountText, bankName, last4, merchant] = match;
   const parsedDate = parseMessageDate(text, receivedAt);
+  const limit = findAvailableLimit(text);
   return {
     kind: "money",
     parserId: "idfc_card_spend",
@@ -50,5 +52,6 @@ export function parseIdfcCardSpend(text: string, receivedAt: Date): MoneyParse |
     bankName: bankName.trim(),
     date: parsedDate?.date,
     hasTime: parsedDate?.hasTime ?? false,
+    ...(limit !== undefined ? { availableLimitMinor: limit } : {}),
   };
 }
