@@ -77,6 +77,9 @@ const CapturedMessageSchema = new Schema(
         "promo",
         "reminder",
         "not_financial",
+        // A mandate notice or a fund house's note: kept for the record, never booked (ticket 157).
+        "mandate",
+        "investment",
         "processing_error",
       ],
     },

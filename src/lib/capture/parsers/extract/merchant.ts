@@ -18,6 +18,8 @@ export function findMerchant(text: string, type: "income" | "expense"): string |
     const after = text.slice((m.index ?? 0) + m[0].length).trimStart();
     if (/^(a\/c|acct|account|card)\b/i.test(after)) continue;
     if (/^(your|you|a\/c|acct|account|neft|imps|rtgs|upi)\b/i.test(value)) continue;
+    // "by debit to A/c XX7305": the word itself, never a payee (ticket 157).
+    if (/^(?:debit|credit)$/i.test(value)) continue;
     // A phone or account number is never the other party ("SMS BLOCK 7731 to 9215676766").
     if (/^\+?\d[\d\s-]{5,}/.test(value)) continue;
     if (/^(?:rs\.?|inr|₹)/i.test(value)) continue;

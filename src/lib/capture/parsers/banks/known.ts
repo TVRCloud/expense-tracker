@@ -18,8 +18,11 @@ export const REVIEW_CEILING = 0.75;
 // Money not moved yet: a refund or reversal still on its way, a credit that "will reflect".
 const NOT_YET =
   /\b(?:refund(?:ed)?\b[^.]{0,40}?\binitiated|initiated\b[^.]{0,40}?\brefund|will\s+(?:be\s+)?(?:credited|reflect(?:ed)?|refunded|reversed|processed)|will\s+reflect|in\s+\d{1,2}(?:\s*-\s*\d{1,2})?\s+(?:working\s+)?days)\b/i;
-// A mandate (set-up, change, cancel) is not a payment; read only in Review until ticket 157.
-const MANDATE = /\bmandate\b/i;
+// A mandate's own notice (set up, changed, revoked) never reaches a bank parser: notices.ts reads it first (ticket 157).
+// What is left that names a mandate is either a debit made under it (booked like any debit) or money moved while
+// setting it up (a small verification debit or credit), which stays in Review.
+const MANDATE = /\b(?:e-?mandate|mandate)\b/i;
+const MANDATE_SETUP = /\b(?:registration|register(?:ed)?|set\s?-?up|setup|creat(?:ed|ion)|verification|penny\s+drop|activation)\b/i;
 // Characters that may sit inside an amount ("9,125.00") without ending a sentence.
 const SAME_SENTENCE = String.raw`(?:[^.]|\.(?=\d))`;
 // "Credit Card Services", "Credit Card Solutions Pvt": a business name, not a card.
@@ -65,6 +68,8 @@ export abstract class KnownBankParser extends BankParser {
     if (!parse) return null;
     // Cash from an ATM has no shop, whatever word sits after "on".
     if (parse.atm && parse.merchant) parse.merchant = undefined;
+    // A debit under a mandate names the payee after the mandate word ("towards e-mandate STREAMLY"): keep the payee.
+    if (parse.merchant) parse.merchant = parse.merchant.replace(/^(?:UPI\s)?(?:e-?mandate|mandate|auto\s?-?pay)\s(?!registration|set\s?-?up|creation)(?=\S)/i, "");
     // A card bill paid from the person's bank account ("debited from A/c XX1234 ... credit card bill"): the type stays
     // income like every card payment (money into the card; ingest queues it as card_payment and never books it), and
     // the digits are only ever the card's own, never the debited account's, so it cannot suggest the wrong account.
@@ -79,9 +84,11 @@ export abstract class KnownBankParser extends BankParser {
       if (!own) delete parse.availableLimitMinor;
     }
     const shaped = this.hasShape(flat);
-    // Unsure reads stay in Review: money not moved yet, a mandate, or a message with both a debit and a credit word
+    // Unsure reads stay in Review: money not moved yet, money moved while setting up a mandate (or a credit naming one),
+    // or a message with both a debit and a credit word
     // that is not one of the bank's known shapes.
-    const unsure = NOT_YET.test(flat) || MANDATE.test(flat) || (!shaped && this.direction(flat)?.ambiguous === true);
+    const mandateUnsure = MANDATE.test(flat) && (parse.type !== "expense" || !DEBIT_WORDS.test(flat) || MANDATE_SETUP.test(flat));
+    const unsure = NOT_YET.test(flat) || mandateUnsure || (!shaped && this.direction(flat)?.ambiguous === true);
     if (unsure && parse.confidence > REVIEW_CEILING) return { ...parse, confidence: REVIEW_CEILING };
     return parse;
   }

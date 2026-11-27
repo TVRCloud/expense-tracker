@@ -13,7 +13,16 @@ export interface FoundDirection {
   ambiguous: boolean;
 }
 
+// Money into a loan ("Your loan account XX6618 is credited ... by debit to A/c XX7305", "EMI ... credited to your loan
+// account"): it left the person's own account, so it is spending from that account, never income. A disbursal (the
+// loan paying out to the person) is the other way round and keeps the usual reading.
+const LOAN_CREDITED =
+  /\bloan\s+(?:a\/c|acct|account)(?:\s*no\.?)?\s*[x*]{0,12}\d{0,16}\s+(?:is\s+|has\s+been\s+|was\s+)?credited\b|\bcredited\s+(?:to|in|into|towards)\s+(?:your\s+)?loan\s+(?:a\/c|acct|account)\b/i;
+const DEBIT_FROM_ACCOUNT = /\b(?:by\s+debit\s+(?:to|from|of)|debited\s+(?:from|to))\s+(?:your\s+)?(?:a\/c|acct|account)\b/i;
+
 export function findDirection(text: string): FoundDirection | null {
+  // Unsure which account paid unless the message says it was debited: then it is checked in Review.
+  if (LOAN_CREDITED.test(text) && !/\bdisburs/i.test(text)) return { type: "expense", ambiguous: !DEBIT_FROM_ACCOUNT.test(text) };
   const debit = text.search(DEBIT_WORDS);
   const credit = text.search(CREDIT_WORDS);
   if (debit === -1 && credit === -1) return null;

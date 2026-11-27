@@ -4490,6 +4490,70 @@ describe("ATM withdrawal detection", () => {
   });
 });
 
+// Ticket 157: a mandate notice and a fund house's note are kept, never booked and never in Review; a debit made under a
+// mandate is booked; money into a loan from the person's account is spending from that account. Invented messages.
+describe("mandate, fund house and loan messages at ingest", () => {
+  const AT = new Date("2026-12-05T06:30:00Z");
+
+  async function setup() {
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const user = await User.create({ name: "Mandate", email: `m${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    const account = await Account.create({ user: user._id, name: "Savings", type: "bank", balance: 1000000, currency: "INR", smsLastFour: ["7362"] });
+    const actor = { id: user._id.toString(), name: user.name, email: user.email, role: "user" };
+    return { user, account, actor };
+  }
+
+  async function ingest(actor: { id: string; name: string; email: string; role: string }, text: string, sender = "VM-HDFCBK-S") {
+    const { ingestCapture } = await import("@/lib/capture/ingest");
+    return ingestCapture({ user: actor, channel: "sms", text, receivedAt: AT, sender });
+  }
+
+  async function state(userId: string, captureId: string) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { default: CapturedMessage } = await import("@/models/CapturedMessage");
+    const { getReviewCounts } = await import("@/lib/reconcile/inbox");
+    const capture = await CapturedMessage.findById(captureId).lean<{ outcome: string; reason?: string; status: string; parse: { kind: string } }>();
+    const txns = await Transaction.find({ user: userId, isDeleted: { $ne: true } }).lean<{ type: string; amount: number; account: unknown }[]>();
+    return { capture: capture!, txns, counts: await getReviewCounts(userId) };
+  }
+
+  it.each([
+    ["mandate", "Your UPI-Mandate for Rs.637.00 is successfully created towards STREAMLY from A/c No: XXXX7362. UMN: 4f2a91c0d2@okaxis"],
+    ["mandate", "UPI AutoPay mandate for CloudBox of Rs 129.00 has been revoked as requested."],
+    ["investment", "Dear Investor, 41.287 units allotted in Folio No 70013348/21 under Harbor Bluechip Fund - Direct Growth at NAV 66.6052 for Rs 2,750.00 on 03-Dec-2026."],
+    ["investment", "Unit Allotment Update: Your SIP purchase of Rs.2,750.00 in Lotus Midcap Growth Fund DG has been processed at applicable NAV."],
+  ])("keeps a %s message without booking it or putting it in Review", async (reason, text) => {
+    const { actor } = await setup();
+    const res = await ingest(actor, text);
+    expect(res.body).toMatchObject({ status: "ignored", reason });
+    const { capture, txns, counts } = await state(actor.id, res.body.captureId);
+    expect(capture).toMatchObject({ outcome: "ignored", reason, status: "resolved", parse: { kind: reason } });
+    expect(txns).toHaveLength(0);
+    expect(counts).toMatchObject({ needsReview: 0, couldntMatch: 0 });
+  });
+
+  it("books a debit made under a mandate", async () => {
+    const { actor, account } = await setup();
+    const res = await ingest(actor, "Rs.637.00 debited from A/c XX7362 on 05-12-26 towards e-mandate STREAMLY. Avl Bal Rs 4,210.00");
+    expect(res.body.status).toBe("created");
+    const { txns } = await state(actor.id, res.body.captureId);
+    expect(txns).toHaveLength(1);
+    expect(txns[0]).toMatchObject({ type: "expense", amount: 63700 });
+    expect(String(txns[0].account)).toBe(account._id.toString());
+  });
+
+  it("books money into a loan as spending from the account it left, never as income", async () => {
+    const { actor, account } = await setup();
+    const res = await ingest(actor, "Your loan account XX6618 is credited with Rs 2,315.00 by debit to A/c XX7362 on 05-12-26.", "JD-SBIINB-S");
+    expect(res.body.status).toBe("created");
+    const { txns } = await state(actor.id, res.body.captureId);
+    expect(txns).toHaveLength(1);
+    expect(txns[0]).toMatchObject({ type: "expense", amount: 231500 });
+    expect(String(txns[0].account)).toBe(account._id.toString());
+  });
+});
+
 describe("ATM captures become transfers to cash", () => {
   const T0 = new Date("2026-09-26T06:30:00Z");
   const minutes = (n: number) => new Date(T0.getTime() + n * 60_000);

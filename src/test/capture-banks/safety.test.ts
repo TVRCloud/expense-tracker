@@ -64,6 +64,12 @@ describe.each(BANKS)("$id: safety", ({ id, sender, name }) => {
       `Rs 5 debited A/c XX5150 Avl Bal${" ".repeat(5000)}Rs 5`,
       `Rs 5 debited A/c XX5150 Avl Lmt${":".repeat(5000)}INR 5`,
       `Rs 5 debited A/c XX5150 ${"Min Bal ".repeat(700)}Rs 5`,
+      // Ticket 157: the mandate and fund house readers.
+      `Your mandate for ${"a ".repeat(2500)} has been created`,
+      `mandate created towards ${"x".repeat(5000)}`,
+      `SIP processed in ${"Big ".repeat(1200)}Fund NAV ${"1".repeat(3000)}.5`,
+      `units allotted folio ${"9".repeat(5000)} fund`,
+      `Your loan account ${"x".repeat(5000)}1 credited Rs 5 by debit to A/c XX5150`,
     ];
     for (const text of pads) {
       const start = performance.now();

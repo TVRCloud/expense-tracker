@@ -23,6 +23,8 @@ export interface SenderRow {
   /** Money read below the line: goes to Review. */
   review: number;
   loan: number;
+  /** A mandate notice or a fund house's note: kept, never booked (ticket 157). */
+  info: number;
   ignored: number;
   unknown: number;
   /** Read by a bank parser rather than the generic one or a format. */
@@ -53,6 +55,7 @@ export function tally(parse: CaptureParse, row: SenderRow) {
     if (parse.confidence >= CONFIDENCE_AUTO_CREATE) row.booked += 1;
     else row.review += 1;
   } else if (parse.kind === "loan_emi_payment") row.loan += 1;
+  else if (parse.kind === "mandate" || parse.kind === "investment") row.info += 1;
   else if (parse.kind === "ignored") row.ignored += 1;
   else row.unknown += 1;
   if (!SHARED_PARSER_IDS.has(parse.parserId)) row.bankParser += 1;
@@ -67,7 +70,7 @@ export class SenderReport {
     const key = sourceKey(input);
     let row = this.rows.get(key);
     if (!row) {
-      row = { source: key, total: 0, booked: 0, review: 0, loan: 0, ignored: 0, unknown: 0, bankParser: 0, changed: 0 };
+      row = { source: key, total: 0, booked: 0, review: 0, loan: 0, info: 0, ignored: 0, unknown: 0, bankParser: 0, changed: 0 };
       this.rows.set(key, row);
     }
     const result = this.parse(input.text, input.receivedAt, { sender: input.sender, packageName: input.packageName });
@@ -88,8 +91,8 @@ export function buildReport(inputs: Iterable<ReportInput>, parse = parseCapture)
 }
 
 export function formatReport(rows: SenderRow[]): string {
-  const head = ["source", "total", "booked", "review", "unknown", "ignored", "loan", "bank", "changed"];
-  const lines = rows.map((r) => [r.source, r.total, r.booked, r.review, r.unknown, r.ignored, r.loan, r.bankParser, r.changed].map(String));
+  const head = ["source", "total", "booked", "review", "unknown", "ignored", "loan", "info", "bank", "changed"];
+  const lines = rows.map((r) => [r.source, r.total, r.booked, r.review, r.unknown, r.ignored, r.loan, r.info, r.bankParser, r.changed].map(String));
   const widths = head.map((h, i) => Math.max(h.length, ...lines.map((l) => l[i].length)));
   const fmt = (cells: string[]) => cells.map((c, i) => (i === 0 ? c.padEnd(widths[i]) : c.padStart(widths[i]))).join("  ");
   return [fmt(head), ...lines.map(fmt)].join("\n");
