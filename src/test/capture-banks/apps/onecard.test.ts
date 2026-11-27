@@ -60,3 +60,26 @@ describe("OneCard: a bill payment received on the card", () => {
     },
   ]);
 });
+
+describe("OneCard: payments to the card and EMI wording", () => {
+  readsAll({ sender: "CP-ONECRD-S" }, [
+    {
+      name: "a payment made on OneCard is its bill, never a spend at a shop called OneCard",
+      text: "You've made a payment of Rs. 6,095.00 on OneCard on card ending 4417.",
+      want: { parserId: "onecard", cardPayment: true, amountMinor: 609500 },
+      auto: false,
+    },
+    {
+      name: "a spend followed by an offer to convert it to EMI is still a spend",
+      text: "You've made a transaction of Rs. 283.40 on HARBOR BOOKS on card ending 4417. Convert it to EMI in the app.",
+      want: { parserId: "onecard", type: "expense", amountMinor: 28340, merchant: "HARBOR BOOKS" },
+      auto: true,
+    },
+    {
+      name: "a shop called EMI MART is still a spend",
+      text: "You've made a transaction of Rs. 283.40 on EMI MART on card ending 4417.",
+      want: { parserId: "onecard", type: "expense", merchant: "EMI MART" },
+      auto: true,
+    },
+  ]);
+});

@@ -32,6 +32,11 @@ describe("Jupiter Edge: month-first dates and promo lines", () => {
       want: { parserId: "jupiter", date: new Date("2026-11-05T13:42:00Z"), hasTime: true },
     },
     {
+      name: "a date and time more than ten minutes after the message arrived is not trusted",
+      text: "Rs.41.20 debited to your Edge CSB Bank RuPay Credit Card ending 4417 on 11/12/26, 7:12 PM. UPI Ref 736604516620.",
+      want: { parserId: "jupiter", date: undefined, hasTime: false },
+    },
+    {
       name: "a date that would be after the message arrived is not trusted",
       text: "Rs.41.20 debited to your Edge CSB Bank RuPay Credit Card ending 4417 on 12/9/26. UPI Ref 736604517749.",
       want: { parserId: "jupiter", date: undefined, hasTime: false },

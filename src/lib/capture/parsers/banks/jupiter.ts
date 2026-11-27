@@ -11,7 +11,8 @@ import { CREDIT_WORDS } from "../extract/direction";
 
 const EDGE = String.raw`(?:Edge\s)?(?:CSB\sBank\s)?(?:RuPay\s)?Credit\sCard\sending\s\d{4}`;
 const MONTH_FIRST = /\bon\s(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})(?:,?\s(?:at\s)?(\d{1,2}):(\d{2})\s?([AP]M)?)?(?!\d)/i;
-const DAY_MS = 24 * 60 * 60 * 1000;
+// A message is sent right after the payment: a date later than a few minutes after it arrived is not trusted.
+const FUTURE_SLACK_MS = 10 * 60 * 1000;
 
 export class JupiterParser extends AppParser {
   readonly id = "jupiter";
@@ -31,7 +32,7 @@ export class JupiterParser extends AppParser {
     return super.cardPayment(text);
   }
 
-  /** "on M/D/YY[, h:mm AM]". A date that would be more than a day after the message arrived is not trusted: the
+  /** "on M/D/YY[, h:mm AM]". A date more than ten minutes after the message arrived is not trusted: the
    * received time is used instead. */
   protected override date(text: string, receivedAt: Date): ParsedDate | null {
     const m = text.match(MONTH_FIRST);
@@ -48,7 +49,7 @@ export class JupiterParser extends AppParser {
     const check = new Date(Date.UTC(year, month - 1, day));
     if (check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) return null;
     const date = istToDate(year, month - 1, day, hours, minutes);
-    if (date.getTime() > receivedAt.getTime() + DAY_MS) return null;
+    if (date.getTime() > receivedAt.getTime() + FUTURE_SLACK_MS) return null;
     return { date, hasTime: Boolean(m[4]) };
   }
 }

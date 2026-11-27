@@ -8,9 +8,16 @@ import { cleanParty, NAME } from "./known";
 import type { FoundDirection } from "../extract/direction";
 
 const SPEND_VERB = String.raw`(?:made\sa\s(?:transaction|booking|purchase|payment)|fueled\sup|shopped|spent|paid|hand-picked\s[a-z]{3,20})`;
-const SPEND = new RegExp(String.raw`^${YOUVE}\s${SPEND_VERB}\s(?:of|for)\s${AMT}\s(?:at|on)\s${NAME}\son\s(?:your\s)?card\sending\s\d{4}\b`, "i");
-// "You've converted a transaction of ... into EMI": the purchase was already spent.
-const NOT_A_SPEND = /\bconvert(?:ed)?\b|\bEMIs?\b/i;
+// "on OneCard" is a payment to the card itself (its bill), never a shop.
+const SPEND = new RegExp(String.raw`^${YOUVE}\s${SPEND_VERB}\s(?:of|for)\s${AMT}\s(?:at|on)\s(?!OneCard\b)${NAME}\son\s(?:your\s)?card\sending\s\d{4}\b`, "i");
+// "You've converted a transaction of ... into EMI": the purchase was already spent. Only that opening counts, so a
+// spend followed by "Convert it to EMI in the app", or a shop called "EMI MART", is still a spend.
+const NOT_A_SPEND = new RegExp(String.raw`^${YOUVE}\sconverted\b`, "i");
+// The card's bill paid: "You've made a payment of Rs. 6,110.00 on OneCard ...", "Payment of Rs. ... received on card".
+const BILL_PAID = new RegExp(
+  String.raw`^${YOUVE}\smade\sa\spayment\sof\s${AMT}\s(?:on|to|towards)\s(?:your\s)?OneCard\b|\b(?:re)?payment\sof\s${AMT}\s(?:has\sbeen\s)?received\s(?:on|towards|for)\s(?:your\s)?(?:OneCard\s)?card\sending\s\d{4}\b`,
+  "i"
+);
 
 export class OneCardParser extends AppParser {
   readonly id = "onecard";
@@ -24,9 +31,10 @@ export class OneCardParser extends AppParser {
     return super.direction(text);
   }
 
-  /** "Payment of Rs. 6,110.00 received on card ending 4417": the bill paid (the shared rule stops at the "." of "Rs."). */
+  /** The bill paid: "You've made a payment of ... on OneCard", "Payment of Rs. 6,110.00 received on card ending 4417"
+   * (the shared rule stops at the "." of "Rs."). */
   protected override cardPayment(text: string): boolean {
-    if (new RegExp(String.raw`\b(?:re)?payment\sof\s${AMT}\s(?:has\sbeen\s)?received\s(?:on|towards|for)\s(?:your\s)?(?:OneCard\s)?card\sending\s\d{4}\b`, "i").test(text)) return true;
+    if (BILL_PAID.test(text)) return true;
     return super.cardPayment(text);
   }
 

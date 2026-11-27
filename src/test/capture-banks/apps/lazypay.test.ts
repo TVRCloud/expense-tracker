@@ -35,3 +35,18 @@ describe("LazyPay: payments to LazyPay are repayments", () => {
     },
   ]);
 });
+
+describe("LazyPay: only a completed repayment is a card payment", () => {
+  readsAll({ sender: "BP-LZYPAY-S" }, [
+    {
+      name: "an offer to repay is not a repayment",
+      text: "Make a repayment of Rs. 515 today and get 4% cashback on LazyPay!",
+      want: { kind: "unknown" },
+    },
+    {
+      name: "a repayment still pending is not a repayment",
+      text: "Repayment of Rs. 1,472.00 pending. Pay now to avoid late fee.",
+      want: { kind: "unknown" },
+    },
+  ]);
+});

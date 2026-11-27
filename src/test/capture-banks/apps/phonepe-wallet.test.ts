@@ -58,3 +58,20 @@ describe("PhonePe wallet: refunds and what a payee never contains", () => {
     },
   ]);
 });
+
+describe("PhonePe wallet: only the sentence that names the wallet", () => {
+  readsAll({ sender: "JD-PHONPE-S" }, [
+    {
+      name: "a bank payment then a wallet cashback reads the cashback, not the payment",
+      text: "You've paid Rs.47.60 to SHOPKART. Cashback of Rs.4.85 credited to your PhonePe wallet.",
+      want: { parserId: "phonepe_wallet", type: "income", amountMinor: 485 },
+      auto: false,
+    },
+    {
+      name: "a wallet payment then a cashback still to come reads the payment",
+      text: "You've paid Rs.47.60 via PhonePe wallet for SHOPKART. Cashback of Rs.4.85 will be credited to your PhonePe wallet.",
+      want: { parserId: "phonepe_wallet", type: "expense", amountMinor: 4760, merchant: "SHOPKART" },
+      auto: false,
+    },
+  ]);
+});

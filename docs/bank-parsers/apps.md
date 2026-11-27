@@ -23,6 +23,9 @@ keep reading through the shared rules exactly as before. Only the SMS headers be
   null, so the generic parser reads it as before; the bank's own message records that payment.
 - Direction comes only from the words before "PhonePe wallet", so a shop with "REFUND" in its name stays a payment.
   Money coming back is tested first: "paid to RIDES was refunded to your PhonePe wallet" is income, and keeps RIDES.
+- The amount, the verb and the payee come only from the sentence that names the wallet: "You've paid Rs.48 to SHOP.
+  Cashback of Rs.5 credited to your PhonePe wallet." is a cashback of 5 (the payment of 48 left the bank, which
+  records it).
 - No account: every read goes to Review.
 
 ## Jupiter Edge (`jupiter`)
@@ -32,7 +35,7 @@ keep reading through the shared rules exactly as before. Only the SMS headers be
 - A credit to the card is a card bill payment (Review, at most 0.5) unless the sentence that holds the amount says
   refund, reversal or cashback; a promo line after it ("Earn cashback on every UPI spend") does not count.
 - Its dates are month first ("11/5/26" is 5 November). The shared reader reads day first, so this parser reads them
-  itself; a date more than a day after the message arrived is not trusted and the received time is used.
+  itself; a date more than ten minutes after the message arrived is not trusted and the received time is used.
 
 ## slice (`slice`)
 
@@ -51,8 +54,10 @@ keep reading through the shared rules exactly as before. Only the SMS headers be
 - Header: `ONECRD`.
 - Its spends start "You've ..." and carry no debit word. Only spend verbs (made a transaction, booking, purchase or
   payment, fueled up, shopped, spent, paid, hand-picked ...) followed by "of/for <amount> at/on SHOP on card ending
-  NNNN" are read as a spend on the card. A cashback, a refund, or converting an earlier purchase into EMI (no new
-  money spent) goes through the shared rules.
+  NNNN" are read as a spend on the card, and "on OneCard" is never the shop. A cashback, a refund, or a message that
+  starts "You've converted" (an earlier purchase into EMI: no new money spent) goes through the shared rules; an offer
+  to convert after a spend, or a shop called "EMI MART", does not stop it being a spend.
+- "You've made a payment of ... on OneCard" is the card's bill paid: a card payment in Review.
 - "Payment of ... received on card ending NNNN" is a card payment (the shared rule stops at the "." of "Rs.").
 
 ## CRED (`cred`)
@@ -72,7 +77,8 @@ keep reading through the shared rules exactly as before. Only the SMS headers be
   account number, so it goes to Review.
 - A repayment ("Repayment of ...", "payment of ... received towards / against your LazyPay ...", "Your payment of ...
   on LazyPay was successful") settles the line like a card bill: a card payment in Review, never income. "LazyPay" is
-  never read as the shop.
+  never read as the shop. Only a repayment that happened counts (received, successful, paid, done): an offer to repay
+  or a pending repayment is not one.
 
 ## Amazon Pay balance through Juspay (`juspay`)
 

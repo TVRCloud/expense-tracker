@@ -7,10 +7,19 @@
 import { AMT, AppParser, YOUVE } from "./app-shared";
 import { cleanParty, NAME, sharedParty } from "./known";
 import type { FoundAccount } from "../extract/account";
+import type { FoundAmount } from "../extract/amount";
 import type { FoundDirection } from "../extract/direction";
 import type { MoneyParse } from "../types";
 
 const WALLET = /\bPhonePe\swallet\b/i;
+
+/** The sentence that names the wallet ("You've paid Rs.48 to SHOP. Cashback of Rs.5 credited to your PhonePe
+ * wallet." gives the second one): its amount, verb and payee are the wallet's; another sentence may be about other
+ * money. A "." in "Rs." or inside an amount does not end a sentence. */
+function walletSentence(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.split(/(?<!\b(?:Rs|no))\.\s+(?=[A-Z])/).find((s) => WALLET.test(s)) ?? flat;
+}
 
 export class PhonePeWalletParser extends AppParser {
   readonly id = "phonepe_wallet";
@@ -26,12 +35,17 @@ export class PhonePeWalletParser extends AppParser {
     return WALLET.test(text) ? super.parse(text, receivedAt) : null;
   }
 
-  /** Only the words before "PhonePe wallet" say which way the money went, so a shop with "REFUND" in its name after
+  protected override amount(text: string): FoundAmount | null {
+    return super.amount(walletSentence(text));
+  }
+
+  /** Only the words before "PhonePe wallet", in its own sentence, say which way the money went, so a shop with "REFUND" in its name after
    * it never turns a payment into income. Money coming back is tested first: "Rs.62 paid to RIDES was refunded to your
    * PhonePe wallet" is a refund. */
   protected override direction(text: string): FoundDirection | null {
-    const at = text.search(WALLET);
-    const head = at > 0 ? text.slice(0, at) : "";
+    const sentence = walletSentence(text);
+    const at = sentence.search(WALLET);
+    const head = at > 0 ? sentence.slice(0, at) : "";
     if (/\b(?:added|credited|refunded|reversed|received)\b/i.test(head)) return { type: "income", ambiguous: false };
     if (/\b(?:paid|spent|debited|sent|used)\b/i.test(head)) return { type: "expense", ambiguous: false };
     return null;
@@ -41,7 +55,8 @@ export class PhonePeWalletParser extends AppParser {
     return null;
   }
 
-  protected override merchant(text: string, type: "income" | "expense"): string | undefined {
+  protected override merchant(full: string, type: "income" | "expense"): string | undefined {
+    const text = walletSentence(full);
     if (type === "expense") {
       return cleanParty(text.match(new RegExp(String.raw`\bvia\sPhonePe\swallet\sfor\s${NAME}(?:\.\s|\.$|$)`, "i"))?.[1]);
     }
