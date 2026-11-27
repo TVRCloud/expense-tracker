@@ -20,6 +20,11 @@ export class CredParser extends AppParser {
 
   /** Only CRED's own card bill shape, or a message the shared rule already calls a card payment. A spend made with a
    * card ("payment of Rs 799 to Airtel using credit card") is never one, so it goes to the generic parser. */
+  /** CRED's own bill shape is a card payment even when a cashback line follows it ("You earned cashback of Rs.20"). */
+  protected override cardPayment(text: string): boolean {
+    return this.hasShape(text.replace(/\s+/g, " ").trim()) || super.cardPayment(text);
+  }
+
   override parse(text: string, receivedAt: Date): MoneyParse | null {
     const flat = text.replace(/\s+/g, " ").trim();
     if (!this.hasShape(flat) && !isCardPayment(flat)) return null;

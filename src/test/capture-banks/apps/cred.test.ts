@@ -23,3 +23,14 @@ describe("CRED parser", () => {
     },
   ]);
 });
+
+describe("CRED: a cashback line after a card bill payment", () => {
+  readsAll({ sender: "JK-CREDIN-S" }, [
+    {
+      name: "is still a card payment",
+      text: "Payment of Rs.8,465 has been successfully credited towards your ICICI Bank Credit Card. You earned cashback of Rs.21.",
+      want: { parserId: "cred", cardPayment: true, amountMinor: 846500 },
+      auto: false,
+    },
+  ]);
+});

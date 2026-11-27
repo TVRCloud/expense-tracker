@@ -18,3 +18,20 @@ describe("LazyPay parser", () => {
     },
   ]);
 });
+
+describe("LazyPay: payments to LazyPay are repayments", () => {
+  readsAll({ sender: "BP-LZYPAY-S" }, [
+    {
+      name: "a payment against the statement",
+      text: "Thanks for your payment of Rs. 1,472.00 against your LazyPay statement.",
+      want: { parserId: "lazypay", cardPayment: true, amountMinor: 147200 },
+      auto: false,
+    },
+    {
+      name: "a payment on LazyPay is never a purchase from a shop called LazyPay",
+      text: "Your payment of Rs. 1,472.00 on LazyPay was successful.",
+      want: { parserId: "lazypay", cardPayment: true, merchant: undefined },
+      auto: false,
+    },
+  ]);
+});

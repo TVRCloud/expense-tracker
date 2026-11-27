@@ -19,7 +19,7 @@ describe("slice parser", () => {
     {
       name: "an online card transaction with no debit word is a spend (Review: no digits)",
       text: "Your slice credit card transaction of RS. 899 on shopkart.in is successful. If not you, call 080-4631-7720 - slice",
-      source: { sender: "AX-SLICEIT-S" },
+      source: { sender: "AD-SLCEIT-S" },
       want: { parserId: "slice", type: "expense", amountMinor: 89900, merchant: "shopkart.in" },
       auto: false,
     },
@@ -43,6 +43,34 @@ describe("slice parser", () => {
       source: { sender: "VA-SLCBNK-S" },
       want: { parserId: "slice", type: "expense", amountMinor: 19900, last4: "4417", merchant: "TUNEFLOW MEDIA" },
       auto: true,
+    },
+  ]);
+});
+
+describe("slice: what 'You've got' and 'Sent' mean", () => {
+  readsAll({ sender: "AD-SLCEIT-S" }, [
+    {
+      name: "a new bill is never income",
+      text: "You've got a new bill of ₹2,315 for your slice credit card xx4417. Pay by 05-Dec-26.",
+      want: { kind: "unknown" },
+    },
+    {
+      name: "money moved from the slice card into the slice account is booked on the account",
+      text: "You've got ₹515 from your slice credit card xx4417 into your slice bank a/c xx8821.",
+      source: { sender: "VA-SLCBNK-S" },
+      want: { parserId: "slice", type: "income", amountMinor: 51500, last4: "8821" },
+    },
+    {
+      name: "a payment sent to an account never takes the payee's digits",
+      text: "Sent Rs.515 to a/c XXXX5521 (UPI transaction success). Sent from slice.",
+      want: { parserId: "slice", type: "expense", amountMinor: 51500, last4: undefined, merchant: undefined },
+      auto: false,
+    },
+    {
+      name: "a UPI id made of digits is never the payee",
+      text: "Sent Rs.515 to 9840057316@ybl (UPI transaction success). Sent from slice.",
+      want: { parserId: "slice", merchant: undefined },
+      auto: false,
     },
   ]);
 });

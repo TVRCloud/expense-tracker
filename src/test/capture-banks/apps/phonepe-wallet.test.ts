@@ -37,3 +37,24 @@ describe("PhonePe wallet parser", () => {
     },
   ]);
 });
+
+describe("PhonePe wallet: refunds and what a payee never contains", () => {
+  readsAll({ sender: "JD-PHONPE-S" }, [
+    {
+      name: "a payment refunded to the wallet is income and keeps who refunded it",
+      text: "Rs.61.50 paid to MERU RIDES was refunded to your PhonePe wallet.",
+      want: { parserId: "phonepe_wallet", type: "income", amountMinor: 6150, merchant: "MERU RIDES" },
+      auto: false,
+    },
+    {
+      name: "a phone number is never part of the payee",
+      text: "You've paid Rs.149 via PhonePe wallet for Mobile recharge of 9840057316. Remaining balance: Rs.21.",
+      want: { parserId: "phonepe_wallet", merchant: "Mobile recharge" },
+    },
+    {
+      name: "a date and time after the payee are not part of it",
+      text: "You've paid Rs.149 via PhonePe wallet for GREEN LEAF CAFE on 11-11-26 at 13:05. Remaining balance: Rs.21.",
+      want: { parserId: "phonepe_wallet", merchant: "GREEN LEAF CAFE" },
+    },
+  ]);
+});

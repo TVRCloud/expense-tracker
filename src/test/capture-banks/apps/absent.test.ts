@@ -18,8 +18,8 @@ describe("app parses leave out what does not belong to an account", () => {
 
   it("a spend or a refund on a Jupiter Edge card is never a card payment", () => {
     for (const text of [
-      "Rs.63.45 debited to your Edge CSB Bank RuPay Credit Card ending 4417 on 4/11/26 at 9:05 PM. UPI Ref 731122334455.",
-      "Refund of Rs.63.45 credited to your Edge CSB Bank RuPay Credit Card ending 4417 on 4/11/26.",
+      "Rs.63.45 debited to your Edge CSB Bank RuPay Credit Card ending 4417 on 10/28/26, 9:05 PM. UPI Ref 736604518827.",
+      "Refund of Rs.63.45 credited to your Edge CSB Bank RuPay Credit Card ending 4417 on 11/9/26.",
     ]) {
       expect(read(text, "VK-JTEDGE-S").cardPayment).toBeUndefined();
     }

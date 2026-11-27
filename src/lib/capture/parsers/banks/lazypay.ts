@@ -7,8 +7,12 @@ import { cleanParty, NAME } from "./known";
 import type { FoundAccount } from "../extract/account";
 import type { FoundDirection } from "../extract/direction";
 
-const PURCHASE = new RegExp(String.raw`\b(?:txn|transaction|payment)\b[^.]{0,40}?\b${AMT}\b[^.]{0,40}?\bon\s${NAME}\swas\ssuccessful\b`, "i");
-const REPAY = new RegExp(String.raw`\brepayment\sof\s${AMT}\b|\b(?:payment|amount)\sof\s${AMT}\s(?:has\sbeen\s)?received\stowards\syour\sLazyPay\b`, "i");
+// A purchase names the shop; "on LazyPay" is a payment to LazyPay itself (a repayment).
+const PURCHASE = new RegExp(String.raw`\b(?:txn|transaction|payment)\b[^.]{0,40}?\b${AMT}\b[^.]{0,40}?\bon\s(?!LazyPay\b)${NAME}\swas\ssuccessful\b`, "i");
+const REPAY = new RegExp(
+  String.raw`\brepayment\sof\s${AMT}\b|\b(?:payment|amount)\sof\s${AMT}\s(?:has\sbeen\s)?received\stowards\syour\sLazyPay\b|\bpayment\sof\s${AMT}\s(?:against|towards|for)\syour\sLazyPay\b|\bpayment\sof\s${AMT}\son\sLazyPay\swas\ssuccessful\b`,
+  "i"
+);
 
 export class LazyPayParser extends AppParser {
   readonly id = "lazypay";

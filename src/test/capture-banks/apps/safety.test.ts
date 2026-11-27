@@ -11,7 +11,6 @@ const APPS = [
   { id: "cred", sender: "JK-CREDIN-S", name: "CRED" },
   { id: "lazypay", sender: "BP-LZYPAY-S", name: "LazyPay" },
   { id: "juspay", sender: "JM-JUSPAY-S", name: "Amazon Pay" },
-  { id: "cashfree", sender: "JX-CSHFRE-S", name: "Cashfree" },
 ];
 
 const generic = createCaptureParser([]);
@@ -26,7 +25,7 @@ function tricky(app: string): { name: string; text: string; ok?: "income" }[] {
     { name: "reversal to come", text: `Txn of Rs.618 on ${app} card 7731 at GADGETCO On 2026-11-03 reversed. Amount will be credited in 7 days.` },
     { name: "card bill payment received", text: `Your ${app} Credit Card 7731 payment of Rs.6,240.00 has been received on 04-11-26. Thank you.` },
     { name: "payment to a credit card", text: `Payment Successful! Rs. 4,415.00 from A/c ****7731 to ${app} Credit Card XX2268 via NetBanking.` },
-    { name: "payment credited to a card", text: `Acct XX7731 debited for Rs 7,705.00 on 04-Nov-26; ${app} Credit Card XX5184 credited. UPI:731100441122.` },
+    { name: "payment credited to a card", text: `Acct XX7731 debited for Rs 7,705.00 on 04-Nov-26; ${app} Credit Card XX5184 credited. UPI:736604513390.` },
     { name: "credit card bill debit", text: `INR 8,120.00 debited from A/c no. XX663107 on CREDIT CARD BILL PAYMENT 04-11-2026 09:41:08 IST. - ${app}` },
     { name: "mandate set-up", text: `${app} Acct XX7731 credited Rs 2.65 on 04-Nov-26. Info NACH*MANDATE REGISTRATION*SETUP.` },
     { name: "failed payment", text: `Your txn of Rs 287.00 from A/c XX7731 to PANTRYCO has failed. -${app}` },
@@ -77,7 +76,6 @@ describe.each(APPS)("$id: safety", ({ id, sender, name }) => {
       `Payment of Rs.8,465 has been successfully credited towards your ${"ICICI ".repeat(800)}Credit Card`,
       `Your txn TXN5812640 of Rs. 236.40 on ${"QUICK ".repeat(800)}was`,
       `Payment of Rs 366.85 using Apay Balance successful at ${"CLOUD ".repeat(800)}`,
-      `Payment INR 452.70 (ID:8812203344) confirmed for order #${"o".repeat(60)} on ${"Lantern ".repeat(600)}`,
       `Repayment of Rs.2,315 received for the slice credit card ${"Rs.1 ".repeat(900)}`,
     ];
     for (const text of pads) {
@@ -85,5 +83,40 @@ describe.each(APPS)("$id: safety", ({ id, sender, name }) => {
       parseCapture(text, RECEIVED, { sender });
       expect(performance.now() - start).toBeLessThan(250);
     }
+  });
+});
+
+/** Tricky messages written in each app's OWN shapes (ticket 175 review): a cashback, a bill, an EMI conversion, a
+ * refund, a repayment, a promo after a real event, a decline. `ok` is the only type that may be booked without
+ * Review; left out, nothing may be. */
+const OWN_SHAPES: { sender: string; name: string; text: string; ok?: "income" | "expense" }[] = [
+  { sender: "JD-PHONPE-S", name: "wallet refund", text: "Rs.88.20 paid to CITY CABS was refunded to your PhonePe wallet." },
+  { sender: "JD-PHONPE-S", name: "wallet cashback", text: "Rs.15 cashback has been credited to your PhonePe wallet." },
+  { sender: "JD-PHONPE-S", name: "wallet payment declined", text: "Your payment of Rs.88.20 via PhonePe wallet for CITY CABS has been declined." },
+  { sender: "VK-JTEDGE-S", name: "Edge bill due", text: "Your Edge CSB Bank RuPay Credit Card ending 4417 bill of Rs.3,215.40 is due on 11/28/26." },
+  { sender: "VK-JTEDGE-S", name: "Edge cashback", text: "Rs.12.65 cashback credited to your Edge CSB Bank RuPay Credit Card ending 4417 on 11/9/26.", ok: "income" },
+  { sender: "VK-JTEDGE-S", name: "Edge payment with a promo", text: "Rs.3,215.40 credited to your Edge CSB Bank RuPay Credit Card ending 4417 on 11/9/26. Earn 2% cashback on UPI!" },
+  { sender: "AD-SLCEIT-S", name: "slice bill", text: "You've got a new bill of ₹3,215 for your slice credit card xx4417. Pay by 05-Dec-26." },
+  { sender: "AD-SLCEIT-S", name: "slice repayment", text: "Payment of ₹3,215 received for the slice credit card. Thank you!" },
+  { sender: "AD-SLCEIT-S", name: "slice cashback", text: "Rs.42 credited to your slice account as cashback.", ok: "income" },
+  { sender: "AD-SLCEIT-S", name: "slice EMI conversion", text: "Your slice credit card transaction of RS. 12,400 on gadgethub.in is converted into 6 EMIs." },
+  { sender: "CP-ONECRD-S", name: "OneCard cashback", text: "You've earned a cashback of Rs. 36 on card ending 4417.", ok: "income" },
+  { sender: "CP-ONECRD-S", name: "OneCard EMI conversion", text: "You've converted a transaction of Rs. 12,400 on GADGET HUB on card ending 4417 into EMI." },
+  { sender: "CP-ONECRD-S", name: "OneCard refund", text: "You've received a refund of Rs. 305.40 from HARBOR BOOKS on card ending 4417.", ok: "income" },
+  { sender: "CP-ONECRD-S", name: "OneCard bill paid", text: "Payment of Rs. 6,110.00 received on card ending 4417. Thank you!" },
+  { sender: "JK-CREDIN-S", name: "CRED bill with cashback", text: "Payment of Rs.6,110 has been successfully credited towards your HDFC Bank Credit Card. You earned cashback of Rs.14." },
+  { sender: "BP-LZYPAY-S", name: "LazyPay statement", text: "Your LazyPay statement of Rs. 2,740.00 is generated. Pay by 05-Dec." },
+  { sender: "BP-LZYPAY-S", name: "LazyPay repayment", text: "Thanks for your payment of Rs. 2,740.00 against your LazyPay statement." },
+  { sender: "BP-LZYPAY-S", name: "LazyPay payment on itself", text: "Your payment of Rs. 2,740.00 on LazyPay was successful." },
+  { sender: "BP-LZYPAY-S", name: "LazyPay refund", text: "Refund of Rs. 236.40 for txn TXN5812640 on QUICKMART is processed to your LazyPay account." },
+  { sender: "JM-JUSPAY-S", name: "Amazon Pay refund", text: "Rs 366.85 has been refunded to your Apay Balance for order 403-7731. Updated Balance is Rs 1,504.00 - SMS by Juspay" },
+  { sender: "JM-JUSPAY-S", name: "Amazon Pay cashback", text: "Cashback of Rs 26.35 added to your Apay Balance - SMS by Juspay" },
+];
+
+describe("tricky messages in each app's own shapes", () => {
+  it.each(OWN_SHAPES)("$name is never booked as the wrong type", ({ sender, text, ok }) => {
+    const p = parseCapture(text, RECEIVED, { sender });
+    if (booked(p) && p.kind === "money") expect(p.type).toBe(ok);
+    if (booked(p)) expect(ok).toBeDefined();
   });
 });

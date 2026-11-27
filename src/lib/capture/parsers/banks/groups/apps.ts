@@ -2,7 +2,6 @@
 // folder's parent (banks/), extends KnownBankParser (through AppParser) and is listed here in the order the registry
 // tries them.
 import type { BankParser } from "../../base";
-import { CashfreeParser } from "../cashfree";
 import { CredParser } from "../cred";
 import { JupiterParser } from "../jupiter";
 import { JuspayParser } from "../juspay";
@@ -19,5 +18,4 @@ export const APP_PARSERS: readonly BankParser[] = [
   new CredParser(),
   new LazyPayParser(),
   new JuspayParser(),
-  new CashfreeParser(),
 ];
