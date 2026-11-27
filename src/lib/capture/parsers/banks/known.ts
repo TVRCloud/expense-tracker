@@ -22,7 +22,7 @@ const MANDATE = /\bmandate\b/i;
 // Characters that may sit inside an amount ("9,125.00") without ending a sentence.
 const SAME_SENTENCE = String.raw`(?:[^.]|\.(?=\d))`;
 // "Credit Card Services", "Credit Card Solutions Pvt": a business name, not a card.
-const CARD = String.raw`credit\s*card(?!\s(?:services?|solutions?|ltd|limited|pvt|private|co|company|corp)\b)`;
+const CARD = String.raw`credit\s*card(?!\s(?:services?|svcs?|solutions?|ltd|limited|pvt|private|co|company|corp)\b)`;
 // Money paid to a credit card: its bill, not a spend or income. Tested only on the sentence holding the amount.
 const PAID_TO_CARD = [
   new RegExp(String.raw`\bto\s+(?:[A-Za-z]+\s+){0,3}${CARD}`, "i"),
@@ -34,15 +34,20 @@ const PAID_TO_CARD = [
 ];
 const AMOUNT_TOKEN = /(?:Rs\.?|INR|₹)\s?\d/i;
 
-/** The sentence that holds the amount and the money verb, so promo or help text after it ("Pay your credit card
- * bill to ...") is never read as what happened. A "." inside an amount, "Rs." or "no." does not end a sentence. */
+// A sentence that sells or helps ("Pay your bill ...", "Earn 5% back ..."), never what happened.
+const PROMO_START = /^(?:Pay|Earn|Convert|Use|Get|Click|Download)\b/i;
+
+/** The sentence that holds the amount and the money verb, plus the sentence right after it when that one names
+ * where the money went ("... debited on 03-10-26. Towards HDFC Bank Credit Card XX6047."): it has no amount and does
+ * not start with a promo verb. Promo or help text ("Pay your credit card bill to ...") is never read as what
+ * happened. A "." inside an amount, "Rs." or "no." does not end a sentence. */
 export function moneySentence(text: string): string {
   const sentences = text.split(/(?<!\b(?:Rs|no|Avl|Bal|Txn|Trxn))\.\s+(?=[A-Z])/);
-  return (
-    sentences.find((s) => AMOUNT_TOKEN.test(s) && (DEBIT_WORDS.test(s) || CREDIT_WORDS.test(s))) ??
-    sentences.find((s) => AMOUNT_TOKEN.test(s)) ??
-    text
-  );
+  let i = sentences.findIndex((s) => AMOUNT_TOKEN.test(s) && (DEBIT_WORDS.test(s) || CREDIT_WORDS.test(s)));
+  if (i < 0) i = sentences.findIndex((s) => AMOUNT_TOKEN.test(s));
+  if (i < 0) return text;
+  const next = sentences[i + 1];
+  return next && !AMOUNT_TOKEN.test(next) && !PROMO_START.test(next.trim()) ? `${sentences[i]}. ${next}` : sentences[i];
 }
 
 export abstract class KnownBankParser extends BankParser {
@@ -61,7 +66,8 @@ export abstract class KnownBankParser extends BankParser {
     if (parse.cardPayment && !isCardPayment(flat) && this.direction(flat)?.type === "expense") {
       const card = this.paidCard(flat);
       const debited = this.account(flat, "expense");
-      const own = card && card.last4 !== debited?.last4 ? card : null;
+      // The account found is the card itself ("Your HDFC Bank Credit Card 5150 payment of ..."): keep it.
+      const own = debited?.instrument === "card" ? debited : card && card.last4 !== debited?.last4 ? card : null;
       parse.last4 = own?.last4;
       parse.instrument = own ? "card" : undefined;
     }
@@ -100,7 +106,7 @@ const NOT_A_PARTY =
   /^(?:dispute|call|report|block|receive|clearing|reissue|mobile\s+x?\d+|an\s+a\/c|the\s+beneficiary|transfer\s+of|IST)(?=[\s.,;:]|$)|^merchant$/i;
 /** A masked number or an account, never a payee ("XX4410", "A/c 5150"). */
 const ACCOUNT_LIKE = new RegExp(
-  String.raw`(?:^|\s)[x*]{2,}\d+\b|\b(?:a\/c|acct|account)\b|\b${CARD}\b|\b(?:rs|inr)\.?\s?\d|^[\d\s.,-]+$`,
+  String.raw`(?:^|\s)[x*]{2,}\d+\b|\bac\s?x+\d|\b(?:a\/c|acct|account)\b|\b${CARD}\b|\b(?:rs|inr)\.?\s?\d|^[\d\s.,-]+$`,
   "i"
 );
 

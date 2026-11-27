@@ -156,3 +156,68 @@ describe("SBI card spend written 'done at SHOP on your card'", () => {
     expect(p.confidence).toBeLessThanOrEqual(0.6);
   });
 });
+
+describe("a card bill payment whose card is named in the next sentence", () => {
+  const cases = [
+    {
+      sender: "AX-ICICIT-S",
+      text: "ICICI Bank Acct XX274 debited for Rs 6,215.00 on 05-Oct-26. ICICI Bank Credit Card XX3391 credited. UPI:604400131313.",
+      last4: "3391",
+    },
+    {
+      sender: "VM-HDFCBK-S",
+      text: "Rs.4,780.00 debited from A/c XX5150 on 05-10-26. Towards HDFC Bank Credit Card XX6047. Ref 604400132424.",
+      last4: "6047",
+    },
+    {
+      sender: "AX-AXISBK-S",
+      text: "INR 7,360.00 debited from A/c no. XX441907 on 05-10-26. Paid to Axis Bank Credit Card XX2208. - Axis Bank",
+      last4: "2208",
+    },
+    {
+      sender: "BM-IDFCFB-S",
+      text: "Your A/C XXXXX9283 is debited by INR 5,905.00 on 05/10/26. Paid towards your IDFC FIRST Bank Credit Card XX7716. New Bal :INR 880.40",
+      last4: "7716",
+    },
+  ];
+
+  it.each(cases)("$sender: a card payment with the card's digits", ({ sender, text, last4 }) => {
+    const p = parseCapture(text, RECEIVED, { sender });
+    expect(p).toMatchObject({ kind: "money", cardPayment: true, last4, instrument: "card" });
+    expect(p.confidence).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+  });
+
+  it("a promo sentence after a debit is still not read as a card payment", () => {
+    const p = parseCapture(
+      "Rs.212.00 debited from A/c XX5150 on 05-10-26 to VPA tiffin.box@ybl. Pay your HDFC Bank Credit Card bill on time to earn points.",
+      RECEIVED,
+      { sender: "VM-HDFCBK-S" }
+    );
+    expect(p).toMatchObject({ kind: "money", type: "expense", merchant: "tiffin.box@ybl" });
+    expect(p.kind === "money" && p.cardPayment).toBeFalsy();
+  });
+});
+
+describe("card bill payment received on the card keeps the card's digits", () => {
+  it("HDFC", () => {
+    const p = parseCapture("Your HDFC Bank Credit Card 5150 payment of Rs.8,240.00 has been received on 05-10-26.", RECEIVED, {
+      sender: "VM-HDFCBK-S",
+    });
+    expect(p).toMatchObject({ kind: "money", cardPayment: true, last4: "5150", instrument: "card" });
+  });
+});
+
+describe("merchant filters", () => {
+  it("a Kotak account written 'AC X1234' is never the merchant", () => {
+    const p = parseCapture("Rs.420.00 credited to Kotak Bank AC X6047 on 05-10-26 by NEFT.", RECEIVED, { sender: "JD-KOTAKB-S" });
+    expect(p.kind === "money" && p.merchant).toBeFalsy();
+  });
+
+  it("a payee called CREDIT CARD SVCS LTD is a merchant, not a card", () => {
+    const p = parseCapture("Rs.318.00 debited from A/c XX5150 on 05-10-26 to CREDIT CARD SVCS LTD. UPI Ref 604400135656.", RECEIVED, {
+      sender: "VM-HDFCBK-S",
+    });
+    expect(p).toMatchObject({ kind: "money", type: "expense", merchant: "CREDIT CARD SVCS LTD" });
+    expect(p.kind === "money" && p.cardPayment).toBeFalsy();
+  });
+});
