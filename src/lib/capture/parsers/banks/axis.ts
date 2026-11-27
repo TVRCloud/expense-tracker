@@ -21,10 +21,10 @@ export class AxisParser extends KnownBankParser {
   ];
 
   protected override account(text: string, type: "income" | "expense"): FoundAccount | null {
-    const acct = text.match(/\bA\/c\sno\.?\s?[X*]{0,8}(\d{4,12})\b/i);
+    const acct = text.match(/(?<!\b(?:loan|card)\s)\bA\/c\sno\.?\s?[X*]{0,8}(\d{4,12})\b/i);
     if (acct) return { last4: acct[1].slice(-4), instrument: "account" };
     // The account is masked out entirely ("A/c no. XXxxxx"): no digits, rather than the BLOCKCARD card's.
-    if (/\bA\/c\sno\.?\s?[X*x]{1,12}[a-z]{0,6}\b/i.test(text)) return null;
+    if (/(?<!\b(?:loan|card)\s)\bA\/c\sno\.?\s?[X*x]{1,12}[a-z]{0,6}\b/i.test(text)) return null;
     const card = text.match(/\bCard\sno\.?\s?[X*]{0,8}(\d{4})\b/i);
     if (card) return { last4: card[1], instrument: "card" };
     return super.account(text, type);

@@ -25,8 +25,11 @@ export function findLast4(text: string, type?: "income" | "expense"): FoundAccou
   if (match && !/\bloan\s*$/i.test(text.slice(Math.max(0, (match.index ?? 0) - 6), match.index))) {
     return { last4: match[2], instrument: /card/i.test(match[1]) ? "card" : "account" };
   }
-  const bare = text.match(/\b[xX*]{2,}(\d{4})\b/);
-  if (bare) return { last4: bare[1], instrument: /card/i.test(text) ? "card" : "account" };
+  // The first bare mask that is not a loan's number ("loan account XX6618"): a loan is never the person's own account.
+  for (const bare of text.matchAll(/\b[xX*]{2,}(\d{4})\b/g)) {
+    if (/\bloan\s+(?:a\/c|acct|account)(?:\s*no\.?)?\s*$/i.test(text.slice(Math.max(0, (bare.index ?? 0) - 24), bare.index))) continue;
+    return { last4: bare[1], instrument: /card/i.test(text) ? "card" : "account" };
+  }
   return null;
 }
 

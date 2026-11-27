@@ -5,6 +5,7 @@
 import { parseMessageDate, type ParsedDate } from "./dates";
 import { findAmount, type FoundAmount } from "./extract/amount";
 import { findBankName, findLast4, findPaidCard, type FoundAccount } from "./extract/account";
+import { readAvailableLimit, readBalance, type FoundFigure } from "./extract/balance";
 import { findDirection, isAtmWithdrawal, isCardPayment, type FoundDirection } from "./extract/direction";
 import { findMerchant, findRef } from "./extract/merchant";
 import { normaliseSender } from "./sender";
@@ -51,6 +52,15 @@ export abstract class BankParser {
     const parsedDate = this.date(text, receivedAt);
     const ref = this.ref(text);
     const merchant = this.merchant(text, direction.type);
+    // Kept on the parse only; neither adds confidence (ticket 156). A figure is kept only when it belongs to the
+    // account in last4: printed next to other digits ("A/c XX9999 Avl Bal"), it is that account's. A card bill payment
+    // moves money between two of the person's accounts, so its balance could be either: left out. A limit is the
+    // card's own, so only a card read keeps it.
+    const ownFigure = (f: FoundFigure | undefined) => (f && (!f.owner || sameDigits(f.owner, account?.last4)) ? f.minor : undefined);
+    const balanceMinor = cardPayment ? undefined : ownFigure(this.balance(text));
+    const availableLimitMinor = account?.instrument === "card" || cardPayment ? ownFigure(this.availableLimit(text)) : undefined;
+    // (A card bill payment's account is the card it paid, so its limit is that card's; see KnownBankParser for the
+    // bank-account side, where the card is not named and the limit is dropped.)
 
     let confidence = 0.35 + 0.25; // amount + direction
     if (account) confidence += 0.25;
@@ -79,6 +89,8 @@ export abstract class BankParser {
       hasTime: parsedDate?.hasTime ?? false,
       ...(direction.type === "expense" && this.atm(text) ? { atm: true as const } : {}),
       ...(cardPayment ? { cardPayment: true as const } : {}),
+      ...(balanceMinor !== undefined ? { balanceMinor } : {}),
+      ...(availableLimitMinor !== undefined ? { availableLimitMinor } : {}),
     };
   }
 
@@ -117,6 +129,17 @@ export abstract class BankParser {
     return findRef(text);
   }
 
+  /** The balance the message prints (rupees only), with the digits printed next to it. Never the amount and never
+   * more confidence. */
+  protected balance(text: string): FoundFigure | undefined {
+    return readBalance(text);
+  }
+
+  /** A card's available credit limit (rupees only), with the digits printed next to it. */
+  protected availableLimit(text: string): FoundFigure | undefined {
+    return readAvailableLimit(text);
+  }
+
   /** The bonus for this message. A bank parser returns its bonus only when the message has one of its own known
    * shapes, so a sender alone never earns it. Defaults to the fixed `confidenceBonus`. */
   protected confidenceBonusFor(_text: string): number {
@@ -126,4 +149,9 @@ export abstract class BankParser {
   protected atm(text: string): boolean {
     return isAtmWithdrawal(text);
   }
+}
+
+/** Masked digits name the same account: equal, or one the end of the other (ICICI masks to three digits). */
+function sameDigits(a: string, b: string | undefined): boolean {
+  return !!b && (a.endsWith(b) || b.endsWith(a));
 }

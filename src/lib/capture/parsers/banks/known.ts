@@ -7,6 +7,7 @@
 
 import { BankParser } from "../base";
 import { CREDIT_WORDS, DEBIT_WORDS, isCardPayment } from "../extract/direction";
+import type { FoundAccount } from "../extract/account";
 import type { MoneyParse } from "../types";
 
 /** Added when a message has one of the bank's known shapes (see `KnownBankParser.shapes`). */
@@ -74,6 +75,8 @@ export abstract class KnownBankParser extends BankParser {
       const own = debited?.instrument === "card" ? debited : card && card.last4 !== debited?.last4 ? card : null;
       parse.last4 = own?.last4;
       parse.instrument = own ? "card" : undefined;
+      // A limit with no card to belong to is nobody's (ticket 156).
+      if (!own) delete parse.availableLimitMinor;
     }
     const shaped = this.hasShape(flat);
     // Unsure reads stay in Review: money not moved yet, a mandate, or a message with both a debit and a credit word
@@ -163,6 +166,17 @@ export function vpaAfter(word: "to" | "from", text: string): string | undefined 
 export function sharedParty(value: string | undefined): string | undefined {
   const v = value?.trim();
   return v && /[A-Za-z]/.test(v) && !NOT_A_PARTY.test(v) && !ACCOUNT_LIKE.test(v) ? value : undefined;
+}
+
+/** The account named right before the verb that matches the money's direction: "a/c no. XXXX5408 is debited ... and
+ * a/c XXXX9921 credited" gives 5408 for an expense and would give 9921 only for income. Ticket 156 review. */
+export function verbAccount(text: string, type: "income" | "expense"): FoundAccount | null {
+  // A loan or card account is never the person's own bank account: its digits would teach account matching a
+  // number that belongs to the loan.
+  const re = /(?<!\b(?:loan|card)\s)\b(?:a\/c|acct|account)(?:\s?no\.?)?\s?[x*]{1,12}(\d{4})\s(?:is\s|has\sbeen\s|was\s)?(debited|credited)\b/gi;
+  const want = type === "expense" ? "debited" : "credited";
+  for (const m of text.matchAll(re)) if (m[2].toLowerCase() === want) return { last4: m[1], instrument: "account" };
+  return null;
 }
 
 /** A payee name: starts with a non-space, at most 60 characters, never across a sentence end. */

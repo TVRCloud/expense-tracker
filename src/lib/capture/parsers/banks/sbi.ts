@@ -4,7 +4,7 @@
 
 import type { FoundAccount } from "../extract/account";
 import type { FoundDirection } from "../extract/direction";
-import { cleanParty, KnownBankParser, NAME, sharedParty } from "./known";
+import { cleanParty, KnownBankParser, NAME, sharedParty, verbAccount } from "./known";
 
 // Only the card-spend shapes read "done at" as a debit, never a deposit or a credit: "by SBI Debit Card 1234 done at
 // SHOP" and "done at SHOP on your SBI Credit Card ending 1234".
@@ -31,7 +31,11 @@ export class SbiParser extends KnownBankParser {
   }
 
   protected override account(text: string, type: "income" | "expense"): FoundAccount | null {
-    const glued = text.match(/\bA\/c\s?[X*]{1,8}(\d{4})\b/i);
+    // Two accounts in one message ("a/c no. XXXX5408 is debited ... and a/c XXXX9921 credited"): the one next to the
+    // verb that matches the direction, never simply the first glued mask.
+    const moved = verbAccount(text, type);
+    if (moved) return moved;
+    const glued = text.match(/(?<!\b(?:loan|card)\s)\bA\/c\s?[X*]{1,8}(\d{4})\b/i);
     if (glued) return { last4: glued[1], instrument: "account" };
     const card = text.match(/\b(?:Debit|Credit)\sCard\s(?:ending\s(?:with\s)?)?[x*]{0,8}(\d{4})\b/i);
     if (card) return { last4: card[1], instrument: "card" };

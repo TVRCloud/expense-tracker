@@ -60,6 +60,10 @@ describe.each(BANKS)("$id: safety", ({ id, sender, name }) => {
       `Rs 5 debited ${"; ".repeat(2500)} credited`,
       `Rs 5 spent using ${name} Card XX5150 on x on ${" ".repeat(5000)}a`,
       `Rs 5 debited ${"10:10:10 IST a ".repeat(330)} Avl Limit`,
+      // Ticket 156: the balance and limit readers.
+      `Rs 5 debited A/c XX5150 Avl Bal${" ".repeat(5000)}Rs 5`,
+      `Rs 5 debited A/c XX5150 Avl Lmt${":".repeat(5000)}INR 5`,
+      `Rs 5 debited A/c XX5150 ${"Min Bal ".repeat(700)}Rs 5`,
     ];
     for (const text of pads) {
       const start = performance.now();
