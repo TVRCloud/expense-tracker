@@ -27,7 +27,7 @@ const CARD = String.raw`credit\s*card(?!\s(?:services?|svcs?|solutions?|ltd|limi
 const PAID_TO_CARD = [
   new RegExp(String.raw`\bto\s+(?:[A-Za-z]+\s+){0,3}${CARD}`, "i"),
   /\bcredit\s*card\s+(?:no\.?\s*)?[x*]{0,8}\d{0,4}\s+credited\b/i,
-  /\bcredit\s*card\s+bill\s+payment\b/i,
+  /\bcredit\s*card\s+(?:bill\s+)?payment\b/i,
   new RegExp(String.raw`\btowards\s(?:your\s)?(?:[A-Za-z]+\s){0,4}${CARD}`, "i"),
   /\bInfo\s?BIL\*[^.*]{0,30}?\bcard\b/i,
   new RegExp(String.raw`\bcard\b${SAME_SENTENCE}{0,40}?\bpayment\s+of\b${SAME_SENTENCE}{0,40}?\b(?:received|credited)\b`, "i"),
@@ -36,18 +36,22 @@ const AMOUNT_TOKEN = /(?:Rs\.?|INR|₹)\s?\d/i;
 
 // A sentence that sells or helps ("Pay your bill ...", "Earn 5% back ..."), never what happened.
 const PROMO_START = /^(?:Pay|Earn|Convert|Use|Get|Click|Download)\b/i;
+// A card named by its own masked digits ("Credit Card XX6047", "card ending 6047"): the only thing that lets the next
+// sentence count, so a promo line ("Now you can pay to your credit card via UPI") never does.
+const MASKED_CARD = /\bcard\b[^.]{0,20}?(?:[x*]{2,}\s?\d{4}|ending\s+(?:with\s+)?[x*]*\d{4})\b/i;
 
 /** The sentence that holds the amount and the money verb, plus the sentence right after it when that one names
- * where the money went ("... debited on 03-10-26. Towards HDFC Bank Credit Card XX6047."): it has no amount and does
- * not start with a promo verb. Promo or help text ("Pay your credit card bill to ...") is never read as what
- * happened. A "." inside an amount, "Rs." or "no." does not end a sentence. */
+ * where the money went ("... debited on 03-10-26. Towards HDFC Bank Credit Card XX6047."): it names a card by its
+ * masked digits, has no amount and does not start with a promo verb. Promo or help text ("Pay your credit card bill
+ * to ...") is never read as what happened. A "." inside an amount, "Rs." or "no." does not end a sentence. */
 export function moneySentence(text: string): string {
   const sentences = text.split(/(?<!\b(?:Rs|no|Avl|Bal|Txn|Trxn))\.\s+(?=[A-Z])/);
   let i = sentences.findIndex((s) => AMOUNT_TOKEN.test(s) && (DEBIT_WORDS.test(s) || CREDIT_WORDS.test(s)));
   if (i < 0) i = sentences.findIndex((s) => AMOUNT_TOKEN.test(s));
   if (i < 0) return text;
   const next = sentences[i + 1];
-  return next && !AMOUNT_TOKEN.test(next) && !PROMO_START.test(next.trim()) ? `${sentences[i]}. ${next}` : sentences[i];
+  const namesCard = next && MASKED_CARD.test(next) && !AMOUNT_TOKEN.test(next) && !PROMO_START.test(next.trim());
+  return namesCard ? `${sentences[i]}. ${next}` : sentences[i];
 }
 
 export abstract class KnownBankParser extends BankParser {

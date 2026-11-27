@@ -196,6 +196,41 @@ describe("a card bill payment whose card is named in the next sentence", () => {
     expect(p).toMatchObject({ kind: "money", type: "expense", merchant: "tiffin.box@ybl" });
     expect(p.kind === "money" && p.cardPayment).toBeFalsy();
   });
+
+  // A next sentence counts only when it names a card by its masked digits: a promo line that does not start with a
+  // promo verb is still never where the money went.
+  it.each([
+    {
+      sender: "VM-HDFCBK-S",
+      text: "Rs.318.00 debited from A/c XX5150 to ORCHARD BAKERY on 05-10-26. Now you can pay to your HDFC Bank Credit Card via UPI.",
+      type: "expense",
+    },
+    {
+      sender: "AX-ICICIT-S",
+      text: "ICICI Bank Acct XX274 debited for Rs 147.00 on 05-Oct-26; BLUE KETTLE credited. To pay your credit card bill, use iMobile.",
+      type: "expense",
+    },
+    {
+      sender: "VM-HDFCBK-S",
+      text: "Rs.6,420.00 credited to HDFC Bank A/c XX5150 on 05-10-26 from MEERA NAIR. Towards your credit card goals, save more.",
+      type: "income",
+    },
+  ])("$sender: a promo line after the money sentence leaves a $type alone", ({ sender, text, type }) => {
+    const p = parseCapture(text, RECEIVED, { sender });
+    expect(p).toMatchObject({ kind: "money", type });
+    expect(p.kind === "money" && p.cardPayment).toBeFalsy();
+    expect(p.kind === "money" && p.instrument).not.toBe("card");
+    // Never pushed to Review as a card payment: at least as sure as the generic parser.
+    expect(p.confidence).toBeGreaterThanOrEqual(generic(text, RECEIVED, { sender }).confidence);
+  });
+
+  it("reads 'Credit Card Payment XX…' in the next sentence as a card payment", () => {
+    const p = parseCapture("Rs.3,975.00 debited from A/c XX5150 on 05-10-26. Info: Credit Card Payment XX6047.", RECEIVED, {
+      sender: "VM-HDFCBK-S",
+    });
+    expect(p).toMatchObject({ kind: "money", cardPayment: true, last4: "6047" });
+    expect(p.confidence).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+  });
 });
 
 describe("card bill payment received on the card keeps the card's digits", () => {
