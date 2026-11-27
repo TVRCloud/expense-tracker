@@ -8,7 +8,7 @@ banks' apps is on the phone's known list.
 ## HSBC (`hsbc.ts`, header `HSBCIN`)
 - Shapes: "HSBC: A/c <ddd-ddd***-ddd> is credited|debited with INR ...", "HSBC: INR ... is credited to | paid from
   your A/c ...", "HSBC: INR ... is paid from account XXXXXX<4> to <payee> ...", "Thank you for using HSBC Debit|Credit
-  Card ...", "Your HSBC creditcard xxxxx<4> used at <shop> for INR ...".
+  Card ..." (also "Credit-Card"), "Your HSBC creditcard xxxxx<4> used at <shop> for INR ...".
 - Account: printed as "A/c 118-402***-731", so only three digits show (like ICICI); they are kept as last4, and
   matching a three-digit last4 to a saved account is account-match's job (src/lib/CLAUDE.md). A NEFT alert also names
   the other party's account at their bank ("as NEFT from|to UTIB A/c ***2271 of NAME"): never last4.
@@ -20,7 +20,8 @@ banks' apps is on the phone's known list.
   without the beneficiary's digits.
 - Card alerts ("Thank you for using HSBC ... Card"): line breaks end sentences. With no money-back word anywhere
   (any form of reverse or refund, reimbursed, chargeback, cancelled, voided, bounced, rolled back, adjusted back,
-  re-credited, credited, a credit or Cr other than "Credit Card", returned, failed, declined) it is a spend at its normal score. With
+  re-credited, credited, a credit or Cr other than the card's own name or a limit or balance ("available credit
+  limit", "Avl Cr Lmt", "Total credit", "Cr. limit", "credit balance"), returned, failed, declined) it is a spend at its normal score. With
   any, anywhere (a shop name, a help line or a promo included), the shared reading is kept but held in Review (at most
   0.75): never booked either way. A shop called "REFUND KITCHEN" and a cashback line therefore send a spend to Review
   (accepted noise). A status word after the shop ("ORCHID MART - REVERSED") is not part of the merchant.

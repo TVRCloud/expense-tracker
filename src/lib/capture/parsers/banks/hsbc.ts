@@ -15,9 +15,13 @@ const SAME_SENTENCE = String.raw`(?:[^.]|\.(?=\d))`;
 const OWN_ACCOUNT = /\bA\/c\s\d{2,4}-\d{2,4}\*{2,6}-(\d{3,4})\b(?!\sof\s)/i;
 // Words that say money came back or a transfer did not go through. When one of them appears anywhere in the message
 // (a shop or payee name included), the read is held in Review rather than trusted either way (ticket 174 review).
+// "a credit of", "credit posted", "Cr to card" are money back; a card's own name ("Credit Card", "Credit-Card") and a
+// limit or balance ("available credit limit", "Avl Cr Lmt", "Total credit", "Cr. limit", "credit balance") are not.
+const CREDIT = String.raw`(?<!\b(?:available|avl|avbl|total)\s)credit(?!\s?-?card)(?!\s(?:limit|lmt|bal(?:ance)?)\b)`;
+const CR = String.raw`(?<!\b(?:available|avl|avbl|total)\s)cr(?!\.?\s?(?:lmt|limit|bal(?:ance)?)\b)`;
 // Shared by both lists: reversals, refunds, reimbursements, chargebacks, cancellations, voids, bounces, roll-backs and
 // any credit (never "Credit Card" or "creditcard", which every card alert names).
-const BACK_WORDS = String.raw`revers\w*|refund\w*|reimburs\w*|charge-?back|cancel(?:l?ed|lation)|void(?:ed)?|bounced|rolled\sback|adjusted\sback|re-?credited|credited\sback|credit(?!\s?card)|cr`;
+const BACK_WORDS = String.raw`revers\w*|refund\w*|reimburs\w*|charge-?back|cancel(?:l?ed|lation)|void(?:ed)?|bounced|rolled\sback|adjusted\sback|re-?credited|credited\sback|${CREDIT}|${CR}`;
 const MONEY_BACK = new RegExp(
   String.raw`\b(?:${BACK_WORDS}|failed|unsuccessful|returned|rejected|declined|could\snot\sbe\s(?:processed|completed)|not\sprocessed)\b`,
   "i"
@@ -32,11 +36,11 @@ const SHOP = /\b(?:used\s)?at\s(?!\d{1,2}[.:]\d{2})(\S(?:[^.;]|\.(?=\S)){0,58}?)
 // The payee of an outgoing transfer: "A/c XXXXXXXX4407 of SUNIL BHAT".
 const PAYEE = /\bA\/c\s[\dX*-]{4,20}\sof\s(\S[^.;]{0,58}?)(?=\son\s\d|\s?\.(?:\s|$)|$)/i;
 const OUTWARD = new RegExp(String.raw`\byour\s(?:NEFT|IMPS|RTGS)\stransaction\b${SAME_SENTENCE}{0,120}?\bhas\s(?:now\s)?been\scredited\sto\sthe\s`, "i");
-const CARD_THANKS = /\bThank\syou\sfor\susing\s(?:your\s)?HSBC\s(?:Debit|Credit)\sCard\b/i;
+const CARD_THANKS = /\bThank\syou\sfor\susing\s(?:your\s)?HSBC\s(?:Debit|Credit)[\s-]Card\b/i;
 // "Credit Card XXXX6603", "creditcard xxxxx5832": a card with its last four digits.
-const CARD_FOUR = /\bHSBC\s(?:debit|credit)\s?card\s[x*]{2,12}(\d{4})\b/i;
+const CARD_FOUR = /\bHSBC\s(?:debit|credit)[\s-]?card\s[x*]{2,12}(\d{4})\b/i;
 // "Debit Card XXXXX58xx": fewer than four digits show.
-const CARD_PARTIAL = /\bHSBC\s(?:debit|credit)\s?card\s[x*]{2,12}\d{1,3}[x*]{1,4}(?![\w])/i;
+const CARD_PARTIAL = /\bHSBC\s(?:debit|credit)[\s-]?card\s[x*]{2,12}\d{1,3}[x*]{1,4}(?![\w])/i;
 // A time of day a bank writes where a name could sit ("at 10.02.11", "at 18:42").
 const TIME_FIRST = /^\d{1,2}[.:]\d{2}(?:[.:]\d{2})?\b/;
 // What is left of "towards NACH mandate verification" once the mandate words go: a step, never a payee.
@@ -59,7 +63,7 @@ export class HsbcParser extends KnownBankParser {
     /^HSBC:\sA\/c\s\d{2,4}-\d{2,4}\*{2,6}-\d{3,4}\sis\s(?:credited|debited)\swith\sINR\s[\d,.]{1,15}\s/i,
     /^HSBC:\sINR\s[\d,.]{1,15}\sis\s(?:credited\sto|paid\sfrom)\syour\sA\/c\s\d{2,4}-\d{2,4}\*{2,6}-\d{3,4}\b/i,
     /^HSBC:\sINR\s[\d,.]{1,15}\sis\spaid\sfrom\saccount\s[X*]{2,12}\d{4}\sto\s/i,
-    /^(?:HSBC:\s)?Thank\syou\sfor\susing\sHSBC\s(?:Debit|Credit)\sCard\s[X*x\d]{4,16}\s/i,
+    /^(?:HSBC:\s)?Thank\syou\sfor\susing\sHSBC\s(?:Debit|Credit)[\s-]Card\s[X*x\d]{4,16}\s/i,
     /^Your\sHSBC\screditcard\s[x*]{2,12}\d{4}\sused\sat\s/i,
   ];
 

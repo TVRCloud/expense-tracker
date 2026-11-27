@@ -608,6 +608,48 @@ describe("HSBC parser", () => {
       auto: false,
     },
     {
+      name: "a limit line is not money back: the spend books (1: Your ...)",
+      text: "HSBC: Thank you for using HSBC Credit Card XXXX5917 for INR 913.00 on 09-Nov-26 at BIRCH STORE . Your available credit limit is INR 1,15,000.00.",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 91300, last4: "5917", merchant: "BIRCH STORE" },
+      auto: true,
+    },
+    {
+      name: "a limit line is not money back: the spend books (2: Avl ...)",
+      text: "HSBC: Thank you for using HSBC Credit Card XXXX5917 for INR 913.00 on 09-Nov-26 at BIRCH STORE . Avl Cr Lmt INR 84,210.00.",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 91300, last4: "5917", merchant: "BIRCH STORE" },
+      auto: true,
+    },
+    {
+      name: "a limit line is not money back: the spend books (3: Available ...)",
+      text: "HSBC: Thank you for using HSBC Credit Card XXXX5917 for INR 913.00 on 09-Nov-26 at BIRCH STORE . Available credit INR 84,210.00.",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 91300, last4: "5917", merchant: "BIRCH STORE" },
+      auto: true,
+    },
+    {
+      name: "a limit line is not money back: the spend books (4: Total ...)",
+      text: "HSBC: Thank you for using HSBC Credit Card XXXX5917 for INR 913.00 on 09-Nov-26 at BIRCH STORE . Total credit limit INR 1,15,000.00.",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 91300, last4: "5917", merchant: "BIRCH STORE" },
+      auto: true,
+    },
+    {
+      name: "a limit line is not money back: the spend books (5: Cr. ...)",
+      text: "HSBC: Thank you for using HSBC Credit Card XXXX5917 for INR 913.00 on 09-Nov-26 at BIRCH STORE . Cr. limit INR 1,15,000.00.",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 91300, last4: "5917", merchant: "BIRCH STORE" },
+      auto: true,
+    },
+    {
+      name: "a debit card spend with a '(credit balance)' note books",
+      text: "HSBC: Thank you for using HSBC Debit Card XXXXX59xx for INR 913.00 on 09-Nov-26 at BIRCH STORE . Avl Bal INR 4,120.00 (credit balance).",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 91300, merchant: "BIRCH STORE" },
+      auto: true,
+    },
+    {
+      name: "'Credit-Card' with a hyphen is read as the card",
+      text: "HSBC: Thank you for using HSBC Credit-Card XXXX5917 for INR 913.00 on 09-Nov-26 at BIRCH STORE .",
+      want: { parserId: "hsbc", type: "expense", amountMinor: 91300, last4: "5917", instrument: "card", merchant: "BIRCH STORE" },
+      auto: true,
+    },
+    {
       name: "an OTP is ignored",
       text: "HSBC: 583014 is your OTP for a txn of INR 2,140.00 at BOOKNOOK. Do not share it.",
       want: { kind: "ignored", reason: "otp" },
