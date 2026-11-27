@@ -36,7 +36,8 @@ export interface SenderRow {
  * header). Anything else (a phone number, a label, digits) is counted under a fixed name and never printed. */
 export function sourceKey(input: Pick<ReportInput, "channel" | "sender" | "packageName">): string {
   const pkg = input.packageName?.trim().toLowerCase();
-  if (pkg) return /^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+$/.test(pkg) && pkg.length <= 100 ? `app:${pkg}` : "app:other";
+  // A real package ("net.one97.paytm") has at most two digits in a row, so no account digits or amounts print.
+  if (pkg) return /^[a-z]{2,}(?:\.[a-z0-9_]+)+$/.test(pkg) && !/\d{3,}/.test(pkg) && pkg.length <= 100 ? `app:${pkg}` : "app:other";
   // A notification's sender is its app label, never a bank header (same rule as the parser registry).
   if (input.channel === "notification") return "notification:no package";
   const header = normaliseSender(input.sender);

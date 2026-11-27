@@ -22,6 +22,9 @@ describe("sourceKey", () => {
     expect(sourceKey({ channel: "sms", sender: "XXXX4821" })).toBe("sms:other");
     expect(sourceKey({ channel: "sms", sender: "VM-AB1234" })).toBe("sms:other");
     expect(sourceKey({ channel: "notification", packageName: "Rs 640 debited from XX4821" })).toBe("app:other");
+    expect(sourceKey({ channel: "notification", packageName: "a.4821" })).toBe("app:other");
+    expect(sourceKey({ channel: "notification", packageName: "rs.640.debited" })).toBe("app:other");
+    expect(sourceKey({ channel: "notification", packageName: "net.one97.paytm" })).toBe("app:net.one97.paytm");
     // A notification's label is the app's own name, never a bank header.
     expect(sourceKey({ channel: "notification", sender: "AB-HDFCBK" })).toBe("notification:no package");
   });

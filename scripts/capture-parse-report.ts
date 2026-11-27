@@ -36,7 +36,7 @@ type Row = {
 };
 
 async function main() {
-  if (!process.env[KEY_ENV]) fail(`${KEY_ENV} is not set.`);
+  if ((process.env[KEY_ENV] ?? "").length < 32) fail(`${KEY_ENV} is not set or shorter than 32 characters.`);
 
   const filter: Record<string, unknown> = { channel: { $in: ["sms", "notification", "n8n"] } };
   const user = flag("user");
