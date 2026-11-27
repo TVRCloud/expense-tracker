@@ -27,7 +27,7 @@ describe("mandate notices", () => {
       want: { event: "created", merchant: "TuneBox", maxAmountMinor: 18900, frequency: "monthly" },
     },
     {
-      text: "NACH mandate registration for Rs 23,600.00 in favour of BRIGHTPATH FINANCE LTD has been successfully registered on your A/c XX7362. UMRN HDFC7000000012345678 -HDFC Bank",
+      text: "NACH mandate registration for Rs 23,600.00 in favour of BRIGHTPATH FINANCE LTD has been successfully registered. Linked a/c XX7362. UMRN HDFC7000000012345678 -HDFC Bank",
       want: { event: "created", merchant: "BRIGHTPATH FINANCE LTD", maxAmountMinor: 2360000, last4: "7362", bankName: "HDFC Bank" },
     },
     { text: "UPI AutoPay mandate for CloudBox of Rs 129.00 has been revoked as requested. -Kotak Bank", want: { event: "revoked", merchant: "CloudBox", maxAmountMinor: 12900 } },
@@ -45,6 +45,15 @@ describe("mandate notices", () => {
     { text: "Your mandate for VIEWBOX has been resumed. Next debit as per schedule.", want: { event: "resumed", merchant: "VIEWBOX" } },
     { text: "Heads up: your AutoPay to VIEWBOX (max ₹479/month) is now live.", want: { event: "created", maxAmountMinor: 47900 } },
     { text: "UPI AutoPay mandate for VIEWBOX of Rs 437 per month has been created on your UPI app.", want: { event: "created", maxAmountMinor: 43700 } },
+    // Set-up words that say nothing about money.
+    { text: "Your e-mandate registration for VIEWBOX is completed successfully.", want: { event: "created", merchant: "VIEWBOX" } },
+    { text: "Your mandate for VIEWBOX up to Rs 479 has been confirmed.", want: { event: "created", maxAmountMinor: 47900 } },
+    { text: "Your AutoPay for VIEWBOX has expired and has been deactivated.", want: { event: "revoked" } },
+    { text: "E-mandate for HAWKLINE CREDIT signed and registered. Limit Rs 3,280.", want: { event: "created", merchant: "HAWKLINE CREDIT" } },
+    { text: "Your mandate request for VIEWBOX was submitted and approved.", want: { event: "created" } },
+    { text: "Standing instruction for FITGROVE ended and cancelled at your request.", want: { event: "revoked", merchant: "FITGROVE" } },
+    { text: "Mandate for VIEWBOX: limit increased to Rs 659. Mandate updated.", want: { event: "modified", maxAmountMinor: 65900 } },
+    { text: "NACH mandate for HAWKLINE CREDIT registered. First EMI on 05-01-2027.", want: { event: "created", merchant: "HAWKLINE CREDIT" } },
   ])("reads $want.event for every sender: $text", ({ text, want }) => {
     for (const sender of SENDERS) expect(mandate(parseCapture(text, AT, { sender }))).toMatchObject(want);
   });
@@ -131,12 +140,24 @@ describe("money that mentions a mandate is never a notice", () => {
     // A past-tense word that is not the mandate's own event means money moved.
     "Up to Rs 3,280 NACH for HAWKLINE CREDIT; EMI recovered today. Mandate updated.",
     "Mandate limit of Rs 3,280 for HAWKLINE CREDIT: amount recovered today, mandate updated.",
+    // Review 4: nouns about money that moved, and a mask in the clause holding the amount.
+    "AutoPay up to Rs 437 deduction success for VIEWBOX. Mandate updated.",
+    "Mandate of Rs 437 for VIEWBOX updated after recovery today.",
+    "Mandate for Rs 437 to VIEWBOX updated; instalment success.",
+    "NACH mandate for HAWKLINE CREDIT updated: EMI recovery success.",
+    "Your AutoPay to VIEWBOX ran today. Mandate updated.",
+    "AutoPay up to Rs 437 recovery success from Acct XX471. Mandate updated.",
   ])("%s", (text) => {
     for (const sender of SENDERS) {
       const p = parseCapture(text, AT, { sender });
       expect(p.kind, String(sender)).not.toBe("mandate");
       expect(p.kind, String(sender)).not.toBe("investment");
     }
+  });
+
+  it("a mask anywhere in the clause holding the limit sends it to Review, never drops it", () => {
+    const p = parseCapture("Your UPI AutoPay mandate for VIEWBOX, up to Rs 479 monthly, is now set up on A/c XX4718.", AT);
+    expect(p.kind).not.toBe("mandate");
   });
 
   it("an amount printed next to an account or card mask is money, even after a limit word", () => {
