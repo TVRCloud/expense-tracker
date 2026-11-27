@@ -43,6 +43,10 @@ const BARE_TO_FROM = /^(?:to|from)\s$/i;
 const OWN_BEFORE_FROM = /\b(?:debited|debit|withdrawn|deducted|recovered|transferred)\s$/i;
 // "by debit to A/C" is the account the money was taken from, so the person's own too.
 const OWN_BEFORE_TO = /\b(?:credited|deposited)\s$|\bby\sdebit\s$/i;
+// Money put into a numbered account "from your (IndusInd) account" with no number: a transfer between accounts whose
+// direction for this bank is not certain ("INR X deposited to A/C 50XX4421 from your IndusInd account").
+const INTO_FROM_YOUR_ACCOUNT =
+  /\b(?:credited|deposited)\s(?:to|in|into)\s(?:A\/C|Account)\s[\dX*]{4,20}\b[^.]{0,60}?\bfrom\syour\s(?:IndusInd\s)?(?:a\/c|account)\b(?!\s(?:no\.?\s)?\*?[x*\d])/i;
 // A card named in a message that also says which account (with its number) money left or reached is only what it
 // was for. "debited from account linked" names no account, so the card stays.
 const ACCOUNT_MOVED = /\b(?:debited\sfrom|credited\sto)\s(?:your\s)?(?:a\/c|acct|account)(?:\sno\.?)?\s?\*?[x*\d]/i;
@@ -130,9 +134,10 @@ export class IndusIndParser extends PrivateBankParser {
 
   override parse(text: string, receivedAt: Date): MoneyParse | null {
     const parse = super.parse(text, receivedAt);
-    if (!parse || accounts(text).own.length < 2) return parse;
-    // Two or more accounts of the person's kind in one message: which one moved is not certain, so no account and
-    // no balance or limit (they belong to an account), and Review.
+    if (!parse || (accounts(text).own.length < 2 && !INTO_FROM_YOUR_ACCOUNT.test(text))) return parse;
+    // Two or more accounts of the person's kind in one message, or money moved into a numbered account from "your
+    // account": which one moved is not certain, so no account and no balance or limit (they belong to an account),
+    // and Review.
     const held: MoneyParse = { ...parse, last4: undefined, instrument: undefined, confidence: Math.min(parse.confidence, REVIEW_CEILING) };
     delete held.balanceMinor;
     delete held.availableLimitMinor;

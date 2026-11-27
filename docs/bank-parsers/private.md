@@ -48,7 +48,8 @@ Shared by the group (`banks/private-base.ts`, `banks/party-scrub.ts`):
   or "by debit" ("transferred to", "sent to", "paid to", "IMPS to A/C" are the other party; "from A/C" into the
   person's own loan or deposit is their savings). Only the other party's account named: no account. One account: it is the account. Two or more: no guessing, whatever
   "your", "from" or "to" says: no account, no balance or limit, and Review (a refund naming the same account twice is
-  held too).
+  held too), and so is money put into a numbered account "from your (IndusInd) account" (a transfer between
+  accounts).
 - Overrides: the UPI id after "towards"; the card digits when no account with a number is named; the payee after the
   last "/" of an ACH debit; deposit interest "paid on your ... Deposit" is money in (income, no account, so Review),
   but TDS deducted on it is not; money moved into an RD, FD or deposit (also spelled out) from the one savings account

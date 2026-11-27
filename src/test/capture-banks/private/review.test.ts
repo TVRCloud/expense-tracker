@@ -484,3 +484,19 @@ describe("IndusInd: 'transferred to', 'paid to' and 'sent to' name the other par
     },
   ]);
 });
+
+describe("IndusInd: money into a numbered account 'from your account' is a transfer, held", () => {
+  readsAll({ sender: "VM-INDUSB-S" }, [
+    {
+      name: "deposited to another account from your IndusInd account",
+      text: "INR 1,265 deposited to A/C 71XXXXXX5072 from your IndusInd account on 07/11/26 - IndusInd Bank",
+      want: { last4: undefined },
+      auto: false,
+    },
+    {
+      name: "credited to an account with no 'from your account' is unchanged",
+      text: "INR 1,265 credited to A/C 71XXXXXX5072 via IMPS on 07/11/26. Ref 631088554433 - IndusInd Bank",
+      want: { type: "income", last4: "5072" },
+    },
+  ]);
+});
