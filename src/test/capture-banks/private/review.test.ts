@@ -185,3 +185,94 @@ describe("a debit the message says was undone stays in Review", () => {
     expect(debit.confidence).toBeGreaterThanOrEqual(CONFIDENCE_AUTO_CREATE);
   });
 });
+
+// Ticket 172 review, round 2.
+describe("IndusInd: the person's own account wins over a beneficiary's", () => {
+  readsAll({ sender: "VM-INDUSB-S" }, [
+    {
+      name: "own account leads, beneficiary partly shown",
+      text: "A/c *XX3386 debited by Rs 1,265.00 towards IMPS to Account 71XXXXXX5072. RRN: 631088221144. Not You? call 0000000000- IndusInd Bank.",
+      want: { type: "expense", last4: "3386" },
+    },
+    {
+      name: "own account leads a credit from a partly shown account",
+      text: "A/c *XX3386 credited by Rs 1,265.00 from Account 71XXXXXX5072 via IMPS. RRN: 631088221144.- IndusInd Bank.",
+      want: { type: "income", last4: "3386" },
+    },
+    {
+      name: "the verb decides over 'your' with two partly shown accounts",
+      text: "IMPS of INR 1,265 to your Account 71XXXXXX5072 at AXIS Bank debited from A/C 207***003386 - IndusInd Bank",
+      want: { type: "expense", last4: "3386" },
+    },
+    {
+      name: "a spelled-out Recurring Deposit funded from savings is money out of savings",
+      text: "INR 4,350 credited to your Recurring Deposit A/C 520***778104 by debit to A/C 207***003386 - IndusInd Bank",
+      want: { type: "expense", amountMinor: 435000, last4: "3386" },
+    },
+  ]);
+
+  it("never names the bank the verb runs into as the payee", () => {
+    const p = money(
+      parseCapture("IMPS of INR 1,265 to your Account 71XXXXXX5072 at AXIS Bank debited from A/C 207***003386 - IndusInd Bank", RECEIVED, {
+        sender: "VM-INDUSB-S",
+      })
+    );
+    expect(p.merchant ?? "").not.toMatch(/debited/i);
+  });
+});
+
+describe("South Indian: a token inside the Info text never decides", () => {
+  readsAll({ sender: "AD-SIBSMS-S" }, [
+    {
+      name: "a credit whose Info says 'debit:'",
+      text: "Dear Customer, Your A/c X8846 is credited with Rs.2,730.00 Info: IMPS/HDFC/631066655555/ debit:Rs.2730 adj. Final balance is Rs.7,210.00-South Indian Bank",
+      want: { type: "income", amountMinor: 273000 },
+    },
+    {
+      name: "a UPI credit whose Info says 'debit:'",
+      text: "UPI Credit:INR Rs.1,375.00 in A/c X8846. Info: UPI/HDFC/631066611111/ debit:Rs.1375 memo on 07-11-26.Final balance is Rs.6,240.00 -South Indian Bank",
+      want: { type: "income" },
+    },
+    {
+      name: "a bank's CC PAYMENT is a card payment",
+      text: "A/c X8846 DEBIT:Rs.5,715.00 SIB CC PAYMENT MCT Bal:Rs.1,210.00 -South Indian Bank",
+      want: { cardPayment: true },
+      auto: false,
+    },
+    {
+      name: "a shop called '... CC PAYMENT SOLUTIONS' is a spend",
+      text: "A/c X8846 DEBIT:Rs.715.00 KAPPA CC PAYMENT SOLUTIONS MCT Bal:Rs.1,210.00 -South Indian Bank",
+      want: { type: "expense", merchant: "KAPPA CC PAYMENT SOLUTIONS" },
+      auto: true,
+    },
+  ]);
+});
+
+describe("names with numbers that are part of the name stay whole", () => {
+  readsAll({ sender: "AD-SIBSMS-S" }, [
+    { name: "X200 TELECOM", text: "A/c X8846 DEBIT:Rs.715.00 X200 TELECOM MCT Bal:Rs.1,210.00 -South Indian Bank", want: { merchant: "X200 TELECOM" } },
+  ]);
+  readsAll({ sender: "VM-KELBNK-S" }, [
+    {
+      name: "8x10 FRAMES",
+      text: "Dear Customer Your A/c no XXXX3390 is debited with 415.00 on 07-11-2026 by UPI To : 8x10 FRAMES. Balance is 2210.00 - Kerala Bank",
+      want: { merchant: "8x10 FRAMES" },
+    },
+    {
+      name: "a payee whose name says reversal is still booked",
+      text: "Dear Customer Your A/c no XXXX3390 is debited with 415.00 on 07-11-2026 by UPI To : REVERSAL BAKERY. Balance is 2210.00 - Kerala Bank",
+      want: { type: "expense", merchant: "REVERSAL BAKERY" },
+      auto: true,
+    },
+  ]);
+});
+
+describe("Federal: an e-mandate card payment keeps its card", () => {
+  readsAll({ sender: "VM-FEDBNK-S" }, [
+    {
+      name: "'Amount debited from account linked' names no account",
+      text: "Hi, payment of INR 236.00 for MusicBox via e-mandate ID: MB22LKJH7741 on Federal Bank Credit Card 9058 is processed successfully. Amount debited from account linked to the card. - Federal Bank",
+      want: { type: "expense", last4: "9058", instrument: "card", merchant: "MusicBox" },
+    },
+  ]);
+});

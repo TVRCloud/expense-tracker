@@ -14,7 +14,12 @@ const CREDIT_COLON = /\b(?:UPI\s)?credit:\s?(?:INR\s)?Rs\.?\s?\d/i;
 // debit:Rs.X" in a balance message, "for debit:Rs.X ... returned" or "Hold debit:Rs.X" are not a transaction.
 const LEADING_TOKEN = /^(?:UPI\s(?:debit|credit):|A\/c\sX\d{4}\s(?:DEBIT|CREDIT):)/i;
 // A card bill paid from the account ("DEBIT:Rs.X CC PAYMENT SIB CARD MCT").
-const CC_PAYMENT = /\bCC\sPAYMENT\b/i;
+// "CC PAYMENT" (or "SIB CC PAYMENT") is the transaction type only right after the amount, never inside a shop name
+// ("ABC CC PAYMENT SOLUTIONS").
+const CC_PAYMENT =
+  /\bDEBIT:\s?Rs\.?\s?[\d,]{1,15}(?:\.\d{1,2})?\s(?:[A-Z]{2,6}\s)?CC\sPAYMENT\b(?!\s(?:SOLUTIONS?|SERVICES?|LTD|LIMITED|PVT|CO)\b)/i;
+// The bank's token counts only in its own part of the message, never inside the free Info text.
+const ownPart = (text: string) => text.split(/\bInfo:/i)[0];
 // "UPI debit:Rs.X A/c X1234 reversed": the token no longer says what happened; kept in Review.
 const UNDONE = /\b(?:revers(?:ed|al)|returned|refunded|cancelled|failed)\b/i;
 
@@ -32,9 +37,10 @@ export class SouthIndianParser extends PrivateBankParser {
   protected override direction(text: string): FoundDirection | null {
     // The bank's own token decides when it leads the message or the message is one of its shapes, whatever the Info
     // text says ("UPI Credit:... Info: ... Paid via PhonePe" is money in; "UPI debit:... Received with thanks" is out).
-    const debit = DEBIT_COLON.test(text);
-    const credit = CREDIT_COLON.test(text);
-    if (debit !== credit && !UNDONE.test(text) && (LEADING_TOKEN.test(text) || this.hasShape(text))) {
+    const own = ownPart(text);
+    const debit = DEBIT_COLON.test(own);
+    const credit = CREDIT_COLON.test(own);
+    if (debit !== credit && !UNDONE.test(own) && (LEADING_TOKEN.test(text) || this.hasShape(text))) {
       return { type: debit ? "expense" : "income", ambiguous: false };
     }
     return super.direction(text);
@@ -43,7 +49,8 @@ export class SouthIndianParser extends PrivateBankParser {
   override parse(text: string, receivedAt: Date): MoneyParse | null {
     const parse = super.parse(text, receivedAt);
     // The bank's token next to a word that undoes it: whatever the shared rules read, it is checked in Review.
-    if (parse && (DEBIT_COLON.test(text) || CREDIT_COLON.test(text)) && UNDONE.test(text) && parse.confidence > REVIEW_CEILING) {
+    const own = ownPart(text);
+    if (parse && (DEBIT_COLON.test(own) || CREDIT_COLON.test(own)) && UNDONE.test(own) && parse.confidence > REVIEW_CEILING) {
       return { ...parse, confidence: REVIEW_CEILING };
     }
     return parse;

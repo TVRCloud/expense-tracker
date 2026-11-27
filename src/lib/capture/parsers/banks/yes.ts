@@ -15,7 +15,7 @@ export class YesParser extends PrivateBankParser {
   protected override account(text: string, type: "income" | "expense"): FoundAccount | null {
     // The account the money left or reached wins over a card the message only mentions ("for YES BANK Debit Card
     // X5577 annual fee").
-    const accountMoved = /\b(?:debited\sfrom|credited\sto)\s(?:your\s)?(?:a\/c|acct|account)\b/i.test(text);
+    const accountMoved = /\b(?:debited\sfrom|credited\sto)\s(?:your\s)?(?:a\/c|acct|account)(?:\sno\.?)?\s?\*?[x*\d]/i.test(text);
     const card = accountMoved ? null : text.match(/\bYES\sBANK\s(?:Credit\s|Debit\s)?Card\sX{1,4}(\d{4})\b/i);
     if (card) return { last4: card[1], instrument: "card" };
     return super.account(text, type);

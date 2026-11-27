@@ -24,7 +24,7 @@ export class FederalParser extends PrivateBankParser {
   protected override account(text: string, type: "income" | "expense"): FoundAccount | null {
     // A card named in a message that also says which account the money left or reached is what it was for ("towards
     // Federal Bank Debit Card 6612 annual fee"): the account wins.
-    const accountMoved = /\b(?:debited\sfrom|credited\sto)\s(?:your\s)?(?:a\/c|acct|account)\b/i.test(text);
+    const accountMoved = /\b(?:debited\sfrom|credited\sto)\s(?:your\s)?(?:a\/c|acct|account)(?:\sno\.?)?\s?\*?[x*\d]/i.test(text);
     const card = accountMoved ? null : text.match(/\bFederal\sBank\s(?:Debit|Credit)\sCard\s[x*]{0,4}(\d{4})\b/i);
     if (card) return { last4: card[1], instrument: "card" };
     return super.account(text, type);

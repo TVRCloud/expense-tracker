@@ -13,8 +13,9 @@ export function scrubParty(name: string | undefined): string | undefined {
     .slice(0, 80)
     // A reference glued in front: "631088123456/freshmart@okaxis" keeps what follows the slash.
     .replace(/^\d{6,22}\s?\/\s?/, "")
-    // A partly shown or masked number anywhere: "410***551203", "XX4421", "X7781" (never inside a UPI id).
-    .replace(/(?<![\w.@-])\d{0,6}[x*]{1,12}\d{2,12}(?![\w@.-])/gi, " ")
+    // A partly shown or masked number anywhere: "410***551203", "XX4421", "X7781" (never inside a UPI id, never a
+    // name like "X100 MOBILES" or "9x12 FURNITURE").
+    .replace(/(?<![\w.@-])(?:\d{0,6}[x*]{2,12}\d{2,12}|[xX]\d{4})(?![\w@.-])/g, " ")
     // A card number after "CC" or "card": "HDFC CC 6612".
     .replace(/\b(CC|card)\s\d{4}\b/gi, "$1")
     // A reference of six or more digits, never the digits of a UPI id ("9847012345@ybl").
