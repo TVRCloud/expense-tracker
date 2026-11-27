@@ -455,3 +455,32 @@ describe("IndusInd: the other party's account is never taken", () => {
     },
   ]);
 });
+
+// Ticket 172 review, round 6: a verb only makes a bare "from"/"to" account the person's when it fits the preposition.
+describe("IndusInd: 'transferred to', 'paid to' and 'sent to' name the other party", () => {
+  readsAll({ sender: "VM-INDUSB-S" }, [
+    {
+      name: "transferred to another account",
+      text: "INR 1,265 transferred to A/C 71XXXXXX5072 via IMPS. Ref 631088554433 - IndusInd Bank",
+      want: { last4: undefined },
+      auto: false,
+    },
+    {
+      name: "transferred to an account marked '(your)'",
+      text: "INR 1,265 transferred to A/C 71XXXXXX5072 (your) via IMPS - IndusInd Bank",
+      want: { last4: undefined },
+      auto: false,
+    },
+    {
+      name: "paid to another account",
+      text: "INR 1,265 paid to Account 71XXXXXX5072 on 07/11/26 - IndusInd Bank",
+      want: { last4: undefined },
+      auto: false,
+    },
+    {
+      name: "withdrawn from the person's account still names it",
+      text: "INR 1,000 withdrawn from A/C 207***003386 at ATM on 07/11/26 - IndusInd Bank",
+      want: { type: "expense", last4: "3386", atm: true },
+    },
+  ]);
+});

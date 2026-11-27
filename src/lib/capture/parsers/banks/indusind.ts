@@ -37,7 +37,12 @@ const LOAN_LABEL = /^loan\s$/i;
 // A/C", "credited to your A/C").
 const OTHER_LABEL = /^(?:beneficiary|benef|payee|remitter)\s$/i;
 const BARE_TO_FROM = /^(?:to|from)\s$/i;
-const OWN_VERB_BEFORE = /\b(?:debited|credited|debit|credit|transferred|withdrawn|recovered|deducted)\s$/i;
+// The verb before a bare "from" or "to" says whose account it is: money leaves the person's account "from" it
+// ("debited from A/C"), and reaches it "to/in/into" it ("credited to A/C"), except "by debit to A/C" (taken from it).
+// "transferred to", "sent to", "paid to", "IMPS to" name the other party.
+const OWN_BEFORE_FROM = /\b(?:debited|debit|withdrawn|deducted|recovered|transferred)\s$/i;
+// "by debit to A/C" is the account the money was taken from, so the person's own too.
+const OWN_BEFORE_TO = /\b(?:credited|deposited)\s$|\bby\sdebit\s$/i;
 // A card named in a message that also says which account (with its number) money left or reached is only what it
 // was for. "debited from account linked" names no account, so the card stays.
 const ACCOUNT_MOVED = /\b(?:debited\sfrom|credited\sto)\s(?:your\s)?(?:a\/c|acct|account)(?:\sno\.?)?\s?\*?[x*\d]/i;
@@ -65,8 +70,9 @@ function accounts(text: string): { own: string[]; other: number; deposit: boolea
   const otherParty = (m: RegExpMatchArray) => {
     if (OTHER_LABEL.test(word(m))) return true;
     if (!BARE_TO_FROM.test(word(m))) return false;
-    // "debited from A/C", "by debit to A/C": still the person's own account.
-    return !OWN_VERB_BEFORE.test(plain.slice(Math.max(0, (m.index ?? 0) - 20), m.index));
+    // "debited from A/C", "credited to A/C": still the person's own account; any other verb names the other party.
+    const before = plain.slice(Math.max(0, (m.index ?? 0) - 20), m.index);
+    return !(/^from\s$/i.test(word(m)) ? OWN_BEFORE_FROM : OWN_BEFORE_TO).test(before);
   };
   // Money moved into the person's own loan or deposit comes "from A/C ..." their savings: not another party.
   const ownProduct = all.some((m) => NOT_OWN.test(word(m)) && !/^card\s$/i.test(word(m)));

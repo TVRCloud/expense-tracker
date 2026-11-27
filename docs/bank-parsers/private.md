@@ -43,8 +43,9 @@ Shared by the group (`banks/private-base.ts`, `banks/party-scrub.ts`):
 - Accounts: every account number outside promo sentences ("Pay bills from your A/C ...", "Now pay ...", "Get ...")
   is counted, star-masked ("A/c *XX1234") or partly shown ("A/C 201***041234", "Account 15XXXXX1234"); loan, card,
   deposit, RD and FD accounts are not counted, nor is the other party's account: one labelled Beneficiary, Benef,
-  Payee or Remitter, or one after a bare "to"/"from" ("sent to A/C ...", "received from A/C ...") that is not the
-  person's own account moving ("debited from A/C", "by debit to A/C", "credited to your A/C"; "from A/C" into the
+  Payee or Remitter, or one after a bare "to"/"from" whose verb does not pair with it: "from" is the person's own
+  only after debited, debit, withdrawn, deducted, recovered or transferred, and "to" only after credited, deposited
+  or "by debit" ("transferred to", "sent to", "paid to", "IMPS to A/C" are the other party; "from A/C" into the
   person's own loan or deposit is their savings). Only the other party's account named: no account. One account: it is the account. Two or more: no guessing, whatever
   "your", "from" or "to" says: no account, no balance or limit, and Review (a refund naming the same account twice is
   held too).
