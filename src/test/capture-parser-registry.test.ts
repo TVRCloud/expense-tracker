@@ -87,7 +87,8 @@ describe("findBankParser", () => {
   });
 
   it("registers the six bank parsers, and a sender none of them owns still reads with the generic parser", () => {
-    expect(BANK_PARSERS.map((p) => p.id)).toEqual(["hdfc", "icici", "sbi", "axis", "kotak", "idfc"]);
+    // The six from ticket 155 come first, in this order; the group lists (banks/groups/) follow.
+    expect(BANK_PARSERS.slice(0, 6).map((p) => p.id)).toEqual(["hdfc", "icici", "sbi", "axis", "kotak", "idfc"]);
     expect(money(parseCapture(SPEND, RECEIVED, { sender: "VM-OTHRBK" })).parserId).toBe("generic");
   });
 });
