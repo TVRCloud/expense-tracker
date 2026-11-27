@@ -26,11 +26,13 @@ export interface FoundFigure {
 }
 
 const AVAILABLE = String.raw`(?:avl|avbl|avlbl|avb|avail|available)\.?\s{0,2}`;
-// Words that make the next "balance" something else than the account's money after this transaction.
-const NOT_THIS_BALANCE = String.raw`(?<!\b(?:min(?:imum)?|avg|average|monthly|mab|maintain(?:ed)?|low|insufficient|required|outstanding|total|current|loan|principal|emi|cashback|wallet|fastag|ncmc|card|points?|rewards?|loyalty|gift|prepaid)\.?\s{0,2}(?:${AVAILABLE})?)`;
+// Words that make the next "balance" something else than the account's money after this transaction. Only a short
+// form takes a dot ("Min. Avl Bal"); a whole word must be followed by a space, so a word that ends the sentence before
+// ("... for Loan EMI. Avl Bal") never vetoes the next one.
+const NOT_THIS_BALANCE = String.raw`(?<!\b(?:(?:min|avg|mab|mthly)\.?\s{0,2}|(?:minimum|average|monthly|maintain(?:ed)?|low|insufficient|required|outstanding|total|current|loan|principal|emi|cashback|wallet|fastag|ncmc|card|points?|rewards?|loyalty|gift|prepaid|lite)\s{1,2})(?:${AVAILABLE})?)`;
 const BALANCE_LABEL = String.raw`${NOT_THIS_BALANCE}\b((?:${AVAILABLE}|(?:clr|clear|closing|new|ledger|a\/c|acct)\.?\s{0,2}))?bal(?:ance)?\b`;
 // Only the card's credit limit: never a daily, cash, ATM, UPI or per-transaction limit.
-const NOT_CREDIT_LIMIT = String.raw`(?<!\b(?:daily|day|cash|withdrawal|atm|upi|txn|transaction|pos|online|contactless|ecom|international)\.?\s{0,2})`;
+const NOT_CREDIT_LIMIT = String.raw`(?<!\b(?:txn\.?\s{0,2}|(?:daily|day|cash|withdrawal|atm|upi|transaction|pos|online|contactless|ecom|international)\s{1,2}))`;
 const LIMIT_LABEL = String.raw`${NOT_CREDIT_LIMIT}\b(${AVAILABLE})(?:(?:credit|cr)\.?\s{0,2})?(?:limit|lmt)\b`;
 // Between the label and the figure: spaces, a colon or dot, "is", "is now", "now", "of". A "-" counts as a separator
 // only when no digit follows it, so "Bal: -500" is read as negative, never as 500.
@@ -39,16 +41,19 @@ const BETWEEN = String.raw`${SEP}(?:(?:is\s{1,2})?(?:now\s{1,2})?|of\s{1,2})${SE
 const CURRENCY = String.raw`(Rs\.?|INR|₹|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF|HKD|NZD|SAR|QAR|THB|MYR|US\$|\$|€|£)?\s{0,2}`;
 const SIGN = String.raw`(\(-\)|-)?\s{0,2}`;
 // The figure, never part of a date or a longer number ("12.11.26", "12/11").
-const FIGURE = String.raw`([\d,]{1,15}(?:\.\d{1,2})?)(?![\d,]|\.\d|[/-]\d)`;
-// Overdrawn after the figure: "Dr", "(Dr)", "(-)", or a "-" glued to it ("210.00-"; "210.00-SBI" is a signature).
-const OVERDRAWN = String.raw`(\s{0,2}(?:\(\s?(?:dr|-)\s?\)|dr\b)|-(?![A-Za-z]))?`;
+const FIGURE = String.raw`([\d,]{1,15}(?:\.\d{1,2})?)(?!\d|,\d|\.\d|[/-]\d)`;
+// Overdrawn after the figure: "Dr", "(Dr)", "(-)", or a "-" glued to it at the end or before punctuation ("210.00-",
+// "210.00-."). "210.00-SBI" and "210.00- HDFC Bank" are a signature after a dash, not a minus.
+const OVERDRAWN = String.raw`(\s{0,2}(?:\(\s?(?:dr|-)\s?\)|dr\b)|-(?=\s{0,2}(?:$|[.,;)])))?`;
 
 const BALANCE_RE = new RegExp(BALANCE_LABEL + BETWEEN + CURRENCY + SIGN + FIGURE + OVERDRAWN, "i");
 const LIMIT_RE = new RegExp(LIMIT_LABEL + BETWEEN + CURRENCY + SIGN + FIGURE + OVERDRAWN, "i");
 // Money still to move after the figure.
-const STILL_TO_MOVE = /^\s{0,3}(?:will\s{1,2}be|to\s{1,2}be|is\s{1,2}due|due|payable)\b/i;
-// Masked digits right before the label: "A/c XX9999 Avl Bal", "card ending 9999 Avl Lmt".
-const OWNER = /(?:[x*]{2,}\s?|ending\s{1,2}(?:with\s{1,2})?[x*]{0,8})(\d{3,4})[\s.,:;-]{0,3}$/i;
+const STILL_TO_MOVE = /^\s{0,3}(?:will\s{1,2}be|to\s{1,2}be|is\s{1,2}due|due\b(?!\s{1,2}to\b)|payable)\b/i;
+// Masked digits in the same clause, right before the label: "A/c XX9999 Avl Bal", "card ending 9999 Avl Lmt". Not
+// across a sentence end ("... to A/c XX9999. Avl Bal" is the payer's balance) and not out of a reference
+// ("Ref 631800XX1234 Avl Bal"): the mask must start a word.
+const OWNER = /(?:(?<![\dA-Za-z])[x*]{2,}\s?|\bending\s{1,2}(?:with\s{1,2})?[x*]{0,8})(\d{3,4})[\s:;-]{0,3}$/i;
 /** Highest figure kept: one lakh crore rupees. */
 const MAX_MINOR = 1e13;
 

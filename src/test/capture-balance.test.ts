@@ -328,3 +328,88 @@ describe("review of ticket 156: figures that are not this account's money", () =
     expect(findAvailableLimit("Available Cash Limit: Rs 8,150.00; Available Credit Limit: Rs 41,300.00")).toBe(4130000);
   });
 });
+
+describe("review of ticket 156, round 2", () => {
+  const SENDERS = ["VM-HDFCBK-S", "AX-ICICIT-S", "JD-SBIINB-S", "AX-AXISBK-S", "JD-KOTAKB-S", "BM-IDFCFB-S", undefined];
+
+  // 1: a word that ends the sentence before never vetoes the next label.
+  it.each([
+    ["Rs 615.00 debited from A/c XX7305 for Loan EMI. Avl Bal: INR 6,140.00", 614000, undefined],
+    ["Rs 615.00 debited from A/c XX7305 to Paytm Wallet. Avl Bal Rs 6,140.00", 614000, undefined],
+    ["Rs 615.00 debited from A/c XX7305 towards loan. Avl Bal Rs 6,140.00", 614000, undefined],
+    ["Rs 615.00 debited from A/c XX7305 towards Prepaid. Avl Bal Rs 6,140.00", 614000, undefined],
+    ["Rs 615.00 credited to A/c XX7305 as cashback. Avl Bal Rs 6,140.00", 614000, undefined],
+    ["Rs 615.00 debited from A/c XX7305 for gift. Bal Rs 6,140.00", 614000, undefined],
+    ["Rs 615.00 debited from A/c XX7305 at Current. Avl Bal Rs 6,140.00", 614000, undefined],
+    ["Rs 615.00 spent on Debit Card XX7305. Avl Bal Rs 6,140.00", 614000, undefined],
+    ["Rs 615.00 spent on card XX2614 at ONLINE. Avl Lmt Rs 41,270.00", undefined, 4127000],
+    ["Rs 615.00 spent on card XX2614 at ATM. Avl Lmt Rs 41,270.00", undefined, 4127000],
+  ])("reads the figure after %s for every sender", (text, balance, limit) => {
+    for (const sender of SENDERS) {
+      const p = read(text, { sender });
+      expect(p.balanceMinor).toBe(balance);
+      expect(p.availableLimitMinor).toBe(limit);
+    }
+  });
+
+  it.each(["Loan Bal Rs 1,16,400.00", "Min. Avl Bal Rs 12,250.00", "Min.Avl Bal Rs 12,250.00", "Txn. Avl Limit Rs 9,615.00"])(
+    "still leaves out %s",
+    (text) => {
+      expect(findBalance(text) ?? findAvailableLimit(text)).toBeUndefined();
+    }
+  );
+
+  // 2: digits from the sentence before, or out of a reference, never name another owner.
+  it.each([
+    ["IMPS INR 615.00 sent from HDFC Bank A/c XX7305 on 08-11-26 To A/c xxxxxxxx8842. Avl bal:INR 6,140.00", "VM-HDFCBK-S"],
+    ["Rs 615.00 debited from A/c XX7305 to A/c XX8842. Avl Bal Rs 6,140.00", "VM-OTHRBK"],
+    ["Rs 615.00 debited from A/c XX7305 on 08-11-26 Ref 631800XX8842 Avl Bal Rs 6,140.00", "VM-OTHRBK"],
+  ])("keeps the payer's balance in %s", (text, sender) => {
+    const p = read(text, { sender });
+    expect(p.last4).toBe("7305");
+    expect(p.balanceMinor).toBe(614000);
+  });
+
+  it("still drops a balance printed next to other digits in the same clause", () => {
+    expect(read("Rs 615.00 debited from A/c XX7305 to A/c XX8842 on 08-11-26, A/c XX8842 Avl Bal Rs 340.00", {}).balanceMinor).toBeUndefined();
+  });
+
+  // 3: two accounts in one message: an expense is the payer's account, for every sender.
+  it("an expense with a credited account in the same message is booked on the payer's account", () => {
+    const messages = [
+      "Your a/c no. XXXXXXXX7305 is debited for Rs.615.00 on 08-11-26 and a/c XXXXXX8842 credited (IMPS Ref no 631800224411). Avl Bal Rs 2,940.00",
+      "Rs 615.00 debited from A/c XX7305 and credited to A/c XX8842 on 08-11-26. Ref 631800224411",
+      "A/c XX7305 debited by Rs 615.00 on 08-11-26; A/c XX8842 credited. Ref 631800224411",
+    ];
+    for (const text of messages) {
+      for (const sender of SENDERS) {
+        expect(read(text, { sender })).toMatchObject({ type: "expense", last4: "7305" });
+      }
+      expect(money(createCaptureParser([])(text, AT))).toMatchObject({ type: "expense", last4: "7305" });
+    }
+  });
+
+  it("income names the credited account", () => {
+    for (const sender of SENDERS) {
+      expect(
+        read("Your A/c XXXXX7305 is credited by Rs.615.00 on 08-11-26 from a/c XXXXXX8842 (IMPS Ref no 631800224411)", { sender })
+      ).toMatchObject({ type: "income", last4: "7305" });
+    }
+  });
+
+  // 4-7
+  it.each([
+    ["Avl Bal Rs 6,140.00 due to a reversal", 614000],
+    ["Avl Bal Rs 6,140.00- HDFC Bank", 614000],
+    ["Avl Bal Rs 6,140.00, Rs 115.00 on hold", 614000],
+  ])("reads %s", (text, minor) => {
+    expect(findBalance(text)).toBe(minor);
+  });
+
+  it.each(["Avl Bal Rs 6,140.00-.", "Avl Bal Rs 6,140.00-", "UPI Lite Bal Rs 236.00", "Balance Rs 1,060.00 due on 15-11"])(
+    "leaves out %s",
+    (text) => {
+      expect(findBalance(text)).toBeUndefined();
+    }
+  );
+});
