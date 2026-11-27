@@ -281,4 +281,12 @@ describe("money into a loan", () => {
     const p = money(parseCapture("Your loan a/c XX6618 has been disbursed and Rs 1,50,000.00 credited to your A/c XX7362 on 05-12-26.", AT, { sender: "VM-HDFCBK-S" }));
     expect(p).toMatchObject({ type: "income", last4: "7362" });
   });
+
+  // Final review of ticket 157: money words outside every list, next to a labelled limit, are never a notice.
+  it.each([
+    "AutoPay for VIEWBOX max Rs 515. Today's charge went out. Mandate updated.",
+    "AutoPay for VIEWBOX upto Rs 515 nikal gaya. Mandate updated.",
+  ])("money that went out next to a labelled limit is not a notice: %s", (text) => {
+    for (const sender of SENDERS) expect(parseCapture(text, AT, { sender }).kind, String(sender)).not.toBe("mandate");
+  });
 });

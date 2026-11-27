@@ -91,7 +91,7 @@ const NEUTRAL_PAST = new Set([
   "confirmed", "expired", "signed", "submitted", "ended", "increased", "reduced", "decreased", "extended",
 ]);
 const PAST_WORD =
-  /\b(?:[a-z]{2,}ed|complete[ds]?|went\s+through|cleared|taken|vasool|chale\s+gaye|ho\s+gaya|jama|kata|kat\s+gay[ae]|bhugtan)\b/gi;
+  /\b(?:[a-z]{2,}ed|complete[ds]?|went\s+through|went\s+out|cleared|taken|vasool|nikal\s+gaya|nikla|chale\s+gaye|ho\s+gaya|jama|kata|kat\s+gay[ae]|bhugtan)\b/gi;
 function unknownPast(text: string): boolean {
   for (const m of text.matchAll(PAST_WORD)) {
     const word = m[0].toLowerCase();
