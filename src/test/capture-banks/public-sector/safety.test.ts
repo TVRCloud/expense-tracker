@@ -246,3 +246,53 @@ describe("good messages keep their booking and their payee", () => {
     expect(phoneVpa.kind === "money" && phoneVpa.merchant).toBeUndefined();
   });
 });
+
+// Ticket 171 review, round 3: repayments worded "for/as/against … loan/EMI" or "EMI recovery" stay in Review without the
+// loan's digits (or become the named account's expense); card bill payments carry no merchant; a charge on the card
+// line is never cash from an ATM.
+describe("round 3: loan wording, card payments and ATM charges", () => {
+  it.each([
+    { sender: "AD-BOBSMS-S", text: "Rs.5,415.00 Cr. to A/c XX991177 on 05-11-2026 for Loan EMI Dec. Ref:631902111010 -Bank of Baroda" },
+    { sender: "VK-UCOBNK-S", text: "A/c XX9910 Credited with Rs.5,415.00 on 05-11-2026 by EMI recovery.Avl Bal Rs.0.00" },
+    { sender: "VK-UCOBNK-S", text: "A/c XX9910 Credited with Rs.5,415.00 on 05-11-2026 by transfer. Adjusted against your home loan dues.Avl Bal Rs.0.00" },
+    { sender: "AD-INDBNK-S", text: "Rs.5,415.00 credited to a/c *9910 on 05/11/2026 as EMI.Indian Bank" },
+    { sender: "VM-PNBSMS-S", text: "Ac XX9921 Credited with Rs.5,415.00 05-11-2026 by transfer. This amount is towards loan instalment for Dec. -PNB" },
+  ])("$sender: a repayment into a loan stays in Review with no digits or payee", ({ sender, text }) => {
+    const p = parseCapture(text, RECEIVED, { sender });
+    expect(p.confidence).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+    if (p.kind === "money") {
+      expect(p.last4).toBeUndefined();
+      expect(p.merchant).toBeUndefined();
+    }
+  });
+
+  it("a repayment naming the account it left is that account's expense, in Review", () => {
+    const p = parseCapture("Union Bank of India A/c*7720 Cr Rs5,415.00 on 05-11-26 10:07 for EMI from A/c *5093, Bal Rs0.00", RECEIVED, { sender: "JM-UNIONB-S" });
+    expect(p).toMatchObject({ kind: "money", type: "expense", last4: "5093" });
+    expect(p.confidence).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+  });
+
+  it.each([
+    "Rs.12,450.00 transferred from A/c ...7193 to:BOBCARD ending 3381 on 05-11-2026. Total Bal:Rs.9,247.40CR. -Bank of Baroda",
+    "Your BOBCARD ending 3381 payment of Rs 12,450.00 has been received. Refund of excess payment processed. -BOBCARD",
+  ])("a BOBCARD bill payment is a card payment with no merchant: %s", (text) => {
+    const p = parseCapture(text, RECEIVED, { sender: "AD-BOBSMS-S" });
+    expect(p).toMatchObject({ kind: "money", cardPayment: true, last4: "3381", merchant: undefined });
+    expect(p.confidence).toBeLessThanOrEqual(0.5);
+  });
+
+  it("a disbursal reason is never Bank of Baroda's payee", () => {
+    const p = parseCapture("Rs.2,05,000.00 credited to A/c XX719628 via NEFT/631902111011 by Personal Loan disbursal. AvlBal:Rs2,15,000.00 -Bank of Baroda", RECEIVED, { sender: "AD-BOBSMS-S" });
+    expect(p).toMatchObject({ kind: "money", type: "income", merchant: undefined });
+  });
+
+  it("a charge named on the card line is never cash from an ATM", () => {
+    const p = parseCapture("A/c XX6731 debited with Rs.23.60, 05-11-2026 thru card XX5108 towards ATM charges. Txn at SBI ATM -PNB", RECEIVED, { sender: "VM-PNBSMS-S" });
+    expect(p.kind === "money" && p.atm).toBeFalsy();
+  });
+
+  it("a credit 'by transfer' names no payee", () => {
+    const p = parseCapture("A/c XX8840 Credited with Rs.1,935.00 on 05-11-2026 by transfer.Avl Bal Rs.8,257.90", RECEIVED, { sender: "VK-UCOBNK-S" });
+    expect(p).toMatchObject({ kind: "money", type: "income", merchant: undefined });
+  });
+});

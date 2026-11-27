@@ -33,8 +33,9 @@ export class BobParser extends PublicSectorParser {
   protected override cardPayment(text: string): boolean {
     // A spend or a refund on the card is never its bill payment, whatever a promo line after it says ("Make your BOBCARD
     // payment on time"): only the sentence holding the amount is read.
-    if (/\b(?:spent|refund(?:ed)?)\b/i.test(text)) return super.cardPayment(text);
-    return BOBCARD_PAID.test(moneySentence(text)) || super.cardPayment(text);
+    const sentence = moneySentence(text);
+    if (/\b(?:spent|refund(?:ed)?)\b/i.test(sentence)) return super.cardPayment(text);
+    return BOBCARD_PAID.test(sentence) || super.cardPayment(text);
   }
 
   protected override paidCard(text: string): FoundAccount | null {
@@ -61,12 +62,13 @@ export class BobParser extends PublicSectorParser {
   }
 
   protected override merchant(text: string, type: "income" | "expense"): string | undefined {
-    if (/\bdeposited\sin\scash\b/i.test(text)) return undefined;
+    // A cash deposit names no payer; a card bill payment has no other party (the card is the person's own).
+    if (/\bdeposited\sin\scash\b/i.test(text) || this.cardPayment(text)) return undefined;
     const toColon = text.match(new RegExp(String.raw`\bto:\s?${NAME}\.(?:\s|$)`, "i"));
     const crTo = text.match(/\bCr\.\sto\s([\w.\-]{1,60}@[A-Za-z][\w\-]{0,30})(?![\w@])/i);
     const name = cleanParty(toColon?.[1]) ?? crTo?.[1] ?? sharedParty(super.merchant(text, type));
     // A card's own name and digits are never the other party ("to:BOBCARD 3381"); a shop called "BOBCARD STATIONERS" is.
-    return name && !/^BOBCARD(?:\s(?:ending\s)?[x*]{0,4}\d{4})?$/i.test(name) ? nameOnly(name) ?? name : undefined;
+    return name && !/^BOBCARD(?:\s(?:ending\s)?[x*]{0,4}\d{4})?$/i.test(name) ? nameOnly(name) : undefined;
   }
 
   protected override ref(text: string): string | undefined {

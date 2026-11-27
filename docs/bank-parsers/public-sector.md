@@ -8,10 +8,12 @@ names two accounts, and never a loan or card account's mask.
 All ten extend `PublicSectorParser` (`banks/public-sector-base.ts`), which keeps two reads in Review whatever shape
 matched: a debit that was reversed, refunded or not dispensed (the verb only: a payee called "REFUND CORNER" or a help
 line "Cash not dispensed? Call …" changes nothing), and a credit into a loan or towards an EMI as what was credited
-("towards Loan EMI", "loan a/c … credited", "--LOAN RECOVERY"; a promo "Apply for a Home Loan" or a payer "EMI STORE"
+("towards Loan EMI", "for/as/against … loan/EMI", "EMI recovery", "loan instalment", "loan a/c … credited",
+"--LOAN RECOVERY"; a promo "Apply for a Home Loan" or a payer "EMI STORE"
 does not count). That credit also drops its account digits, balance and a "Loan EMI" merchant, so a confirm can never
-teach a savings account the loan's number. Its `nameOnly` cleans a payee: no "Sender:"/"Beneficiary:" label, no
-"towards refund…"/"reversal of…"/bare "REV"/"…Loan disbursal" reason (real names such as "REV MOTORS", "Towards
+teach a savings account the loan's number; when it names the account the money left ("for EMI from A/c *5093", "by
+debit to SB XXXX3917") it is that account's expense, still in Review. Its `nameOnly` cleans a payee: no "Sender:"/"Beneficiary:" label, no
+"towards refund…"/"reversal of…"/bare "REV", "transfer" or "cash"/"…Loan disbursal" reason (real names such as "REV MOTORS", "Towards
 Travels", "SENDER ENTERPRISES" stay), no run of eight or more digits, and no UPI id made of a phone number. When a
 bank's own payee field matches but holds no name, the parser gives no merchant rather than the shared guess.
 
@@ -29,7 +31,8 @@ bank's own payee field matches but holds no name, the parser gives no merchant r
   Rs.…"; "Your a/c no XX… is debited for Rs …" (two accounts).
 - Reads the card's plain digits, the payee before "thru UPI", the UPI ref; a debit "thru card … at <bank> ATM" or with
   the "free txn on PNB ATM" line is cash from an ATM, never a charge or fee at one ("at non-PNB ATM"), a shop ("at ATM
-  STORES", "near … ATM") or a reversal; a charge line after the ATM sentence does not undo it. A help line ("report it to
+  STORES", "near … ATM") or a reversal; a charge line after the ATM sentence does not undo it, but a charge named on
+  the card line itself ("thru card XX5108 towards ATM charges") does. A help line ("report it to
   the bank") or an ATM is never the payee.
 
 ## Bank of Baroda (`bob.ts`)
@@ -42,7 +45,7 @@ bank's own payee field matches but holds no name, the parser gives no merchant r
   deposit.
 - BOBCARD is a credit card: paying it (from the account, "to:BOBCARD 3381", "towards BOBCARD", a payment received on
   it) is a card bill payment in Review with the card's own digits, read only in the sentence holding the amount and
-  never on a spend or a refund; the card is never the payee, but a shop named "BOBCARD STATIONERS" is.
+  never on a spend or a refund in that sentence; a card payment has no merchant (the card is never the payee), but a shop named "BOBCARD STATIONERS" is.
 
 ## Union Bank of India (`union.ts`)
 - Header `UNIONB`. No app package.

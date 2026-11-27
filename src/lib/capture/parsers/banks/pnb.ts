@@ -47,6 +47,8 @@ export class PnbParser extends PublicSectorParser {
     // charge line after the ATM sentence ("at SBI ATM. Charges apply beyond 5 free txns.") does not change that.
     if (/\b(?:charges?|fees?|enquiry)\b[^.]{0,30}?\bat\s(?:non-)?[A-Za-z-]{0,12}\s?ATM\b/i.test(text)) return false;
     if (/\b(?:reversed|refunded|not\sdispensed(?!\s?\?))\b/i.test(text)) return false;
+    // The card line itself says what was charged ("thru card XX5108 towards ATM charges"): a fee, whatever ATM follows.
+    if (/\bthru\scard\s[X*]{0,8}\d{4}\b[^.]{0,40}?\b(?:towards|for)\s(?:[A-Za-z]+\s){0,3}charges?\b/i.test(text)) return false;
     const card = /\bdebited\b[^]{0,80}?\bthru\scard\s[X*]{0,8}\d{4}\b/i.test(text);
     // "at PNB ATM", "at SBI ATM", never "at ATM STORES …" (a shop) or "near … ATM"; or the bank's free-use count line.
     const atAtm = /\bat\s(?!non-)(?:[A-Za-z]{2,12}\s)?ATM(?!\s[A-Za-z])/i.test(text);
