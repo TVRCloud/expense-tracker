@@ -24,6 +24,9 @@ export { isAtmWithdrawal, isCardPayment } from "./extract/direction";
 export { BankParser } from "./base";
 export { BANK_PARSERS, findBankParser, normaliseSender } from "./registry";
 
+/** Parser ids that are not a bank parser: the ignore checks, the exact formats, the generic parser and "none". */
+export const SHARED_PARSER_IDS: ReadonlySet<string> = new Set(["ignore", "navi_emi", "idfc_card_spend", "generic", "none"]);
+
 /** A parse function over a given set of bank parsers. `parseCapture` is this over BANK_PARSERS; tests pass their own. */
 export function createCaptureParser(parsers: readonly BankParser[]) {
   return function parse(text: string, receivedAt: Date = new Date(), source?: MessageSource): CaptureParse {
