@@ -17,6 +17,9 @@ export interface NormalisedSource {
   packageName?: string;
 }
 
+/** Money that came back after it moved: a reversal, a refund, a debit returned unpaid or bounced. */
+const MONEY_CAME_BACK = /\b(?:reversed|reversal|refund(?:ed)?|returned\s+unpaid|bounced|charged\s+back)\b/i;
+
 export abstract class BankParser {
   /** Stored as the parse's `parserId` ("hdfc", "generic"). */
   abstract readonly id: string;
@@ -67,11 +70,20 @@ export abstract class BankParser {
     if (parsedDate) confidence += 0.1;
     if (ref || merchant) confidence += 0.05;
     if (direction.ambiguous) confidence -= 0.15;
-    confidence += this.confidenceBonusFor(text);
+    // The bank's shape bonus only with an account: a no-account read must never reach the auto-book line, where a
+    // categorise rule naming an account could book it (ticket 177).
+    if (account) confidence += this.confidenceBonusFor(text);
     // Charged abroad: today's rate is not what the bank billed, so the person confirms the rupee amount.
     if (amount.currency !== "INR") confidence = Math.min(confidence, 0.6);
     // Paying a card bill is a move between the person's own accounts: always reviewed, never booked as income.
     if (cardPayment) confidence = Math.min(confidence, 0.5);
+    // A debit the same message says came back ("… trf to SHOPKART has been reversed", "returned unpaid"): which way
+    // the money finally went is for the person to confirm, never booked either way. The merchant's own name is left
+    // out first, so a shop called "REFUND KITCHEN" does not count. A refund credit on its own is still booked (ticket 177).
+    if (direction.type === "expense") {
+      const rest = merchant ? text.split(merchant).join(" ") : text;
+      if (MONEY_CAME_BACK.test(rest)) confidence = Math.min(confidence, 0.75);
+    }
 
     return {
       kind: "money",

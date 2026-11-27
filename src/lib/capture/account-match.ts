@@ -18,62 +18,78 @@ import logger from "@/lib/logger";
 //    saves the digits (learnDigitsFromCapture) so the next message matches
 //    in step 1.
 
-type BankKey =
-  | "HDFC" | "ICICI" | "SBI" | "AXIS" | "KOTAK" | "IDFC" | "YES" | "INDUSIND"
-  | "PNB" | "BARODA" | "CANARA" | "UNION" | "FEDERAL" | "AU" | "RBL";
+// One entry per bank: how it appears in the parsed bank name and in the account names people type, and its SMS
+// headers (the part after "VM-"). Order matters where one name sits inside another ("South Indian Bank" before
+// "Indian Bank", "Central Bank of India" and "Union Bank of India" before "Bank of India"). Ticket 177 added the
+// phase 9 banks.
+const BANKS = [
+  { key: "HDFC", name: /\bHDFC\b/, sender: /HDFC/ },
+  { key: "ICICI", name: /\bICICI\b/, sender: /ICICI/ },
+  { key: "SBI", name: /\bSBI\b|\bSTATE BANK\b/, sender: /SBI/ },
+  { key: "AXIS", name: /\bAXIS\b/, sender: /AXIS/ },
+  { key: "KOTAK", name: /\bKOTAK\b/, sender: /KOTAK/ },
+  { key: "IDFC", name: /\bIDFC\b/, sender: /IDFC/ },
+  { key: "YES", name: /\bYES ?BANK\b/, sender: /YESB/ },
+  { key: "INDUSIND", name: /\bINDUS ?IND\b/, sender: /INDUS/ },
+  { key: "PNB", name: /\bPNB\b|\bPUNJAB NATIONAL\b/, sender: /PNB/ },
+  { key: "PSB", name: /\bPUNJAB ?(?:&|AND) ?SIND\b|\bP ?& ?S ?B\b/, sender: /^PSBANK/ },
+  { key: "BARODA", name: /\bBOB\b|\bBARODA\b/, sender: /BOB|BARODA/ },
+  { key: "CANARA", name: /\bCANARA\b/, sender: /CANBNK|CANARA/ },
+  { key: "CENTRAL", name: /\bCENTRAL BANK\b|\bCBOI\b/, sender: /^CENTBK/ },
+  { key: "UNION", name: /\bUNION BANK\b|\bUBI\b/, sender: /UBOI|UNION/ },
+  { key: "BOI", name: /\bBOI\b|(?<!\b(?:CENTRAL|UNION) )\bBANK OF INDIA\b/, sender: /^BOI(?:IND|BNK)/ },
+  { key: "IOB", name: /\bIOB\b|\bINDIAN OVERSEAS\b/, sender: /^IOB/ },
+  { key: "SIB", name: /\bSOUTH INDIAN\b|\bSIB\b/, sender: /^SIBSMS/ },
+  { key: "INDIAN", name: /(?<!\bSOUTH )\bINDIAN BANK\b/, sender: /^INDBNK/ },
+  { key: "UCO", name: /\bUCO\b/, sender: /^UCOBNK/ },
+  { key: "FEDERAL", name: /\bFEDERAL\b|\bFI MONEY\b/, sender: /FEDBNK|FEDFIB|FEDERAL/ },
+  { key: "IDBI", name: /\bIDBI\b/, sender: /^IDBIBK/ },
+  { key: "KARNATAKA", name: /\bKARNATAKA BANK\b|\bKBL\b/, sender: /^KBLBNK/ },
+  { key: "CUB", name: /\bCITY UNION\b|\bCUB\b/, sender: /^CUBANK/ },
+  { key: "TMB", name: /\bTAMILNAD MERCANTILE\b|\bTMB\b/, sender: /^TMBANK/ },
+  { key: "DHANLAXMI", name: /\bDHANLAXMI\b|\bDHANLAKSHMI\b/, sender: /^DHANBK/ },
+  { key: "JK", name: /\bJ ?& ?K\b|\bJAMMU (?:&|AND) KASHMIR\b|\bJKB\b/, sender: /^JKBANK/ },
+  { key: "KERALA", name: /\bKERALA BANK\b|\bKSCB\b/, sender: /^KELBNK/ },
+  { key: "KERALA_GRAMIN", name: /\bKERALA GRAMIN\b|\bKGB\b/, sender: /^KGBANK/ },
+  { key: "SARASWAT", name: /\bSARASWAT\b/, sender: /^SARBNK/ },
+  { key: "AU", name: /\bAU\b/, sender: /AUBANK|AUSFB/ },
+  { key: "BANDHAN", name: /\bBANDHAN\b/, sender: /^(?:BDNSMS|BANDHN)/ },
+  { key: "EQUITAS", name: /\bEQUITAS\b/, sender: /^(?:EQUTAS|EQUITA)/ },
+  { key: "UTKARSH", name: /\bUTKARSH\b/, sender: /^UTKS(?:PR|FB)/ },
+  { key: "JANA", name: /\bJANA\b/, sender: /^JANABK/ },
+  { key: "SURYODAY", name: /\bSURYODAY\b/, sender: /^SSFBNK/ },
+  { key: "AIRTEL", name: /\bAIRTEL\b/, sender: /^AIRBNK/ },
+  { key: "IPPB", name: /\bIPPB\b|\bINDIA POST\b/, sender: /^IPBMSG/ },
+  { key: "JIO", name: /\bJIO\b/, sender: /^JIOPBS/ },
+  { key: "NSDL", name: /\bNSDL\b/, sender: /^NSDLPB/ },
+  { key: "HSBC", name: /\bHSBC\b/, sender: /^HSBCIN/ },
+  { key: "SC", name: /\bSTANDARD CHARTERED\b|\bSCB\b|\bSC BANK\b/, sender: /^SCBANK/ },
+  { key: "DBS", name: /\bDBS\b|\bDIGIBANK\b/, sender: /^DBSBNK/ },
+  { key: "AMEX", name: /\bAMEX\b|\bAMERICAN EXPRESS\b/, sender: /^AMEXIN/ },
+  { key: "JUPITER", name: /\bJUPITER\b|\bCSB\b/, sender: /^JTEDGE/ },
+  { key: "SLICE", name: /\bSLICE\b/, sender: /^SLC(?:EIT|BNK)/ },
+  { key: "ONECARD", name: /\bONE ?CARD\b/, sender: /^ONECRD/ },
+  { key: "RBL", name: /\bRBL\b/, sender: /RBL/ },
+] as const;
+
+type BankKey = (typeof BANKS)[number]["key"];
 
 // How each bank appears in account names people type.
-const NAME_ALIASES: Record<BankKey, RegExp> = {
-  HDFC: /\bHDFC\b/,
-  ICICI: /\bICICI\b/,
-  SBI: /\bSBI\b|\bSTATE BANK\b/,
-  AXIS: /\bAXIS\b/,
-  KOTAK: /\bKOTAK\b/,
-  IDFC: /\bIDFC\b/,
-  YES: /\bYES ?BANK\b/,
-  INDUSIND: /\bINDUS ?IND\b/,
-  PNB: /\bPNB\b|\bPUNJAB NATIONAL\b/,
-  BARODA: /\bBOB\b|\bBARODA\b/,
-  CANARA: /\bCANARA\b/,
-  UNION: /\bUNION BANK\b|\bUBI\b/,
-  FEDERAL: /\bFEDERAL\b/,
-  AU: /\bAU\b/,
-  RBL: /\bRBL\b/,
-};
+const NAME_ALIASES = Object.fromEntries(BANKS.map((b) => [b.key, b.name])) as Record<BankKey, RegExp>;
 
-// Parsed bank name ("HDFC Bank", "Bank of Baroda", "IDFC FIRST") to key.
+// Parsed bank name ("HDFC Bank", "Bank of Baroda", "IDFC FIRST", "South Indian Bank") to key: the first bank, in the
+// order above, whose name pattern matches.
 function keyFromBankName(bankName?: string): BankKey | undefined {
   if (!bankName) return undefined;
   const n = bankName.toUpperCase();
-  if (n.includes("BARODA") || /^BOB\b/.test(n)) return "BARODA";
-  if (n.startsWith("INDUSIND")) return "INDUSIND";
-  const first = n.split(/\s+/)[0] as BankKey;
-  return first in NAME_ALIASES ? first : undefined;
+  return BANKS.find((b) => b.name.test(n))?.key;
 }
 
 // DLT sender IDs look like "VM-HDFCBK", "AD-ICICIB", "JD-SBIINB".
-const SENDER_CODES: Array<[RegExp, BankKey]> = [
-  [/HDFC/, "HDFC"],
-  [/ICICI/, "ICICI"],
-  [/SBI/, "SBI"],
-  [/AXIS/, "AXIS"],
-  [/KOTAK/, "KOTAK"],
-  [/IDFC/, "IDFC"],
-  [/YESB/, "YES"],
-  [/INDUS/, "INDUSIND"],
-  [/PNB/, "PNB"],
-  [/BOB|BARODA/, "BARODA"],
-  [/CANBNK|CANARA/, "CANARA"],
-  [/UBOI|UNION/, "UNION"],
-  [/FEDBNK|FEDERAL/, "FEDERAL"],
-  [/AUBANK|AUSFB/, "AU"],
-  [/RBL/, "RBL"],
-];
-
 function keyFromSender(sender?: string): BankKey | undefined {
   if (!sender) return undefined;
   const code = sender.toUpperCase().replace(/^[A-Z]{2}-/, "");
-  return SENDER_CODES.find(([re]) => re.test(code))?.[1];
+  return BANKS.find((b) => b.sender.test(code))?.key;
 }
 
 export function bankKeyOf(bankName?: string, sender?: string): BankKey | undefined {
@@ -121,6 +137,29 @@ export async function matchAccountForMessage(
   if (byDigits.length > 1) return none;
 
   const bank = bankKeyOf(msg.bankName, msg.sender);
+
+  // A bank that masks to three digits (ICICI "XX274", Canara, Jana, HSBC "***-731"): the saved four digits that end
+  // with them, only when exactly one of the user's accounts has such digits, and that account is not named after a
+  // different bank. Three digits are never learned (learnDigitsFromCapture keeps four). Ticket 177.
+  if (/^\d{3}$/.test(msg.last4)) {
+    const tail = new RegExp(`\\d${msg.last4}$`);
+    const bySuffix = await Account.find({
+      user: userId,
+      isArchived: { $ne: true },
+      $or: [{ smsLastFour: tail }, { "creditMeta.lastFourDigits": tail }],
+    })
+      .select("_id name")
+      .limit(2)
+      .lean<{ _id: Types.ObjectId; name: string }[]>();
+    if (bySuffix.length > 1) return none;
+    if (bySuffix.length === 1) {
+      const name = bySuffix[0].name.toUpperCase();
+      const otherBank = bank && !NAME_ALIASES[bank].test(name) && BANKS.some((b) => b.key !== bank && b.name.test(name));
+      if (!otherBank) return { accountId: bySuffix[0]._id.toString(), matchedBy: "digits", suggestedAccountId: null };
+      return none;
+    }
+  }
+
   if (!bank) return none;
   const accounts = await Account.find({ user: userId, isArchived: { $ne: true } })
     .select("_id name type smsLastFour creditMeta.lastFourDigits")

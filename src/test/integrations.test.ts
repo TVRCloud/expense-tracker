@@ -1387,6 +1387,111 @@ describe("account matching by bank when no digits are saved", () => {
   });
 });
 
+// Ticket 177: every phase 9 bank is known to account matching, and a three-digit mask matches saved digits by suffix.
+describe("account matching for the phase 9 banks", () => {
+  async function newUser() {
+    const { default: User } = await import("@/models/User");
+    const u = await User.create({ name: "M", email: `m${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    return u._id.toString();
+  }
+  async function account(userId: string, name: string, type: string, extra: Record<string, unknown> = {}) {
+    const { default: Account } = await import("@/models/Account");
+    return Account.create({ user: userId, name, type, balance: 100000, currency: "INR", ...extra });
+  }
+
+  it("names each bank from its parsed name without mixing up banks whose names contain another's", async () => {
+    const { bankKeyOf } = await import("@/lib/capture/account-match");
+    expect(bankKeyOf("South Indian Bank")).toBe("SIB");
+    expect(bankKeyOf("Indian Bank")).toBe("INDIAN");
+    expect(bankKeyOf("Indian Overseas Bank")).toBe("IOB");
+    expect(bankKeyOf("Central Bank of India")).toBe("CENTRAL");
+    expect(bankKeyOf("Union Bank of India")).toBe("UNION");
+    expect(bankKeyOf("Bank of India")).toBe("BOI");
+    expect(bankKeyOf("Bank of Baroda")).toBe("BARODA");
+    expect(bankKeyOf("Kerala Gramin Bank")).toBe("KERALA_GRAMIN");
+    expect(bankKeyOf("Kerala Bank")).toBe("KERALA");
+    expect(bankKeyOf("Punjab & Sind Bank")).toBe("PSB");
+    expect(bankKeyOf("Punjab National Bank")).toBe("PNB");
+    expect(bankKeyOf("IndusInd Bank")).toBe("INDUSIND");
+    expect(bankKeyOf("HDFC Bank")).toBe("HDFC");
+  });
+
+  it("names each bank from its SMS header", async () => {
+    const { bankKeyOf } = await import("@/lib/capture/account-match");
+    const cases: [string, string][] = [
+      ["VM-CENTBK-S", "CENTRAL"], ["AD-INDBNK", "INDIAN"], ["JD-IOBCHN-T", "IOB"], ["VM-UCOBNK", "UCO"], ["AX-PSBANK", "PSB"],
+      ["VM-BOIIND", "BOI"], ["VM-SIBSMS", "SIB"], ["VM-KBLBNK", "KARNATAKA"], ["VM-CUBANK", "CUB"], ["VM-TMBANK", "TMB"],
+      ["VM-DHANBK", "DHANLAXMI"], ["VM-JKBANK", "JK"], ["VM-KELBNK", "KERALA"], ["VM-KGBANK", "KERALA_GRAMIN"],
+      ["VM-SARBNK", "SARASWAT"], ["VM-IDBIBK", "IDBI"], ["VM-FEDFIB", "FEDERAL"], ["VM-BDNSMS", "BANDHAN"],
+      ["VM-EQUTAS", "EQUITAS"], ["VM-UTKSFB", "UTKARSH"], ["VM-JANABK", "JANA"], ["VM-SSFBNK", "SURYODAY"],
+      ["VM-AIRBNK", "AIRTEL"], ["VM-IPBMSG", "IPPB"], ["VM-JIOPBS", "JIO"], ["VM-NSDLPB", "NSDL"], ["VM-HSBCIN", "HSBC"],
+      ["VM-SCBANK", "SC"], ["VM-DBSBNK", "DBS"], ["VM-AMEXIN", "AMEX"], ["VM-JTEDGE", "JUPITER"], ["VM-SLCBNK", "SLICE"],
+      ["VM-ONECRD", "ONECARD"], ["VM-HDFCBK", "HDFC"], ["JD-SBIINB-S", "SBI"],
+    ];
+    for (const [sender, key] of cases) expect(bankKeyOf(undefined, sender), sender).toBe(key);
+  });
+
+  it("guesses the only account of a phase 9 bank when its digits are saved nowhere", async () => {
+    const { matchAccountForMessage } = await import("@/lib/capture/account-match");
+    const userId = await newUser();
+    const canara = await account(userId, "Canara Savings", "savings");
+    await account(userId, "South Indian Bank", "bank");
+    const m = await matchAccountForMessage(userId, { last4: "6618", bankName: "Canara Bank", instrument: "account", sender: "VM-CANBNK" });
+    expect(m).toMatchObject({ accountId: canara._id.toString(), matchedBy: "bank" });
+    // "Indian Bank" never takes the South Indian Bank account.
+    const indian = await matchAccountForMessage(userId, { last4: "6618", bankName: "Indian Bank", instrument: "account" });
+    expect(indian.accountId).toBeNull();
+  });
+
+  it("matches a three-digit mask to the one account whose saved digits end with it", async () => {
+    const { matchAccountForMessage } = await import("@/lib/capture/account-match");
+    const userId = await newUser();
+    const icici = await account(userId, "ICICI Salary", "bank", { smsLastFour: ["7274"] });
+    await account(userId, "HDFC Bank", "bank", { smsLastFour: ["5150"] });
+    const m = await matchAccountForMessage(userId, { last4: "274", bankName: "ICICI Bank", instrument: "account" });
+    expect(m).toMatchObject({ accountId: icici._id.toString(), matchedBy: "digits" });
+  });
+
+  it("never guesses a three-digit mask between two accounts, an account of another bank or another user's", async () => {
+    const { matchAccountForMessage } = await import("@/lib/capture/account-match");
+    const userId = await newUser();
+    await account(userId, "ICICI Salary", "bank", { smsLastFour: ["7274"] });
+    await account(userId, "ICICI Joint", "bank", { smsLastFour: ["1274"] });
+    expect((await matchAccountForMessage(userId, { last4: "274", bankName: "ICICI Bank", instrument: "account" })).accountId).toBeNull();
+
+    const second = await newUser();
+    await account(second, "HDFC Bank", "bank", { smsLastFour: ["8274"] });
+    expect((await matchAccountForMessage(second, { last4: "274", bankName: "ICICI Bank", instrument: "account" })).accountId).toBeNull();
+
+    const third = await newUser();
+    expect((await matchAccountForMessage(third, { last4: "274", bankName: "ICICI Bank", instrument: "account" })).accountId).toBeNull();
+    // Archived accounts never match.
+    await account(third, "ICICI Old", "bank", { smsLastFour: ["9274"], isArchived: true });
+    expect((await matchAccountForMessage(third, { last4: "274", bankName: "ICICI Bank", instrument: "account" })).accountId).toBeNull();
+  });
+
+  it("never learns three digits as an account's match digits", async () => {
+    const { learnDigitsFromCapture } = await import("@/lib/capture/account-match");
+    const { default: CapturedMessage } = await import("@/models/CapturedMessage");
+    const { default: Account } = await import("@/models/Account");
+    const userId = await newUser();
+    const acct = await account(userId, "ICICI Salary", "bank");
+    const capture = await CapturedMessage.create({
+      user: userId,
+      channel: "sms",
+      rawText: { iv: "a", tag: "b", data: "c" },
+      receivedAt: new Date(),
+      contentHash: `h${Math.random()}`,
+      sourcePriority: 1,
+      outcome: "created",
+      accountMatch: "bank",
+      parse: { kind: "money", parserId: "icici", version: 6, confidence: 0.9, fields: { last4: "274" } },
+    });
+    await learnDigitsFromCapture(userId, { account: acct._id, sourceCapture: capture._id }, { force: true });
+    expect((await Account.findById(acct._id).lean<{ smsLastFour?: string[] }>())!.smsLastFour ?? []).toEqual([]);
+  });
+});
+
 describe("app update routes", () => {
   const KEY = "test-app-update-api-key-value";
   const release = (over: Record<string, unknown> = {}) => ({

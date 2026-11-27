@@ -68,6 +68,8 @@ export function isCardPayment(text: string): boolean {
     String.raw`\bpayment\b${any}{0,100}?\b(?:received|credited)\b${any}{0,40}?\b(?:towards|to|on|in)\b${any}{0,30}?${card}`,
     String.raw`\breceived\s+(?:a\s+|your\s+|the\s+)?payment\b${any}{0,60}?\btowards\b${any}{0,30}?${card}`,
     String.raw`\bcredited\s+to\s+your\s+credit\s*card\b`,
+    // "Acct XX274 debited ...; ICICI Bank Credit Card XX3391 credited.": the bill of the person's own card (ticket 177).
+    String.raw`\bcredit\s*card\s+(?:no\.?\s*)?[x*]{2,8}\s?\d{4}\s+(?:is\s+|has\s+been\s+)?credited\b`,
     spendWithCard ? null : String.raw`\bthank\s*you\s+for\s+(?:the\s+|your\s+)?payment\b${any}{0,80}?${card}`,
   ].some((re) => re !== null && new RegExp(re, "i").test(text));
 }

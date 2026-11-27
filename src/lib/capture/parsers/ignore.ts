@@ -9,6 +9,8 @@ import type { IgnoredParse } from "./types";
 const OTP_WARNING =
   /(?:\bdo\s*n[o'’]?t|\bdon[’']t|\bnever|\bnot|\bbeware|\bbanks?\s+never)\s+(?:to\s+)?(?:share|ask|disclose|reveal|give|tell)[^.\n\d]*/gi;
 
+const AMOUNT_HERE = /(?:Rs\.?|INR|₹|USD|EUR|GBP|AED|\$)\s?\d/i;
+
 export function ignoreReason(text: string): IgnoredParse["reason"] | null {
   // The warning is cut only up to the first digit, and a 4 to 8 digit code right after "OTP" (or "123456 is your
   // OTP") is always an OTP: "Don't share this OTP 123456 for txn of Rs 500" stays ignored. A merchant's "Auth code" or
@@ -40,6 +42,17 @@ export function ignoreReason(text: string): IgnoredParse["reason"] | null {
   // A payment that did not go through moved no money. Only when nothing says money moved: "Rs 500 debited ...
   // UPI txn failed? Call 1800" is a real debit with a help line, and "Rs 799 reversed ... for failed UPI txn" a credit.
   if (/\b(failed|declined|unsuccessful|could not be (?:processed|completed)|has been rejected)\b/i.test(text) && !moved) {
+    return "not_financial";
+  }
+  // The transaction itself was declined ("Rs 63 debited to your card ... has been declined"): "debited" there names the
+  // attempt, not money that moved. Money that came back is still read (ticket 177).
+  // Only the sentence holding the amount counts: "Card has been declined earlier? Ignore." after a real spend does not.
+  const amountSentence = text.split(/(?<!\b(?:Rs|no|Avl|Bal|Txn|Trxn))[.?!]\s+(?=[A-Z])/).find((x) => AMOUNT_HERE.test(x));
+  if (
+    amountSentence &&
+    /\b(?:has\s+been|is|was|got)\s+declined\b|\b(?:txn|transaction|payment)\s+declined\b/i.test(amountSentence) &&
+    !/\b(?:reversed|refund(?:ed)?|credited\s+back|reversal)\b/i.test(text)
+  ) {
     return "not_financial";
   }
   const hasMovement = DEBIT_WORDS.test(text) || CREDIT_WORDS.test(text);
