@@ -397,6 +397,12 @@ describe("review of ticket 156, round 2", () => {
     }
   });
 
+  // Round 3: a loan account is never the person's own account, so its digits never become last4.
+  it("never takes a loan account's digits", () => {
+    const text = "Your loan account XX6618 is credited with Rs 2,315.00 by debit to A/c XX7305 on 08-11-26. -SBI";
+    for (const sender of SENDERS) expect(read(text, { sender }).last4).not.toBe("6618");
+  });
+
   // 4-7
   it.each([
     ["Avl Bal Rs 6,140.00 due to a reversal", 614000],

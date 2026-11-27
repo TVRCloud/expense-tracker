@@ -28,7 +28,7 @@ export class IciciParser extends KnownBankParser {
   protected override account(text: string, type: "income" | "expense"): FoundAccount | null {
     // The first account named is the person's own ("Acct XX274 debited ... & Acct XX653 credited"). Three digits do
     // not match a saved four-digit account; see the account-match note in src/lib/CLAUDE.md.
-    const acct = text.match(/\bAcc(?:t|ount)?\sXX(\d{3,4})\b/i);
+    const acct = text.match(/(?<!\bloan\s)\bAcc(?:t|ount)?\sXX(\d{3,4})\b/i); // a loan account is never the person's own
     if (acct) return { last4: acct[1], instrument: "account" };
     const card = text.match(/\bCard\s(?:XX)?(\d{4})\b/i);
     if (card) return { last4: card[1], instrument: "card" };

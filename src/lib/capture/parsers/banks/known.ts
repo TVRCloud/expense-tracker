@@ -171,7 +171,9 @@ export function sharedParty(value: string | undefined): string | undefined {
 /** The account named right before the verb that matches the money's direction: "a/c no. XXXX5408 is debited ... and
  * a/c XXXX9921 credited" gives 5408 for an expense and would give 9921 only for income. Ticket 156 review. */
 export function verbAccount(text: string, type: "income" | "expense"): FoundAccount | null {
-  const re = /\b(?:a\/c|acct|account)(?:\s?no\.?)?\s?[x*]{1,12}(\d{4})\s(?:is\s|has\sbeen\s|was\s)?(debited|credited)\b/gi;
+  // A loan or card account is never the person's own bank account: its digits would teach account matching a
+  // number that belongs to the loan.
+  const re = /(?<!\b(?:loan|card)\s)\b(?:a\/c|acct|account)(?:\s?no\.?)?\s?[x*]{1,12}(\d{4})\s(?:is\s|has\sbeen\s|was\s)?(debited|credited)\b/gi;
   const want = type === "expense" ? "debited" : "credited";
   for (const m of text.matchAll(re)) if (m[2].toLowerCase() === want) return { last4: m[1], instrument: "account" };
   return null;
