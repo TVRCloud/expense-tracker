@@ -224,6 +224,14 @@ describe("a card bill payment whose card is named in the next sentence", () => {
     expect(p.confidence).toBeGreaterThanOrEqual(generic(text, RECEIVED, { sender }).confidence);
   });
 
+  it("a fee for a card payment is an expense, not a card payment", () => {
+    const p = parseCapture("Rs.236.00 debited from A/c XX5150 on 05-10-26 for credit card payment charges. Ref 604400135757.", RECEIVED, {
+      sender: "VM-HDFCBK-S",
+    });
+    expect(p).toMatchObject({ kind: "money", type: "expense" });
+    expect(p.kind === "money" && p.cardPayment).toBeFalsy();
+  });
+
   it("reads 'Credit Card Payment XX…' in the next sentence as a card payment", () => {
     const p = parseCapture("Rs.3,975.00 debited from A/c XX5150 on 05-10-26. Info: Credit Card Payment XX6047.", RECEIVED, {
       sender: "VM-HDFCBK-S",

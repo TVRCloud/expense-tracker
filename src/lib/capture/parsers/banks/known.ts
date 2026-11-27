@@ -27,7 +27,7 @@ const CARD = String.raw`credit\s*card(?!\s(?:services?|svcs?|solutions?|ltd|limi
 const PAID_TO_CARD = [
   new RegExp(String.raw`\bto\s+(?:[A-Za-z]+\s+){0,3}${CARD}`, "i"),
   /\bcredit\s*card\s+(?:no\.?\s*)?[x*]{0,8}\d{0,4}\s+credited\b/i,
-  /\bcredit\s*card\s+(?:bill\s+)?payment\b/i,
+  /\bcredit\s*card\s+(?:bill\s+)?payment\b(?!\s+(?:charges?|fees?)\b)/i,
   new RegExp(String.raw`\btowards\s(?:your\s)?(?:[A-Za-z]+\s){0,4}${CARD}`, "i"),
   /\bInfo\s?BIL\*[^.*]{0,30}?\bcard\b/i,
   new RegExp(String.raw`\bcard\b${SAME_SENTENCE}{0,40}?\bpayment\s+of\b${SAME_SENTENCE}{0,40}?\b(?:received|credited)\b`, "i"),
