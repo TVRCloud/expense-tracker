@@ -86,8 +86,8 @@ describe("findBankParser", () => {
     expect(findBankParser(undefined, parsers)).toBeNull();
   });
 
-  it("registers the six phase 8 bank parsers first, and a sender none of them owns still reads with the generic parser", () => {
-    // Later groups (banks/groups/*, phase 9) are listed after these six; registry-groups.test.ts checks the rest.
+  it("tries the six ticket 155 bank parsers first, and a sender no parser owns still reads with the generic parser", () => {
+    // The phase 9 groups (banks/groups/*) follow them; registry-groups.test.ts checks those.
     expect(BANK_PARSERS.slice(0, 6).map((p) => p.id)).toEqual(["hdfc", "icici", "sbi", "axis", "kotak", "idfc"]);
     expect(money(parseCapture(SPEND, RECEIVED, { sender: "VM-OTHRBK" })).parserId).toBe("generic");
   });
