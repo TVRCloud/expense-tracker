@@ -316,3 +316,51 @@ describe("a help line never holds an ordinary debit; a reversal stated in it sti
     expect(p.confidence).toBeLessThan(CONFIDENCE_AUTO_CREATE);
   });
 });
+
+// Ticket 177 review round 3: a help line never hides a reversal; only help ABOUT refunds, or a question, is skipped.
+describe("help lines and reversals", () => {
+  const AT3 = new Date("2026-11-12T06:30:00Z");
+  const B = "Rs 615.00 debited from A/c XX8840 on 06-11-26 to PINE GROCER. ";
+  const held = [
+    "Refund processed, contact customer care for queries.",
+    "Reversed on 07-11-26, call 18002345678",
+    "Amount auto-reversed, call 18002345678 for details",
+    "Refund successful, queries call 18002345678",
+    "Reversed - call 18002345678 for details",
+    "Credited back to your a/c, call 18002345678 for queries",
+    "For the reversed amount call 18002345678.",
+    "Reversal done, call 18002345678 for queries.",
+    "Chargeback approved, contact us on 18002345678",
+    "Cancelled by merchant, call 18002345678",
+  ];
+  const booked = [
+    "For refunds or disputes call 18002345678.",
+    "Not you? Call 18002345678 for reversal",
+    "Know your refund status at lakeside.in/refund",
+    "To raise a dispute call 18002345678.",
+  ];
+  for (const sender of [undefined, "VM-OTHRBK", "VM-HDFCBK-S"]) {
+    it.each(held)(`${sender ?? "no sender"}: held: %s`, (tail) => {
+      const p = parseCapture(B + tail, AT3, { sender });
+      expect(p.kind === "money" && p.confidence >= CONFIDENCE_AUTO_CREATE).toBe(false);
+    });
+    it.each(booked)(`${sender ?? "no sender"}: still booked: %s`, (tail) => {
+      const p = parseCapture(B + tail, AT3, { sender });
+      expect(p.kind === "money" && p.confidence >= CONFIDENCE_AUTO_CREATE).toBe(true);
+    });
+  }
+
+  it("a card bill paid with a debit card carries the paid card's digits", () => {
+    const p = parseCapture("Thank you for using your Debit Card XX8840 for Rs 12,300 payment towards Credit Card XX6047.", AT3);
+    expect(p).toMatchObject({ kind: "money", cardPayment: true, last4: "6047" });
+  });
+});
+
+describe("bank keys: Baroda Gramin is not Bank of Baroda", () => {
+  it("reads a Gramin bank as no Bank of Baroda key", async () => {
+    const { bankKeyOf } = await import("@/lib/capture/account-match");
+    expect(bankKeyOf("Bank of Baroda")).toBe("BARODA");
+    expect(bankKeyOf("Baroda UP Gramin Bank")).not.toBe("BARODA");
+    expect(bankKeyOf("Baroda Rajasthan Gramin Bank")).not.toBe("BARODA");
+  });
+});

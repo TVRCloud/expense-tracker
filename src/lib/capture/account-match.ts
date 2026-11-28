@@ -33,7 +33,7 @@ const BANKS = [
   { key: "INDUSIND", name: /\bINDUS ?IND\b/, sender: /INDUS/ },
   { key: "PNB", name: /\bPNB\b|\bPUNJAB NATIONAL\b/, sender: /PNB/ },
   { key: "PSB", name: /\bPUNJAB ?(?:&|AND) ?SIND\b|\bP ?& ?S ?B\b/, sender: /^PSBANK/ },
-  { key: "BARODA", name: /\bBOB\b|\bBARODA\b/, sender: /BOB|BARODA/ },
+  { key: "BARODA", name: /\bBOB\b|\bBARODA\b(?!\s+(?:U\.?P\.?\s+|UTTAR\s+PRADESH\s+|RAJASTHAN\s+|GUJARAT\s+)?GRAMIN)/, sender: /BOB|BARODA/ },
   { key: "CANARA", name: /\bCANARA\b/, sender: /CANBNK|CANARA/ },
   { key: "CENTRAL", name: /\bCENTRAL BANK(?: OF INDIA)?\b|\bCBOI\b/, sender: /^CENTBK/ },
   { key: "UNION", name: /\bUNION BANK(?: OF INDIA)?\b|\bUBI\b/, sender: /UBOI|UNION/ },

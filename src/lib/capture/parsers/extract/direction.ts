@@ -39,12 +39,27 @@ const isHelpLine = (sentence: string) => HELP_LINE.test(sentence) && !AMOUNT_IN.
 const UNDONE_STATED =
   /\b(?:has\s+been|have\s+been|was|were|is|got|been)\s+(?:revers\w*|reverted|refunded|reimbursed|cancell?ed|voided|returned|re-?credited|credited\s+back|rolled\s+back|adjusted\s+back|charged\s+back)\b|\b(?:txn|transaction|amount|payment|debit)\s+(?:has\s+been\s+|was\s+|is\s+)?(?:reversed|refunded|reverted|voided|cancell?ed|returned|rolled\s+back)\b/i;
 
+// A help line counts as help only when the undo word is what the help is about ("For refunds or disputes call",
+// "Call 1800 for reversal", "Know your refund status", "Not you? To block and reverse call") or the line is a question.
+// Anything that says the money came back ("Reversed on 12-11, call 1800", "Refund processed, contact customer care",
+// "For the reversed amount call 1800") still counts, so a help line can never hide a reversal (ticket 177 review).
+const HELP_ABOUT_UNDO =
+  /\b(?:for|about|to|status\s+of|track|know|raise|request|check)\s+(?:your\s+|a\s+|the\s+|any\s+)?(?:refunds?|reversals?|chargebacks?|disputes?)\b/i;
+const HELP_OPENER = /^\s*(?:for|to|not\s+you|if|know|track|raise)\b/i;
+const SAYS_DONE =
+  /\b(?:reversed|reverted|refunded|reimbursed|cancell?ed|voided|bounced|returned|re-?credited|credited\s+back|rolled\s+back|adjusted\s+back|charged\s+back|done|processed|successful|approved|completed|resolved)\b/i;
+function onlyHelp(sentence: string): boolean {
+  if (!isHelpLine(sentence) || UNDONE_STATED.test(sentence)) return false;
+  if (/\?/.test(sentence) || HELP_ABOUT_UNDO.test(sentence)) return true;
+  return HELP_OPENER.test(sentence) && !SAYS_DONE.test(sentence);
+}
+
 /** Money that moved and then came back, said anywhere outside a help line, or stated as done inside one (ticket 177).
  * Every other sentence counts word by word, a payee's name included, so a captured name cannot hide the word. */
 export function moneyUndone(text: string): boolean {
   return text
     .split(SENTENCE_END)
-    .some((x) => MONEY_UNDONE.test(x) && (!isHelpLine(x) || UNDONE_STATED.test(x)));
+    .some((x) => MONEY_UNDONE.test(x) && !onlyHelp(x));
 }
 
 /** The attempt itself did not go through, said in the sentence holding the amount or as a sentence about the
@@ -116,7 +131,7 @@ export function findDirection(text: string): FoundDirection | null {
 function withoutHelpLines(text: string): string {
   return text
     .split(SENTENCE_KEEP)
-    .filter((x) => !isHelpLine(x) || UNDONE_STATED.test(x))
+    .filter((x) => !onlyHelp(x))
     .join("");
 }
 

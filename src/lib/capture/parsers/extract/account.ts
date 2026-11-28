@@ -38,6 +38,9 @@ export function findLast4(text: string, type?: "income" | "expense"): FoundAccou
 
 /** The card a bill payment went to ("towards your credit card XX1234"). */
 export function findPaidCard(text: string): FoundAccount | null {
+  // The card the payment went to ("… payment towards Credit Card XX5678"), before any card that paid it.
+  const to = text.match(/\b(?:to|towards)\s(?:your\s)?(?:[A-Za-z]+\s){0,4}?credit\s*card\b[^\d]{0,24}?(?:[x*]+|ending(?:\s+with)?\s*[x*]*|no\.?\s*[x*]*)\s*(\d{4})\b/i);
+  if (to) return { last4: to[1], instrument: "card" };
   const m = text.match(/\bcard\b[^\d]{0,24}?(?:[x*]+|ending(?:\s+with)?\s*[x*]*|no\.?\s*[x*]*)\s*(\d{4})\b/i);
   return m ? { last4: m[1], instrument: "card" } : null;
 }
