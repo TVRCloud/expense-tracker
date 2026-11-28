@@ -42,10 +42,11 @@ describe("OneCard: only spend verbs are spends", () => {
       want: { kind: "unknown" },
     },
     {
-      name: "a shop with REFUND in its name stays a spend, and a curly apostrophe is read",
+      // Ticket 177: a refund word anywhere, a shop name included, holds the spend in Review.
+      name: "a shop with REFUND in its name stays a spend (in Review), and a curly apostrophe is read",
       text: "You’ve made a transaction of Rs. 305.40 on HARBOR BOOKS REFUND DESK on card ending 4417.",
       want: { parserId: "onecard", type: "expense", amountMinor: 30540, merchant: "HARBOR BOOKS REFUND DESK" },
-      auto: true,
+      auto: false,
     },
   ]);
 });
