@@ -27,7 +27,10 @@ export function findLast4(text: string, type?: "income" | "expense"): FoundAccou
   }
   // The first bare mask that is not a loan's number ("loan account XX6618"): a loan is never the person's own account.
   for (const bare of text.matchAll(/\b[xX*]{2,}(\d{4})\b/g)) {
-    if (/\bloan\s+(?:a\/c|acct|account)(?:\s*no\.?)?\s*$/i.test(text.slice(Math.max(0, (bare.index ?? 0) - 24), bare.index))) continue;
+    const before = text.slice(Math.max(0, (bare.index ?? 0) - 24), bare.index);
+    if (/\bloan\s+(?:a\/c|acct|account)(?:\s*no\.?)?\s*$/i.test(before)) continue;
+    // A reference number written as a mask ("ref XX5163", "RRN XX1234") is never an account (ticket 177).
+    if (/\b(?:ref(?:erence)?(?:\s*no\.?)?|rrn|utr|txn\s*id)[\s:.#-]*$/i.test(before)) continue;
     return { last4: bare[1], instrument: /card/i.test(text) ? "card" : "account" };
   }
   return null;
@@ -35,6 +38,9 @@ export function findLast4(text: string, type?: "income" | "expense"): FoundAccou
 
 /** The card a bill payment went to ("towards your credit card XX1234"). */
 export function findPaidCard(text: string): FoundAccount | null {
+  // The card the payment went to ("… payment towards Credit Card XX5678"), before any card that paid it.
+  const to = text.match(/\b(?:to|towards)\s(?:your\s)?(?:[A-Za-z]+\s){0,4}?credit\s*card\b[^\d]{0,24}?(?:[x*]+|ending(?:\s+with)?\s*[x*]*|no\.?\s*[x*]*)\s*(\d{4})\b/i);
+  if (to) return { last4: to[1], instrument: "card" };
   const m = text.match(/\bcard\b[^\d]{0,24}?(?:[x*]+|ending(?:\s+with)?\s*[x*]*|no\.?\s*[x*]*)\s*(\d{4})\b/i);
   return m ? { last4: m[1], instrument: "card" } : null;
 }

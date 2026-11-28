@@ -3,7 +3,7 @@
 // A "." ends a merchant when a space, the end or a known tail word follows it ("AMAZON.Avl Lmt"), so a VPA like
 // rahul.k@okaxis or a domain like NETFLIX.COM stays whole.
 const MERCHANT_RE =
-  /\b(at|to|from|towards|by|VPA|Info:?|trf to|paid to)\s+([A-Za-z0-9@._&*'/ -]{2,40}?)(?=\s+(?:on|ref|refno|ref\.?\s*no|via|at|from|to|by|a\/c|acct|avl|avbl|upi|dt|date|has|have|is|was|been|sms|\d{1,2}[-/])\b|\.(?=\s|$|(?:avl|avbl|bal|ref|info|not|txn|upi|call|sms|rs|inr|ur|your|thanks?|thank\s*you|dear|for)\b)|[,;(]|$)/gi;
+  /\b(at|to|from|towards|by|VPA|Info:?|trf to|paid to)\s+([A-Za-z0-9@._&*'/ -]{2,40}?)(?=\s+(?:on|ref|refno|ref\.?\s*no|via|at|from|to|by|a\/c|acct|avl|avbl|upi|dt|date|has|have|is|was|been|sms|\d{1,2}[-/])\b|\.(?=\s|$|(?:avl|avbl|bal|ref|info|not|txn|upi|call|sms|rs|inr|ur|your|thanks?|thank\s*you|dear|for)\b)|[,;(]|\n|$)/gi;
 
 /**
  * The other party. For a debit that's who was paid ("to", "at", "VPA"); for
@@ -18,6 +18,13 @@ export function findMerchant(text: string, type: "income" | "expense"): string |
     const after = text.slice((m.index ?? 0) + m[0].length).trimStart();
     if (/^(a\/c|acct|account|card)\b/i.test(after)) continue;
     if (/^(your|you|a\/c|acct|account|neft|imps|rtgs|upi)\b/i.test(value)) continue;
+    // A help line ("SMS BLOCK 1234 to … to get any failed or disputed txn checked", "To dispute call 1800…") is never the
+    // other party, but a shop that starts with the same word ("BLOCK C STATIONERS", "Get Fit Gym") is (ticket 177).
+    if (/^(?:get\s+(?:any|it|your)\b|call\s+(?:us\b|\+?\d)|dispute\s+(?:call|sms|at)\b|block\s+(?:upi|card|\d)|report\s+(?:fraud|it|unauthori[sz]ed)\b|raise\s+a\b|know\s+more\b|check\s+(?:it|now|your)\b)/i.test(value)) continue;
+    // A card or a masked number is never the other party ("towards Credit Card XX5678").
+    if (/\bcredit\s*card\b(?!\s+(?:services?|svcs?|solutions?|ltd|limited|pvt|private|co|company|corp)\b)|[x*]{2,}\s?\d{3,}/i.test(value)) continue;
+    // "Equitas-4419": a bank's name with an account's digits, never the other party.
+    if (/^[A-Za-z]{2,15}-\d{3,}$/.test(value)) continue;
     // "by debit to A/c XX7305": the word itself, never a payee (ticket 157).
     if (/^(?:(?:NACH|ECS|auto)\s?-?)?(?:debit|credit)$/i.test(value)) continue;
     // A phone or account number is never the other party ("SMS BLOCK 7731 to 9215676766").
