@@ -129,6 +129,9 @@ export const QUEUE_REASON_LABEL: Record<string, string> = {
   possible_duplicate: "Might be a payment you already have",
   source_conflict: "SMS disagrees with your confirmed values",
   processing_error: "Something went wrong reading this. Add it by hand",
+  foreign_currency: "Charged in another currency. Enter what your bank billed",
+  card_payment: "A credit card bill payment, not spending or income",
+  rate_unavailable: "No exchange rate to your currency yet. Check the amount",
 };
 
 function invalidateAll(qc: ReturnType<typeof useQueryClient>, transactionId?: string) {

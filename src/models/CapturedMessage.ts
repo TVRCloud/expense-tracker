@@ -73,10 +73,17 @@ const CapturedMessageSchema = new Schema(
         "no_matching_loan",
         "possible_duplicate",
         "source_conflict",
+        // Queued for Review: a spend abroad, a card bill payment (ticket 150), no rate to the base currency.
+        "foreign_currency",
+        "card_payment",
+        "rate_unavailable",
         "otp",
         "promo",
         "reminder",
         "not_financial",
+        // A mandate notice or a fund house's note: kept for the record, never booked (ticket 157).
+        "mandate",
+        "investment",
         "processing_error",
       ],
     },

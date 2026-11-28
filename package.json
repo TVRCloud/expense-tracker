@@ -16,7 +16,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "api-keys": "tsx --env-file=.env scripts/api-keys.ts",
-    "migrate:captures": "tsx --env-file=.env scripts/migrate-captures.ts"
+    "migrate:captures": "tsx --env-file=.env scripts/migrate-captures.ts",
+    "capture:report": "tsx --env-file=.env scripts/capture-parse-report.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",

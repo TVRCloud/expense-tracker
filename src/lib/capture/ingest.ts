@@ -124,6 +124,8 @@ const QUEUE_COPY: Record<string, string> = {
   possible_duplicate: "A payment looks like one you already have. Check whether it's the same one.",
   source_conflict: "An SMS disagrees with a transaction you already confirmed.",
   rate_unavailable: "A bank message is in rupees and no exchange rate to your currency is available right now. Confirm it to enter the amount yourself.",
+  foreign_currency: "A card spend was charged in another currency. Confirm it with the amount your bank billed you.",
+  card_payment: "A credit card bill payment came in. Check it so it isn't counted as spending or income.",
 };
 
 async function queue(capture: CaptureDoc, reason: string, extra: Record<string, unknown> = {}): Promise<IngestResult> {
@@ -496,6 +498,10 @@ async function decideMoney(
   accountId: string | null,
   { promoting }: { promoting: boolean }
 ): Promise<IngestResult> {
+  // Never booked or matched by itself: a spend abroad (its amount is not rupees, and today's rate is not what the
+  // bank billed) and a card bill payment (a move between the person's own accounts, neither spending nor income).
+  if (parse.currency !== "INR") return queue(capture, "foreign_currency");
+  if (parse.cardPayment) return queue(capture, "card_payment");
   const match = await findCrossChannelMatch(capture);
   if (match) return handleMatch(user, capture, parse, accountId, match);
 
@@ -544,7 +550,7 @@ export async function ingestCapture(input: IngestInput): Promise<IngestResult> {
     logger.error({ err, userId: input.user.id }, "lazy pending-SMS promotion failed")
   );
 
-  const parse = parseCapture(input.text, input.receivedAt);
+  const parse = parseCapture(input.text, input.receivedAt, { sender: input.sender, packageName: input.packageName });
   const money = parse.kind === "money" ? parse : null;
   if (money) textOfParse.set(money, input.text);
   const match = money
@@ -570,7 +576,8 @@ export async function ingestCapture(input: IngestInput): Promise<IngestResult> {
       contentHash: contentHashOf(input.text),
       alsoSeenIn: input.alsoSeenIn ?? [],
       parse: { kind: parse.kind, parserId: parse.parserId, version: PARSER_VERSION, confidence: parse.confidence, fields: parse },
-      eventKey: money
+      // A foreign amount is not rupees: it never takes part in matching the same payment across channels.
+      eventKey: money && money.currency === "INR"
         ? { account: accountId, type: money.type, amount: money.amountMinor, ref: money.ref, ...eventAt(money, input.receivedAt) }
         : undefined,
       sourcePriority: SOURCE_PRIORITY[input.channel],
@@ -618,6 +625,15 @@ async function decide(
       { $set: { outcome: "ignored", reason: parse.reason, status: "resolved", resolvedAt: new Date() } }
     );
     return { httpStatus: 200, body: { status: "ignored", captureId: capture._id.toString(), reason: parse.reason } };
+  }
+  // A mandate notice or a fund house's note: no money moved in this message (the bank sends its own debit), so it is
+  // kept for the record, never booked and never put in Review (ticket 157).
+  if (parse.kind === "mandate" || parse.kind === "investment") {
+    await CapturedMessage.updateOne(
+      { _id: capture._id },
+      { $set: { outcome: "ignored", reason: parse.kind, status: "resolved", resolvedAt: new Date() } }
+    );
+    return { httpStatus: 200, body: { status: "ignored", captureId: capture._id.toString(), reason: parse.kind } };
   }
   if (parse.kind === "unknown") return queue(capture, "unparsed");
   if (parse.kind === "loan_emi_payment") return decideLoan(input.user, capture, parse);

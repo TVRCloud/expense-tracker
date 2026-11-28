@@ -21,7 +21,7 @@ Purpose: Mongoose schemas, one file per collection. Field tables: [docs/database
 - Money is integer cents.
 - Soft delete via `isDeleted` (transactions, budgets, goals, loans) or `isArchived` (accounts). Realtime relies on this: hard deletes are not broadcast.
 - Realtime filters on a top-level `user` field; a watched model without it will not stream.
-- `CapturedMessage`: unique {user, contentHash}, no TTL, text encrypted. `TransactionCorrection`: insert-only.
+- `CapturedMessage`: unique {user, contentHash}, no TTL, text encrypted. Reason `mandate` or `investment` (ticket 157) marks a kept notice with `outcome: ignored`. `TransactionCorrection`: insert-only.
 - TTLs: Notification 90 days, Anomaly 365 days, Session 90 days, IdempotencyRecord, LogUnlockSession, SecurityRateLimit and ImportLock at `expiresAt`, Share at `cleanupAt` (90 days after a share ends; live shares have none) (ImportLock is set 2 minutes ahead, so a killed import frees its lock). Receipt and ExchangeRate have no TTL: receipts are deleted with their transaction (or swept), rate tables are kept as the outage fallback.
 - docs/database-schema.md calls the Session collection `userSessions`; the code says `userSession`.
 
@@ -29,4 +29,6 @@ Purpose: Mongoose schemas, one file per collection. Field tables: [docs/database
 - Exercised through `src/test/integrations.test.ts`.
 
 ## Last changed
+- Phase 8 final pass: CapturedMessage reasons `foreign_currency`, `card_payment` and `rate_unavailable` added to the enum (ingest already set them)
+- Ticket 157: CapturedMessage reasons `mandate` and `investment`
 - 52f3dea feat(capture): match bank SMS to an account by bank when no digits are saved

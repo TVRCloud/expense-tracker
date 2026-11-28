@@ -823,6 +823,33 @@ describe("capture ingest and reconcile", () => {
     expect(await liveTxns(actor.id)).toHaveLength(1);
   });
 
+  it("books a debit that ends with a fraud warning about OTPs (ticket 150)", async () => {
+    const { actor, account } = await setup();
+    const res = await ingest(actor, "sms", `${SMS}. Never share OTP/PIN with anyone.`, T0);
+    expect(res.body.status).toBe("created");
+    expect(await balanceOf(account._id)).toBe(100000 - 25000);
+  });
+
+  it("sends a card spend abroad to review with no rupee amount filled in (ticket 150)", async () => {
+    const { actor, account } = await setup();
+    const res = await ingest(actor, "sms", "USD 12.99 spent on your Card XX1234 at NETFLIX.COM on 26-09-26. Avl Lmt INR 1,02,340.00", T0);
+    expect(res.body).toMatchObject({ status: "queued", reason: "foreign_currency" });
+    expect(await liveTxns(actor.id)).toHaveLength(0);
+    expect(await balanceOf(account._id)).toBe(100000);
+    const { getReviewInbox } = await import("@/lib/reconcile/inbox");
+    const inbox = (await getReviewInbox(actor.id)) as unknown as { couldntMatch: { reason: string; parsed: { amount: number | null } }[] };
+    const item = inbox.couldntMatch.find((c) => c.reason === "foreign_currency");
+    expect(item?.parsed.amount).toBeNull();
+  });
+
+  it("sends a credit card bill payment to review, never as income (ticket 150)", async () => {
+    const { actor, account } = await setup();
+    const res = await ingest(actor, "sms", "Payment of Rs 25,000.00 received towards your Credit Card XX1234 on 26-09-26. Thank you.", T0);
+    expect(res.body).toMatchObject({ status: "queued", reason: "card_payment" });
+    expect(await liveTxns(actor.id)).toHaveLength(0);
+    expect(await balanceOf(account._id)).toBe(100000);
+  });
+
   it("ignores an OTP message and creates nothing", async () => {
     const { actor } = await setup();
     const res = await ingest(actor, "sms", "123456 is your OTP for txn of Rs 500 at AMAZON. Do not share.", T0);
@@ -4460,6 +4487,80 @@ describe("ATM withdrawal detection", () => {
   it("a credit is never an ATM withdrawal even when it mentions cash withdrawal", async () => {
     const p = await parse("Rs.500.00 credited to A/c XX1234 on 26-09-26 as reversal of failed cash withdrawal");
     if (p.kind === "money") expect(p.atm).toBeUndefined();
+  });
+});
+
+// Ticket 157: a mandate notice and a fund house's note are kept, never booked and never in Review; a debit made under a
+// mandate is booked; money into a loan from the person's account is spending from that account. Invented messages.
+describe("mandate, fund house and loan messages at ingest", () => {
+  const AT = new Date("2026-12-05T06:30:00Z");
+
+  async function setup() {
+    const { default: User } = await import("@/models/User");
+    const { default: Account } = await import("@/models/Account");
+    const user = await User.create({ name: "Mandate", email: `m${Date.now()}${Math.random()}@x.com`, password: "hash", isActive: true });
+    const account = await Account.create({ user: user._id, name: "Savings", type: "bank", balance: 1000000, currency: "INR", smsLastFour: ["7362"] });
+    const actor = { id: user._id.toString(), name: user.name, email: user.email, role: "user" };
+    return { user, account, actor };
+  }
+
+  async function ingest(actor: { id: string; name: string; email: string; role: string }, text: string, sender = "VM-HDFCBK-S") {
+    const { ingestCapture } = await import("@/lib/capture/ingest");
+    return ingestCapture({ user: actor, channel: "sms", text, receivedAt: AT, sender });
+  }
+
+  async function state(userId: string, captureId: string) {
+    const { default: Transaction } = await import("@/models/Transaction");
+    const { default: CapturedMessage } = await import("@/models/CapturedMessage");
+    const { getReviewCounts } = await import("@/lib/reconcile/inbox");
+    const capture = await CapturedMessage.findById(captureId).lean<{ outcome: string; reason?: string; status: string; parse: { kind: string } }>();
+    const txns = await Transaction.find({ user: userId, isDeleted: { $ne: true } }).lean<{ type: string; amount: number; account: unknown }[]>();
+    return { capture: capture!, txns, counts: await getReviewCounts(userId) };
+  }
+
+  it.each([
+    ["mandate", "UPI AutoPay for STREAMLY created: up to Rs 637.00 a month."],
+    ["mandate", "UPI AutoPay mandate for CloudBox, limit Rs 129.00, has been revoked as requested."],
+    ["investment", "Dear Investor, 41.287 units allotted in Folio No 70013348/21 under Harbor Bluechip Fund - Direct Growth at NAV 66.6052 for Rs 2,750.00 on 03-Dec-2026."],
+    ["investment", "Lotus MF: your SIP into Lotus Midcap Growth Fund DG for Rs.2,750.00 is processed; units go to your folio at the day's NAV."],
+  ])("keeps a %s message without booking it or putting it in Review", async (reason, text) => {
+    const { actor } = await setup();
+    // A fund house's note comes from the fund house; from a bank sender the same text is the money itself.
+    const res = await ingest(actor, text, reason === "investment" ? "VM-HARBMF" : "VM-HDFCBK-S");
+    expect(res.body).toMatchObject({ status: "ignored", reason });
+    const { capture, txns, counts } = await state(actor.id, res.body.captureId);
+    expect(capture).toMatchObject({ outcome: "ignored", reason, status: "resolved", parse: { kind: reason } });
+    expect(txns).toHaveLength(0);
+    expect(counts).toMatchObject({ needsReview: 0, couldntMatch: 0 });
+  });
+
+  it("reads a bank's own message about a SIP as money, never a fund note", async () => {
+    const { actor } = await setup();
+    const res = await ingest(actor, "Rs 2,750.00 has been debited from your HDFC Bank account XX7362 for SIP in Harbor Bluechip Fund. SIP processed.");
+    expect(res.body.status).toBe("created");
+    const { txns } = await state(actor.id, res.body.captureId);
+    expect(txns).toHaveLength(1);
+    expect(txns[0]).toMatchObject({ type: "expense", amount: 275000 });
+  });
+
+  it("books a debit made under a mandate", async () => {
+    const { actor, account } = await setup();
+    const res = await ingest(actor, "Rs.637.00 debited from A/c XX7362 on 05-12-26 towards e-mandate STREAMLY. Avl Bal Rs 4,210.00");
+    expect(res.body.status).toBe("created");
+    const { txns } = await state(actor.id, res.body.captureId);
+    expect(txns).toHaveLength(1);
+    expect(txns[0]).toMatchObject({ type: "expense", amount: 63700 });
+    expect(String(txns[0].account)).toBe(account._id.toString());
+  });
+
+  it("books money into a loan as spending from the account it left, never as income", async () => {
+    const { actor, account } = await setup();
+    const res = await ingest(actor, "Your loan account XX6618 is credited with Rs 2,315.00 by debit to A/c XX7362 on 05-12-26.", "JD-SBIINB-S");
+    expect(res.body.status).toBe("created");
+    const { txns } = await state(actor.id, res.body.captureId);
+    expect(txns).toHaveLength(1);
+    expect(txns[0]).toMatchObject({ type: "expense", amount: 231500 });
+    expect(String(txns[0].account)).toBe(account._id.toString());
   });
 });
 
