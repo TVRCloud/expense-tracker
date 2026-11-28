@@ -141,8 +141,10 @@ describe("merchant cleanup", () => {
     expect(vpaAfter("to", "paid to lake.view@okicici on 06")).toBe("lake.view@okicici");
   });
 
-  it("single-X masks and masks inside a number are never a merchant", () => {
-    expect(sharedParty("X6612 RAVI")).toBeUndefined();
+  it("a single-X mask alone and masks inside a number are never a merchant", () => {
+    // A single-X code only counts as the whole name: "X200 TELECOM" and "X1000 FITNESS" are shops.
+    expect(sharedParty("X6612")).toBeUndefined();
+    expect(sharedParty("X200 TELECOM")).toBe("X200 TELECOM");
     expect(sharedParty("FD closure 512***778402")).toBeUndefined();
     expect(sharedParty("XBOX STORE")).toBe("XBOX STORE");
     expect(sharedParty("MAX 2000 STORE")).toBe("MAX 2000 STORE");
