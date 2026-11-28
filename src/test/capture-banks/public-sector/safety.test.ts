@@ -198,8 +198,10 @@ describe.each(Object.entries(OWN))("%s: tricky messages in the bank's own shapes
 
 // Ticket 171 review, round 2: the guards above must not cost good messages their booking or their payee. Words like
 // "loan", "EMI", "refund" or "REV" inside a payee's name, a promo line or a help line change nothing.
-const GOOD: { sender: string; text: string; type: "income" | "expense"; merchant?: string; atm?: true }[] = [
-  { sender: "VM-CANBNK-S", text: "Dear Customer, Acct XXX482 Dr. INR 342.60 on 05/11/26 to REVERSAL ARCADE STUDIO; UPI: 631702491001; Bal INR 7,872.06-CanaraBank", type: "expense", merchant: "REVERSAL ARCADE STUDIO" },
+// `review: true`: a payee whose name holds an undo word (REVERSAL, REFUND, REVERSE) is held in Review by ticket 177's
+// shared rule; the type and payee are still read.
+const GOOD: { sender: string; text: string; type: "income" | "expense"; merchant?: string; atm?: true; review?: true }[] = [
+  { sender: "VM-CANBNK-S", text: "Dear Customer, Acct XXX482 Dr. INR 342.60 on 05/11/26 to REVERSAL ARCADE STUDIO; UPI: 631702491001; Bal INR 7,872.06-CanaraBank", type: "expense", merchant: "REVERSAL ARCADE STUDIO", review: true },
   { sender: "VM-CANBNK-S", text: "Dear Customer, Acct XXX482 Dr. INR 342.60 on 05/11/26 to REV AUTOWORKS; UPI: 631702491002; Bal INR 7,872.06-CanaraBank", type: "expense", merchant: "REV AUTOWORKS" },
   { sender: "VM-CANBNK-S", text: "An amount of INR 9,125.00 has been debited from XXXX3917 on 05/11/2026 towards RTGS to Beneficiary JOSHI LOAN TRADERS, IFSC SBIN0004321, Beneficiary A/c XXXX7781 - Canara Bank", type: "expense", merchant: "JOSHI LOAN TRADERS" },
   { sender: "VM-CANBNK-S", text: "An amount of INR 2,145.00 has been credited to XXXX3917 on 05/11/2026 towards NEFT by Sender LOAN LEAF FOODS, IFSC HDFC0001234, Sender A/c XXXX5521 - Canara Bank", type: "income", merchant: "LOAN LEAF FOODS" },
@@ -217,21 +219,22 @@ const GOOD: { sender: string; text: string; type: "income" | "expense"; merchant
   { sender: "BZ-BOIIND-S", text: "Rs.426.00 debited A/cXX2846 and credited to REVATHI STORES via UPI Ref No 631922331101 on 05Nov26. -BOI", type: "expense", merchant: "REVATHI STORES" },
   { sender: "BZ-BOIIND-S", text: "Rs.426.00 debited A/cXX2846 and credited to SHOP 247365 via UPI Ref No 631922331102 on 05Nov26. -BOI", type: "expense", merchant: "SHOP 247365" },
   { sender: "AD-INDBNK-S", text: "Sent Rs.624.00 from A/c *6614 on 05-11-26 to Towards Travels.RRN 631944551101.-Indian Bank", type: "expense", merchant: "Towards Travels" },
-  { sender: "AD-INDBNK-S", text: "Sent Rs.624.00 from A/c *6614 on 05-11-26 to Refund Kart.RRN 631944551102.-Indian Bank", type: "expense", merchant: "Refund Kart" },
+  { sender: "AD-INDBNK-S", text: "Sent Rs.624.00 from A/c *6614 on 05-11-26 to Refund Kart.RRN 631944551102.-Indian Bank", type: "expense", merchant: "Refund Kart", review: true },
   { sender: "AD-INDBNK-S", text: "Rs. 18,725 credited to A/c XX6614 on 05/11/2026 UTR:SBIN0631955/NEFT/SENDER ENTERPRISES / -Indian Bank", type: "income", merchant: "SENDER ENTERPRISES" },
-  { sender: "CP-CENTBK-S", text: "Rs. 547.00 debited from your A/c xxxxxx7719 on 05/11/2026 through UPI vide Ref No. 631933441101 To.REFUND DESK OF KART-CBoI", type: "expense", merchant: "REFUND DESK OF KART" },
+  { sender: "CP-CENTBK-S", text: "Rs. 547.00 debited from your A/c xxxxxx7719 on 05/11/2026 through UPI vide Ref No. 631933441101 To.REFUND DESK OF KART-CBoI", type: "expense", merchant: "REFUND DESK OF KART", review: true },
   { sender: "CP-CENTBK-S", text: "Rs. 1,655.00 credited to your A/c xxxxxx7719 on 05/11/2026 through NEFT vide Ref No./N308261101 By.EMI FINANCE LTD-CBoI", type: "income", merchant: "EMI FINANCE LTD" },
   { sender: "VK-UCOBNK-S", text: "A/c XX8840 Credited with Rs.5,445.00 on 05-11-2026 by NEFT from EMIRATES TRADING.Avl Bal Rs.8,367.90", type: "income", merchant: "EMIRATES TRADING" },
   { sender: "JD-PSBANK-S", text: "PSB000000781934540 A/c No **7326 Credited with Rs 662--UPI/CR/631955661101/LOANWALA SERVICES/SBIN/U (CLR BAL 7246.75CR)(05-11-2026)-Punjab&Sind Bank", type: "income", merchant: "LOANWALA SERVICES" },
   { sender: "JM-UNIONB-S", text: "Union Bank of India A/c*5093 Cr Rs1,195.00 on 05-11-26 10:07 by MB 6601234679 EMI HUB, Bal Rs4,300.80", type: "income", merchant: "EMI HUB" },
-  { sender: "VM-IOBCHN-S", text: "Your a/c no. XXXXX4417 is debited for Rs.872.00 on 05-11-26 towards REVERSE OSMOSIS SERVICE by UPI ref 631966771101. -IOB", type: "expense" },
+  { sender: "VM-IOBCHN-S", text: "Your a/c no. XXXXX4417 is debited for Rs.872.00 on 05-11-26 towards REVERSE OSMOSIS SERVICE by UPI ref 631966771101. -IOB", type: "expense", review: true },
 ];
 
 describe("good messages keep their booking and their payee", () => {
-  it.each(GOOD)("$sender $text", ({ sender, text, type, merchant, atm }) => {
+  it.each(GOOD)("$sender $text", ({ sender, text, type, merchant, atm, review }) => {
     const p = parseCapture(text, RECEIVED, { sender });
     expect(p).toMatchObject({ kind: "money", type });
-    expect(p.confidence).toBeGreaterThanOrEqual(CONFIDENCE_AUTO_CREATE);
+    if (review) expect(p.confidence).toBeLessThan(CONFIDENCE_AUTO_CREATE);
+    else expect(p.confidence).toBeGreaterThanOrEqual(CONFIDENCE_AUTO_CREATE);
     if (merchant) expect(p.kind === "money" && p.merchant).toBe(merchant);
     if (atm) expect(p.kind === "money" && p.atm).toBe(true);
     else expect(p.kind === "money" && p.atm).toBeFalsy();
