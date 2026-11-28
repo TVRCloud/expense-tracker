@@ -8,6 +8,73 @@ export const DEBIT_WORDS =
 export const CREDIT_WORDS =
   /(?<!\b(?:will|to|shall)\s+be\s+)\b(credited|(?<!\b(?:request|mandate)\s+(?:has\s+been\s+|is\s+|was\s+)?)received|deposited|refund(?:ed)?|reversed|cashback of|cr(?=\.?\s*(?:Rs|INR|₹|\d)))\b/i;
 
+/** A card spend written with no money verb (ticket 177): "Thank you for using HSBC Credit Card XXXX6603 for INR 845.00
+ * … at SHOP", "You have used your card XX1234 for Rs 500 at …". Needs a card mask with digits or an "at <shop>", so a
+ * promo ("Thank you for using your Credit Card for Rs 1,00,000 worth of spends this year!") is not one. */
+const CARD_USE_SHAPE =
+  /\b(?:thank\s*you\s+for\s+using|(?:have|has)\s+used|used)\s+(?:your\s+)?(?:[A-Za-z&]{1,15}\s+){0,4}?(?:(?:credit|debit)\s+)?card\b([^.\n]{0,40}?)\bfor\s+(?:INR|Rs\.?|₹)\s?[\d,]+(?:\.\d{1,2})?([^.\n]{0,60})/i;
+const CARD_MASK = /(?:[x*]{2,}\s?\d{3,4}|\b\d{2}[x*]{2}\b|\bending\s+(?:with\s+)?[x*]*\d{4}|\b\d{4}\b)/i;
+export function isCardUse(text: string): boolean {
+  const m = CARD_USE_SHAPE.exec(text);
+  if (!m) return false;
+  if (/\bworth\s+of\s+spends?\b|\bthis\s+(?:year|month)\b/i.test(m[2])) return false;
+  return CARD_MASK.test(m[1]) || /\bat\s+\S/i.test(m[2]);
+}
+
+export const MONEY_UNDONE =
+  /\b(?:revers\w*|revert(?:ed)?|refund\w*|reimburs\w*|charge-?back\w*|charged\s+back|cancel(?:l?ed|lation)|void(?:ed)?|bounced|returned|rolled\s+back|adjusted\s+back|re-?credited|credited\s+back)\b/i;
+
+// A help line: who to call or where to look ("For refunds or disputes call 18001234", "Not you? To block and reverse
+// call 1800…", "Know your refund status at bank.in/refund"). A toll-free number counts; a bare mobile number does not
+// (payees are often written as one: "by MB 6601234567 NAVKAR MEDICALS"). A sentence that holds the amount is the money
+// sentence, never a help line (`isHelpLine`).
+const HELP_LINE =
+  /\b(?:call|contact|sms|visit|quer(?:y|ies)|disputes?|helpline|customer\s+care)\b|\b(?:1800|1860)[\d\s-]{4,}|https?:\/\/|\bwww\.|\b[\w-]+\.(?:in|com|co\.in)\/\S*/i;
+const AMOUNT_IN = /(?:Rs\.?|Re\.?|INR|₹|USD|EUR|GBP|AED)\s?\d|\b\d[\d,]*\.\d{2}\b/i;
+// Sentence ends, but not after a short form ("Rs. 418.00", "A/c no. 12", "Avl Bal. Rs 5").
+const SENTENCE_END = /(?<!\b(?:Rs|Re|no|No|Avl|Bal|Txn|Trxn|Ref|Dr|Cr))[.!?;](?=\s|$)|\n/;
+const SENTENCE_KEEP = /(?<=(?<!\b(?:Rs|Re|no|No|Avl|Bal|Txn|Trxn|Ref|Dr|Cr))[.!?;])(?=\s|$)|(?<=\n)/;
+const isHelpLine = (sentence: string) => HELP_LINE.test(sentence) && !AMOUNT_IN.test(sentence);
+// A sentence that says the money already came back, even inside a help line ("Amount has been reversed, call 1800").
+const UNDONE_STATED =
+  /\b(?:has\s+been|have\s+been|was|were|is|got|been)\s+(?:revers\w*|reverted|refunded|reimbursed|cancell?ed|voided|returned|re-?credited|credited\s+back|rolled\s+back|adjusted\s+back|charged\s+back)\b|\b(?:txn|transaction|amount|payment|debit)\s+(?:has\s+been\s+|was\s+|is\s+)?(?:reversed|refunded|reverted|voided|cancell?ed|returned|rolled\s+back)\b/i;
+
+// A help line counts as help only when the undo word is what the help is about ("For refunds or disputes call",
+// "Call 1800 for reversal", "Know your refund status", "Not you? To block and reverse call") or the line is a question.
+// Anything that says the money came back ("Reversed on 12-11, call 1800", "Refund processed, contact customer care",
+// "For the reversed amount call 1800") still counts, so a help line can never hide a reversal (ticket 177 review).
+const HELP_ABOUT_UNDO =
+  /\b(?:for|about|to|status\s+of|track|know|raise|request|check)\s+(?:your\s+|a\s+|the\s+|any\s+)?(?:refunds?|reversals?|chargebacks?|disputes?)\b/i;
+const HELP_OPENER = /^\s*(?:for|to|not\s+you|if|know|track|raise)\b/i;
+const SAYS_DONE =
+  /\b(?:reversed|reverted|refunded|reimbursed|cancell?ed|voided|bounced|returned|re-?credited|credited\s+back|rolled\s+back|adjusted\s+back|charged\s+back|done|processed|successful|approved|completed|resolved)\b/i;
+function onlyHelp(sentence: string): boolean {
+  if (!isHelpLine(sentence) || UNDONE_STATED.test(sentence)) return false;
+  if (/\?/.test(sentence) || HELP_ABOUT_UNDO.test(sentence)) return true;
+  return HELP_OPENER.test(sentence) && !SAYS_DONE.test(sentence);
+}
+
+/** Money that moved and then came back, said anywhere outside a help line, or stated as done inside one (ticket 177).
+ * Every other sentence counts word by word, a payee's name included, so a captured name cannot hide the word. */
+export function moneyUndone(text: string): boolean {
+  return text
+    .split(SENTENCE_END)
+    .some((x) => MONEY_UNDONE.test(x) && !onlyHelp(x));
+}
+
+/** The attempt itself did not go through, said in the sentence holding the amount or as a sentence about the
+ * transaction ("… has been declined.", "Txn declined due to incorrect PIN.", "Txn unsuccessful."). A help line ("to get
+ * any failed or disputed txn checked", "Txn declined? Call 1800…") is not one. Ticket 177. */
+export function txnDidNotGoThrough(text: string): boolean {
+  const sentences = text.split(/(?<!\b(?:Rs|no|Avl|Bal|Txn|Trxn))[.!]\s+|[\n]/);
+  return sentences.some(
+    (x) =>
+      !/\?/.test(x) &&
+      (/\b(?:txn|transaction|payment|attempt)\b[^.?!]{0,60}?\b(?:(?:was|has\s+been|is|got)\s+)?(?:declined|failed|unsuccessful|not\s+successful)\b/i.test(x) ||
+        (/(?:Rs\.?|INR|₹)\s?\d/i.test(x) && /\b(?:was|has\s+been|is|got)\s+declined\b/i.test(x)))
+  );
+}
+
 export interface FoundDirection {
   type: "income" | "expense";
   ambiguous: boolean;
@@ -44,14 +111,28 @@ function notARepayment(text: string): boolean {
 export function findDirection(text: string): FoundDirection | null {
   // Unsure which account paid unless the message says it was debited: then it is checked in Review.
   if (LOAN_CREDITED.test(text) && !notARepayment(text)) return { type: "expense", ambiguous: !DEBIT_FROM_ACCOUNT.test(text) };
+  // A card used for an amount is a spend; a refund named in the same message makes it one to check (ambiguous).
+  // Only money that came back makes it unsure; a cashback promo or a shop named "CREDITED BAKEHOUSE" does not.
+  if (isCardUse(text)) return { type: "expense", ambiguous: moneyUndone(text) };
   const debit = text.search(DEBIT_WORDS);
   const credit = text.search(CREDIT_WORDS);
   if (debit === -1 && credit === -1) return null;
   if (debit === -1) return { type: "income", ambiguous: false };
   if (credit === -1) return { type: "expense", ambiguous: false };
   // Both appear ("debited from your a/c ... credited to VPA x"): the first
-  // verb is about the account holder's own account.
-  return { type: debit < credit ? "expense" : "income", ambiguous: true };
+  // verb is about the account holder's own account. A word that only sits in a help line ("Know your refund status at
+  // bank.in/refund", "For refunds or disputes call 1800…") does not make it unsure (ticket 177).
+  const rest = withoutHelpLines(text);
+  const unsure = DEBIT_WORDS.test(rest) && CREDIT_WORDS.test(rest);
+  return { type: debit < credit ? "expense" : "income", ambiguous: unsure };
+}
+
+/** The text minus help-line sentences that state nothing done (see `moneyUndone`). */
+function withoutHelpLines(text: string): string {
+  return text
+    .split(SENTENCE_KEEP)
+    .filter((x) => !onlyHelp(x))
+    .join("");
 }
 
 /** "Payment of Rs 25,000 received towards your ICICI Bank Credit Card", "Thank you for the payment ... on your
@@ -68,6 +149,17 @@ export function isCardPayment(text: string): boolean {
     String.raw`\bpayment\b${any}{0,100}?\b(?:received|credited)\b${any}{0,40}?\b(?:towards|to|on|in)\b${any}{0,30}?${card}`,
     String.raw`\breceived\s+(?:a\s+|your\s+|the\s+)?payment\b${any}{0,60}?\btowards\b${any}{0,30}?${card}`,
     String.raw`\bcredited\s+to\s+your\s+credit\s*card\b`,
+    // "Payment of Rs 12,000 towards your SBI Credit Card XX5678 using your Debit Card", "… for Rs 12,000 payment towards
+    // Credit Card XX5678": money to a card's bill, whatever card or account paid it (ticket 177).
+    String.raw`\bpayment\b${any}{0,60}?\b(?:to|towards)\s+(?:your\s+)?(?:(?!using\b|via\b|with\b|by\b)[A-Za-z]+\s+){0,3}?credit\s*card\s+(?:no\.?\s*)?(?:[x*]{2,8}\s?\d{4}|ending)`,
+    String.raw`\b(?:to|towards)\s+(?:your\s+)?(?:(?!using\b|via\b|with\b|by\b)[A-Za-z]+\s+){0,3}?credit\s*card\s+(?:no\.?\s*)?(?:[x*]{2,8}\s?\d{4}|ending)${any}{0,40}?\bpayment\b`,
+    // "Rs 4,180 debited from A/c XX7305 towards HDFC Bank Credit Card XX2614", "… towards credit card bill", "Paid to Axis
+    // Bank Credit Card XX2208": money from the person's account to a card's bill (ticket 177).
+    String.raw`\b(?:debited|paid|transferred|sent|debit)\b${any}{0,100}?\b(?:to|towards)\s+(?:your\s+)?(?:(?!using\b|via\b|with\b|by\b)[A-Za-z]+\s+){0,3}?credit\s*card\s+(?:no\.?\s*)?(?:[x*]{2,8}\s?\d{4}|ending|bill)`,
+    String.raw`\bcredit\s*card\s+(?:bill\s+)?payment\s+(?:[x*]{2,8}\s?\d{4})`,
+    String.raw`(?:^|[.;]\s)(?:(?:paid|payment)\s+(?:to|towards)|towards)\s+(?:your\s+)?(?:(?!using\b|via\b|with\b|by\b)[A-Za-z]+\s+){0,3}?credit\s*card\s+(?:no\.?\s*)?(?:[x*]{2,8}\s?\d{4}|ending|bill)`,
+    // "Acct XX274 debited ...; ICICI Bank Credit Card XX3391 credited.": the bill of the person's own card (ticket 177).
+    String.raw`\bcredit\s*card\s+(?:no\.?\s*)?[x*]{2,8}\s?\d{4}\s+(?:is\s+|has\s+been\s+)?credited\b`,
     spendWithCard ? null : String.raw`\bthank\s*you\s+for\s+(?:the\s+|your\s+)?payment\b${any}{0,80}?${card}`,
   ].some((re) => re !== null && new RegExp(re, "i").test(text));
 }

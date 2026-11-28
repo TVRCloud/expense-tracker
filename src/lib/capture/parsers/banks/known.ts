@@ -37,6 +37,11 @@ const PAID_TO_CARD = [
   new RegExp(String.raw`\bcard\b${SAME_SENTENCE}{0,40}?\bpayment\s+of\b${SAME_SENTENCE}{0,40}?\b(?:received|credited)\b`, "i"),
 ];
 const AMOUNT_TOKEN = /(?:Rs\.?|INR|₹)\s?\d/i;
+// Paid with a credit card ("... to Airtel using credit card XX4321", "using your HDFC Bank Credit Card"), never a bill
+// payment. A debit card is how a card bill is often paid, so it is no sign of a spend (ticket 177).
+const SPEND_WITH_CARD = /\busing\s+(?:your\s+)?(?:[A-Za-z]+\s+){0,3}?credit\s*card\b/i;
+// Money going to a credit card ("towards your SBI Credit Card XX5678", "to your Credit Card XX5678"): a bill payment.
+const TO_A_CREDIT_CARD = /\b(?:to|towards)\s+(?:your\s+)?(?:(?!using\b|via\b|with\b|by\b)[A-Za-z]+\s+){0,3}?credit\s*card\b/i;
 
 // A sentence that sells or helps ("Pay your bill ...", "Earn 5% back ..."), never what happened.
 const PROMO_START = /^(?:Pay|Earn|Convert|Use|Get|Click|Download)\b/i;
@@ -92,6 +97,7 @@ export abstract class KnownBankParser extends BankParser {
     // or a message with both a debit and a credit word
     // that is not one of the bank's known shapes.
     const mandateUnsure = MANDATE.test(flat) && (parse.type !== "expense" || !DEBIT_WORDS.test(flat) || MANDATE_SETUP.test(flat));
+    // (A spend that also says it was reversed or refunded is capped in base.ts for every parser, ticket 177.)
     const unsure = NOT_YET.test(flat) || mandateUnsure || (!shaped && this.direction(flat)?.ambiguous === true);
     if (unsure && parse.confidence > REVIEW_CEILING) return { ...parse, confidence: REVIEW_CEILING };
     return parse;
@@ -114,6 +120,8 @@ export abstract class KnownBankParser extends BankParser {
     if (super.cardPayment(text)) return true;
     // A spend with a card, or money coming back, is never a bill payment, whatever promo text follows it.
     if (/\b(?:spent|refund(?:ed)?|cashback|reversal|reversed)\b/i.test(text)) return false;
+    // "Thank you for your payment of Rs 799 to Airtel using credit card XX4321": paid WITH the card, not to it (ticket 177).
+    if (SPEND_WITH_CARD.test(text) && !TO_A_CREDIT_CARD.test(moneySentence(text))) return false;
     const sentence = moneySentence(text);
     return PAID_TO_CARD.some((re) => re.test(sentence));
   }
@@ -124,7 +132,9 @@ const NOT_A_PARTY =
   /^(?:dispute|call|report|block|receive|clearing|reissue|mobile\s+x?\d+|an\s+a\/c|the\s+beneficiary|transfer\s+of|IST)(?=[\s.,;:]|$)|^merchant$|^EMI(?:\s+incl\.?)?$/i;
 /** A masked number or an account, never a payee ("XX4410", "A/c 5150"). */
 const ACCOUNT_LIKE = new RegExp(
-  String.raw`(?:^|\s)[x*]{2,}\d+\b|\bac\s?x+\d|\b(?:a\/c|acct|account)\b|\b${CARD}\b|\b(?:rs|inr)\.?\s?\d|^[\d\s.,-]+$`,
+  // A single-X mask only as the whole name ("X7781"; "X200 TELECOM" is a shop), and masks inside a number
+  // ("410***551203") too (ticket 177).
+  String.raw`(?:^|\s)[x*]{2,}\d+\b|^x\d{3,4}$|\d[x*]{2,}\d|\bac\s?x+\d|\b(?:a\/c|acct|account)\b|\b${CARD}\b|\b(?:rs|inr)\.?\s?\d|^[\d\s.,-]+$`,
   "i"
 );
 
@@ -170,7 +180,8 @@ export function railParty(info: string | undefined): string | undefined {
 /** A UPI id the money went to or came from, digits and all ("to 98xxxxxx01@paytm"). */
 export function vpaAfter(word: "to" | "from", text: string): string | undefined {
   const m = text.match(new RegExp(String.raw`\b${word}\s(?:VPA\s)?([\w.\-]{1,60}@[A-Za-z][\w\-]{0,30}(?:\.[\w\-]{1,30}){0,3})(?![\w@])`, "i"));
-  return m?.[1];
+  // "9847012345@ybl.Ref No ...": the text after a UPI id with no space is the bank's next word, not the id (ticket 177).
+  return m?.[1].replace(/\.(?:ref|refno|avl|avbl|bal|info|txn|upi|not)$/i, "");
 }
 
 /** The shared merchant guess, minus help-line text and account numbers it sometimes picks up. */
