@@ -69,6 +69,7 @@ Purpose: server business logic shared by browser routes, integration routes, ser
 
 ## Last changed
 - Ticket 171: public sector bank parsers (Canara, PNB, Bank of Baroda, Union, Bank of India, Central, Indian Bank, IOB, UCO, Punjab & Sind), sharing `banks/public-sector-base.ts`; see `docs/bank-parsers/public-sector.md`
+- Ticket 174: parsers for HSBC, Standard Chartered, DBS and American Express in India (`banks/groups/foreign.ts`, docs in `docs/bank-parsers/foreign.md`)
 - Ticket 173: small finance and payments bank parsers (docs/bank-parsers/small-finance.md)
 - Ticket 175: payment app, wallet and card app parsers (PhonePe wallet, Jupiter Edge, slice, OneCard, CRED, LazyPay, Amazon Pay balance); see docs/bank-parsers/apps.md
 - Ticket 177: shared parser fixes and account matching for the phase 9 banks
