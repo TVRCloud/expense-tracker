@@ -32,13 +32,13 @@ describe("HSBC parser", () => {
       name: "debit card spend: two digits are too few to name an account",
       text: "HSBC: Thank you for using HSBC Debit Card XXXXX58xx for INR 214.00 on 14-Oct-26 at FRESHMART GURGAON .",
       want: { parserId: "hsbc", type: "expense", amountMinor: 21400, last4: undefined, merchant: "FRESHMART GURGAON" },
-      auto: true,
+      auto: false, // no account digits: never auto-booked (ticket 177)
     },
     {
       name: "debit card spend, shop before the amount",
       text: "Thank you for using HSBC Debit Card XXXXX58xx at CAFE ALTO . for INR 94.00 on 14-10-26.",
       want: { parserId: "hsbc", type: "expense", amountMinor: 9400, last4: undefined, merchant: "CAFE ALTO" },
-      auto: true,
+      auto: false, // no account digits: never auto-booked (ticket 177)
     },
     {
       name: "credit card spend",
@@ -77,14 +77,16 @@ describe("HSBC parser", () => {
       auto: true,
     },
     {
-      name: "a card spend that was reversed is money back on the card",
+      name: "a card spend that was reversed is held in Review",
       text: "Thank you for using HSBC Credit Card XXXX4471 for INR 2,215.00 at HARBOUR KITCHEN on 06-Nov-26. The transaction has been reversed.",
-      want: { parserId: "hsbc", type: "income", amountMinor: 221500, last4: "4471", instrument: "card" },
+      want: { parserId: "hsbc", amountMinor: 221500, last4: "4471", instrument: "card" },
+      auto: false,
     },
     {
-      name: "a refund credited after a debit card spend is money back",
+      name: "a refund credited after a debit card spend is held in Review",
       text: "HSBC: Thank you for using HSBC Debit Card XXXXX47xx for INR 535.00 on 06-Nov-26 at MAPLE DELI . Refund of INR 535.00 has been credited.",
-      want: { parserId: "hsbc", type: "income", amountMinor: 53500, last4: undefined },
+      want: { parserId: "hsbc", amountMinor: 53500, last4: undefined },
+      auto: false,
     },
     {
       name: "outgoing NEFT that names the person's account keeps it",
@@ -641,7 +643,7 @@ describe("HSBC parser", () => {
       name: "a debit card spend with a '(credit balance)' note books",
       text: "HSBC: Thank you for using HSBC Debit Card XXXXX59xx for INR 913.00 on 09-Nov-26 at BIRCH STORE . Avl Bal INR 4,120.00 (credit balance).",
       want: { parserId: "hsbc", type: "expense", amountMinor: 91300, merchant: "BIRCH STORE" },
-      auto: true,
+      auto: false, // no account digits: never auto-booked (ticket 177)
     },
     {
       name: "'Credit-Card' with a hyphen is read as the card",
